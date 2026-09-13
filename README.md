@@ -37,8 +37,14 @@
 
 - Next.js (App Router) + TypeScript + Tailwind
 - Supabase — Auth(엔지니어 로그인), Postgres(rooms/events), Realtime(시그널링)
-- WebRTC — 브라우저 네이티브. ICE: Google STUN + Cloudflare/Metered TURN
-- 배포: Vercel
+- WebRTC — 브라우저 네이티브 P2P (1:1 전용, SFU 없음). ICE: Google STUN + Cloudflare TURN(월 1TB 무료, 서버에서 단기 credential 발급)
+- 배포: Vercel (함수 리전 `icn1` 서울)
+
+### 미디어 계층 결정 (확정)
+
+관리형(LiveKit 등) 대신 **브라우저 네이티브 WebRTC P2P**로 간다. 근거: 1:1 한정이라 SFU 불필요, 한계비용 ~0이 세션 과금 모델의 원가 근거, relay 사용률 등 연결 지표를 직접 수집 가능, 표준 API라 디버깅·운영 경험이 그대로 자산이 됨.
+
+단, 미디어 로직은 `src/lib/webrtc` 뒤로 격리해 둔다. **전환 트리거**: 필드에서 연결 실패율 5% 초과가 지속되거나 재연결 안정화에 2주 이상 소모되면 그 시점에 LiveKit 전환을 재검토.
 
 ## 로컬 실행
 
