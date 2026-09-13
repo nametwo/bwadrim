@@ -16,15 +16,15 @@
 | 고객 | 폰 카메라 | 링크 클릭 → 카메라 허용 → 끝. 로그인·설치 없음 |
 
 - [x] Next.js + Supabase 스캐폴드
-- [ ] 관리자(엔지니어) 로그인 — Supabase Auth
-- [ ] 방 생성 + 1회성 초대 URL (만료 24h)
+- [x] 관리자(엔지니어) 로그인 — Supabase Auth
+- [x] 방 생성 + 1회성 초대 URL (만료 24h)
 - [ ] WebRTC 영상/음성 — Supabase Realtime 시그널링, STUN + 무료 TURN
 - [ ] 레이저 포인터 (DataChannel, 정규화 좌표)
 - [ ] 프리즈 프레임 + 드로잉
 - [ ] 카메라 전/후면 전환, 통화 종료
 - [ ] 인앱 브라우저(카카오톡) 감지 → 기본 브라우저로 열기 안내
-- [ ] 이벤트 로깅 (session_created / joined / connected / relay_used / ended)
-- [ ] 연락처 입력 → 문자로 링크 전송
+- [ ] 이벤트 로깅 (room_created / link_opened / camera_* 완료 — connected / relay_used / ended 남음)
+- [x] 링크 전송 — 엔지니어 폰의 문자 앱(`sms:`)·공유 시트(Web Share)로 발송. 본인 번호로 가서 수신 신뢰율↑, SMS API 불필요
 
 ## 나중에 (2차 이후)
 
