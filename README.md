@@ -18,12 +18,12 @@
 - [x] Next.js + Supabase 스캐폴드
 - [x] 관리자(엔지니어) 로그인 — Supabase Auth
 - [x] 방 생성 + 1회성 초대 URL (만료 24h)
-- [ ] WebRTC 영상/음성 — Supabase Realtime 시그널링, STUN + 무료 TURN
+- [x] WebRTC 영상/음성 — Supabase Realtime 시그널링, STUN + Cloudflare TURN
 - [ ] 레이저 포인터 (DataChannel, 정규화 좌표)
 - [ ] 프리즈 프레임 + 드로잉
-- [ ] 카메라 전/후면 전환, 통화 종료
+- [x] 카메라 전/후면 전환, 통화 종료 (+ 종료 시 "출장 없이 해결?" 지표 입력)
 - [ ] 인앱 브라우저(카카오톡) 감지 → 기본 브라우저로 열기 안내
-- [ ] 이벤트 로깅 (room_created / link_opened / camera_* 완료 — connected / relay_used / ended 남음)
+- [x] 이벤트 로깅 (room_created / link_opened / camera_* / connected / relay_used / ended / resolved_remotely)
 - [x] 링크 전송 — 엔지니어 폰의 문자 앱(`sms:`)·공유 시트(Web Share)로 발송. 본인 번호로 가서 수신 신뢰율↑, SMS API 불필요
 
 ## 나중에 (2차 이후)

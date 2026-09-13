@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { ShareButtons } from "./share-buttons";
+import { CallPanel } from "./call-panel";
 
 export const metadata: Metadata = {
   title: "원격 A/S — 봐드림",
@@ -26,6 +27,22 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
     .single();
 
   if (!room) notFound();
+
+  if (room.status === "ended") {
+    return (
+      <main className="mx-auto flex min-h-screen w-full max-w-sm flex-col gap-6 px-6 py-8">
+        <header className="flex items-center gap-3">
+          <Link href="/dashboard" className="text-2xl text-gray-400">
+            ←
+          </Link>
+          <h1 className="text-xl font-bold">원격 A/S</h1>
+        </header>
+        <p className="py-16 text-center text-gray-400">
+          종료된 세션입니다. 새 세션은 대시보드에서 시작하세요.
+        </p>
+      </main>
+    );
+  }
 
   const h = await headers();
   const host = h.get("host") ?? "localhost:3000";
@@ -58,12 +75,7 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
         <ShareButtons joinUrl={joinUrl} />
       </section>
 
-      <section className="mt-auto flex flex-col items-center gap-2 py-6 text-center">
-        <p className="text-gray-400">
-          고객님이 링크를 열면 여기에 영상이 표시됩니다.
-        </p>
-        <p className="text-sm text-gray-300">(영상 연결은 다음 업데이트)</p>
-      </section>
+      <CallPanel roomId={room.id} code={room.code} />
     </main>
   );
 }

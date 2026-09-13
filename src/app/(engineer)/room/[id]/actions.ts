@@ -1,0 +1,53 @@
+"use server";
+
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
+import { logEvent } from "@/lib/events";
+
+// 통화 종료 + 핵심 지표(원격 해결 여부) 기록
+export async function endRoom(roomId: string, resolvedRemotely: boolean) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect("/login");
+
+  // RLS로 자기 방만 갱신된다
+  const { data, error } = await supabase
+    .from("rooms")
+    .update({
+      status: "ended",
+      ended_at: new Date().toISOString(),
+      resolved_remotely: resolvedRemotely,
+    })
+    .eq("id", roomId)
+    .select("id, created_at")
+    .single();
+
+  if (error || !data) throw new Error("종료 처리에 실패했습니다.");
+
+  const durationSec = Math.round(
+    (Date.now() - new Date(data.created_at).getTime()) / 1000,
+  );
+  await logEvent(roomId, "engineer", "ended", { duration_sec: durationSec });
+  if (resolvedRemotely) {
+    await logEvent(roomId, "engineer", "resolved_remotely");
+  }
+
+  redirect("/dashboard");
+}
+
+// 연결 성사 시 상태 전환 (엔지니어 클라이언트에서 호출)
+export async function markRoomActive(roomId: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return;
+
+  await supabase
+    .from("rooms")
+    .update({ status: "active" })
+    .eq("id", roomId)
+    .eq("status", "waiting");
+}

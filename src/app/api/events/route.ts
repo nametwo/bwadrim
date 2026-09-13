@@ -4,7 +4,12 @@ import { logEvent, type EventName } from "@/lib/events";
 
 // 고객(anon) 쪽 지표 이벤트 수집. events 테이블엔 anon insert 정책이 없으므로
 // 유효한 방 코드를 아는 요청만 이 API를 통해 기록한다.
-const CUSTOMER_EVENTS: EventName[] = ["camera_granted", "camera_denied"];
+const CUSTOMER_EVENTS: EventName[] = [
+  "camera_granted",
+  "camera_denied",
+  "connected",
+  "relay_used",
+];
 
 export async function POST(request: Request) {
   let body: { code?: string; name?: string; props?: Record<string, unknown> };

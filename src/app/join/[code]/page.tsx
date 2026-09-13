@@ -59,7 +59,7 @@ export default async function JoinPage({ params }: PageProps<"/join/[code]">) {
   const ua = (await headers()).get("user-agent") ?? "";
   await logEvent(room.id, "customer", "link_opened", { ua });
 
-  return <CameraStart code={normalized} />;
+  return <CameraStart roomId={room.id} code={normalized} />;
 }
 
 function Notice({
