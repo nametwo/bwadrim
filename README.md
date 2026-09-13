@@ -1,36 +1,74 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 봐드림 (bwadrim)
 
-## Getting Started
+설치 없이, 문자로 받은 링크 하나로. 고객이 폰 카메라로 장비를 비춰주면 엔지니어가 원격으로 보고 가리키며 A/S하는 웹 서비스.
 
-First, run the development server:
+## 왜 만드나
+
+카드단말기 대여 사업에서 별일 아닌 문제에도 직접 방문 A/S가 발생한다. 전화로는 "어디를 누르라"는 설명이 안 통하고, 팀뷰어 같은 설치형 도구는 나이 든 사장님들에게 진입 장벽이 너무 높다. 카메라를 비추기만 하면 되는 웹 서비스가 있으면 출장의 상당수를 없앨 수 있다.
+
+이번 목표는 세 가지: **수익화 구조 열어두기 · 사용자 지표 수집 · 연결 품질 최적화**.
+
+## MVP 범위 (1차)
+
+| 역할 | 기기 | 하는 일 |
+|---|---|---|
+| 엔지니어 | 폰 + PC 웹 | 로그인 → 방 생성 → 고객에게 링크 전송 → 영상 보며 레이저 포인터 / 프리즈 프레임 표시 |
+| 고객 | 폰 카메라 | 링크 클릭 → 카메라 허용 → 끝. 로그인·설치 없음 |
+
+- [x] Next.js + Supabase 스캐폴드
+- [ ] 관리자(엔지니어) 로그인 — Supabase Auth
+- [ ] 방 생성 + 1회성 초대 URL (만료 24h)
+- [ ] WebRTC 영상/음성 — Supabase Realtime 시그널링, STUN + 무료 TURN
+- [ ] 레이저 포인터 (DataChannel, 정규화 좌표)
+- [ ] 프리즈 프레임 + 드로잉
+- [ ] 카메라 전/후면 전환, 통화 종료
+- [ ] 인앱 브라우저(카카오톡) 감지 → 기본 브라우저로 열기 안내
+- [ ] 이벤트 로깅 (session_created / joined / connected / relay_used / ended)
+- [ ] 연락처 입력 → 문자로 링크 전송
+
+## 나중에 (2차 이후)
+
+- 고객 PC 화면 공유 (`getDisplayMedia`, 브라우저만으로 가능) + 항상 위에 뜨는 PiP 창
+- 통화 후 캡처 이미지 카톡/문자 자동 전송 (A/S 기록)
+- 세션 단위 과금 (Viewabo 모델: 좌석 무제한, 월 N세션)
+- 설치형(WPF + WebView2) — 화면 위 오버레이 + 원격 제어. 유료 티어
+
+## 기술 스택
+
+- Next.js (App Router) + TypeScript + Tailwind
+- Supabase — Auth(엔지니어 로그인), Postgres(rooms/events), Realtime(시그널링)
+- WebRTC — 브라우저 네이티브. ICE: Google STUN + Cloudflare/Metered TURN
+- 배포: Vercel
+
+## 로컬 실행
 
 ```bash
+cp .env.example .env.local   # Supabase / TURN 값 채우기
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Supabase 프로젝트 SQL Editor에서 `supabase/schema.sql` 실행.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+카메라는 HTTPS에서만 동작하므로 폰 테스트는 `npx ngrok http 3000` 또는 Vercel Preview 사용.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 브라우저 제약 (알고 가기)
 
-## Learn More
+- 카메라/오디오 요청은 사용자가 버튼을 누른 뒤에만 (iOS 정책)
+- 카카오톡 인앱 브라우저: iOS는 카메라 불가, Android는 불안정 → 감지해서 Safari/Chrome으로 유도. 문자(SMS)로 보내면 이 문제 없음
+- 모바일 화면 공유는 불가. PC 화면 공유는 가능(2차)
+- 브라우저는 다른 앱 위에 그림을 그리거나 입력을 주입할 수 없음 → 원격 제어는 설치형 전용
 
-To learn more about Next.js, take a look at the following resources:
+## 봐야 할 지표
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. 원격 해결률 — 세션 종료 시 "출장 불필요" 체크 비율. 이게 영업 자료
+2. 링크 클릭 → 카메라 허용 도달률
+3. 연결 실패율, TURN(relay) 사용 비율 — 원가 계산 근거
+4. 세션당 평균 시간
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 시장 참고
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- 리모트콜 비주얼팩(알서포트): 같은 기능, 대기업 콜센터 대상, 상담원당 라이선스, 가격 비공개
+- 버넥트 리모트: 산업용 AR, 월 3만원/계정
+- Viewabo(해외): SMS 링크·앱 없음·세션 과금 $79/월(50세션) — 우리 포지션에 가장 가까움
+- 삼성전자서비스: 원격 상담 고객 10명 중 6명 출장 없이 해결
