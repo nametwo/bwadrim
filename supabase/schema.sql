@@ -1,5 +1,5 @@
 -- 봐드림 스키마
--- Supabase SQL Editor에서 실행
+-- Supabase SQL Editor에서 실행 (여러 번 실행해도 안전)
 
 create extension if not exists "pgcrypto";
 
@@ -38,11 +38,13 @@ alter table rooms  enable row level security;
 alter table events enable row level security;
 
 -- 엔지니어: 자기 방만
+drop policy if exists "engineer manages own rooms" on rooms;
 create policy "engineer manages own rooms" on rooms
   for all using (auth.uid() = engineer_id) with check (auth.uid() = engineer_id);
 
 -- 고객(anon): 방 정보는 서버 API(service role)를 통해서만 읽는다. 직접 select 없음.
 -- 이벤트 insert는 서버 API를 통해서만.
+drop policy if exists "engineer reads own events" on events;
 create policy "engineer reads own events" on events
   for select using (
     exists (select 1 from rooms r where r.id = events.room_id and r.engineer_id = auth.uid())
