@@ -1,7 +1,9 @@
 import type {
   GrayImage,
+  LostReason,
   Mat3,
   PlanarTrackerApi,
+  Point,
   Rect,
   ReferenceInfo,
   TrackerConfig,
@@ -21,6 +23,7 @@ import {
   isFiniteH,
   maxCornerDistance,
   refineHomographyLM,
+  reprojError2,
   type RansacParams,
   type SanityLimits,
 } from "./cv/homography";
@@ -28,7 +31,7 @@ import { Pyramid, ensureImage, isValidImage, warpPerspective } from "./cv/image"
 import { PyrLK, type LKParams } from "./cv/lk";
 import { HammingMatcher, MatchList, minDistanceOutside, type MatchParams } from "./cv/match";
 import { VerifyModel, emptyVerify, type AmbiguityCriteria, type VerifyResult } from "./cv/ncc";
-import { OrbExtractor, OrbFeatures, ScalePyramid, type OrbParams } from "./cv/orb";
+import { OrbCornerCache, OrbExtractor, OrbFeatures, ScalePyramid, type OrbParams } from "./cv/orb";
 import { Rng } from "./cv/rng";
 
 // 평면 앵커 추적기 (README "파이프라인" 참고).
@@ -37,7 +40,8 @@ import { Rng } from "./cv/rng";
 //    피라미드 → ROI ORB(+기준 프레임 전체 ORB로 '쌍둥이' = 반복 무늬 특징 판별) → ROI 자기유사성 검사
 //    → 특징·LK 코너가 모자라거나 모호(옆 복제본과 구별 불가)하면 ROI를 1.5배씩 넓힘(최대 전체 화면)
 //    → LK 점 풀, 정렬 템플릿(단계별), 광도 검증 격자(블록 NCC), 반복 이동량 목록.
-//    trackable = 특징 충분 + 핀 주변(요청 ROI, 최소 80×80)에 코너가 있을 것.
+//    trackable = 특징 충분 + 핀 주변(앵커 ±40px)에 코너가 있을 것
+//                + (initialH가 없으면) 재검출 가능(반복 무늬로 모호하지 않음).
 //    (핀 자체에 무늬가 없으면 넓힌 ROI가 다른 평면일 때 시차만큼 틀린 곳을 가리키므로 추적하지 않는다.)
 //
 //  process
@@ -45,12 +49,41 @@ import { Rng } from "./cv/rng";
 //                    → RANSAC(ref↔현재 좌표, 체인 누적 없음) + LM → 기준 템플릿 직접 정렬(IC, 드리프트 제거)
 //                    → 형상·시간(점프)·광도 검증. 아웃라이어끼리 따로 맞는 H(한 주기 미끄러짐 등)가 있으면
 //                      둘 다 검증해 나은 쪽. 넓힌 ROI면 핀 주변 블록도 맞아야 표시.
+//                      넓히지 않은 ROI면 앵커 주변 48px 창의 국소 최대 검사: H를 8방향으로 6px 옮긴 쪽이
+//                      창 NCC가 더 높으면 표시하지 않는다 (앵커가 지배 평면과 다른 면 — 돌출 키 사이 바닥 등 — 이라
+//                      시차로 어긋난 경우. 절대값이 아니라 상대 비교라 압축·블러·가림엔 둔감).
+//                    → 주기적(15프레임) 미끄러짐 검사: 반복 무늬 기준이면 반복 이동량만큼 옮긴 H와 광도로 비교해
+//                      의심될 때만 ORB 재검출 (무조건 하는 주기적 ORB 재검출은 없앴다 — 프레임 시간 튐 방지).
 //                    → 인라이어 점 스냅·풀에서 보충. 실패하거나 약하면(또는 주기적으로) 같은 프레임에서 재검출.
 //    searching/lost — ORB 매칭(고유 특징만, 비율·상호) → RANSAC → LM → 정렬(거친→고운)
-//                    → 엄격 검증(블록 NCC, 반복 이동량만큼 옮긴 후보보다 확실히 나을 것) → tracking
-//    앵커(요청 ROI 중심 = 핀)가 화면 밖이면 내부 추적은 계속하되 'lost'로 알린다 (H = null).
+//                    → 엄격 검증(블록 NCC, 반복 이동량만큼 옮긴 후보보다 확실히 나을 것,
+//                      앵커 주변 창 국소 최대 검사는 6·12px 두 겹) → tracking
+//    앵커(주석 기준점, 없으면 요청 ROI 중심)가 화면 밖이면 내부 추적은 계속하되 'lost'로 알린다 (H = null).
 //
 // 틀린 곳을 가리키느니 놓치는 쪽을 택한다: 내보내는 모든 H는 광도 검증(블록 NCC)을 통과한 것이다.
+//
+// 앵커·화면 밖 (계약 v2)
+//   anchor = 주석이 실제로 있는 ref 픽셀 한 점. 핀이면 핀 위치, 선(stroke)이면 호출측이 넘긴 점들의 무게중심.
+//   화면 밖 = H·anchor가 프레임 [−m, W−1+m] × [−m, H−1+m] 밖 (m = offscreenMargin, 기본 2px)이거나 카메라 뒤.
+//   선의 일부만 화면에 걸쳐도 무게중심이 밖이면 화면 밖으로 본다 (단순·일관: "주석의 중심이 보이는가").
+//   핀 주변 검증(pin_blank 판정·넓힌 ROI일 때의 inner 검증)도 anchor 기준이다.
+//
+// TrackResult.reason / hint
+//   tracking·weak       → reason 없음, hint = null
+//   lost + offscreen    → 내부 추적이 이번 프레임 검증을 강하게 통과했고(넓은 ROI 기준 tracking 조건) 앵커만 화면 밖.
+//                          hint = 그 H (화면 밖 방향 화살표 전용). 앵커가 카메라 뒤이거나 프레임 대각선의
+//                          hintMaxDiag배보다 멀면 방향을 믿을 수 없으니 hint를 내지 않는다(→ unverified).
+//   lost/searching + unverified   → 이번 프레임에 검증된 위치 없음 (후보가 없었거나 검증에서 떨어짐)
+//   lost/searching + untrackable  → 이 기준으로는 위치를 낼 수 없음: trackable=false, 또는 반복 무늬로
+//                                    재검출이 꺼진 기준을 놓친 뒤(다시 찾을 방법이 없다 → 새로 찍어야 함)
+//   lost/searching + invalid_frame → 입력 프레임이 잘못됨
+//   기준이 없으면 lost, reason 없음.
+//
+// ReferenceInfo.reason
+//   low_texture — ROI를 전체 화면까지 넓혀도 특징이 모자람 (trackable=false)
+//   pin_blank   — 전체적으로는 무늬가 있으나 앵커 주변이 비어 있음 (trackable=false)
+//   ambiguous   — 반복 무늬라 재검출(ORB 탐색)을 끔. initialH가 있으면(엔지니어) 추적은 된다(trackable=true).
+//                 initialH가 없으면(고객) 찾을 방법이 없으므로 trackable=false.
 
 /** 확장 설정 (TrackerConfig + 세부 조정값). 모든 값에 기본값이 있다 */
 export interface PlanarTrackerOptions extends TrackerConfig {
@@ -90,13 +123,26 @@ export interface PlanarTrackerOptions extends TrackerConfig {
   minDetectInliers: number;
   /** 인라이어 볼록껍질 / 고유 특징 볼록껍질 하한 */
   minDetectSpread: number;
-  /** 추적 중 주기적 재검출 간격 (프레임, 0 = 끔) */
+  /**
+   * 추적 중 주기적 미끄러짐 검사 간격 (프레임, 0 = 끔). 반복 무늬 기준이면 반복 이동량만큼 옮긴 H와
+   * 광도로 비교해 의심될 때만 ORB 재검출을 한다 (periodicOrb면 의심 없이도 이 간격마다 ORB 재검출).
+   */
   reanchorInterval: number;
+  /** 주기마다 무조건 ORB 재검출 (느림, 기본 끔) */
+  periodicOrb: boolean;
   // ── LK ──
   lkWinRadius: number;
   lkMaxIters: number;
   lkMinEig: number;
   lkMaxResidual: number;
+  /** 거친 LK 단계 수렴 판정 (단계 px) */
+  lkCoarseEpsilon: number;
+  /** LK 인라이어 재투영 RMS가 이 이하(px)면 거친 정렬 단계를 건너뛴다 (0 = 항상 거친 단계부터) */
+  alignFineRms: number;
+  /** 재검출: ORB 인라이어 RMS가 이 이하(px)면 정렬을 1단계부터 */
+  detectFineRms: number;
+  /** 거친 정렬 단계 수렴 판정 (단계 px) */
+  alignCoarseEpsilon: number;
   /** 순방향-역방향 오차 허용 (px) */
   fbThreshold: number;
   /** 역방향 검사에 쓸 피라미드 단계 수 (초기값이 곧 정답 위치라 거친 단계가 필요 없다) */
@@ -135,6 +181,20 @@ export interface PlanarTrackerOptions extends TrackerConfig {
   /** 추적 중 예측 대비 허용 점프 (px, ROI 대각선 비율과 큰 쪽) */
   maxJumpPx: number;
   maxJumpFrac: number;
+  // ── 앵커 ──
+  /** 앵커 주변 거부 검증 창 한 변 (px, 0 = 끔). ROI를 넓히지 않았을 때만 */
+  pinAreaSize: number;
+  /** 앵커 주변 창 국소 최대 검사: 8방향으로 이만큼(px) 옮긴 H와 비교 */
+  pinAreaShift: number;
+  /** 옮긴 H의 창 NCC가 이만큼 더 높으면 거부 */
+  pinAreaPeak: number;
+  /** 창 블록 NCC 하위 25%가 pinAreaQ 미만이면 더 엄격하게: 옮긴 H가 pinAreaPeakWeak 이상이면 거부 */
+  pinAreaQ: number;
+  pinAreaPeakWeak: number;
+  /** 앵커가 프레임 가장자리 밖으로 이 거리(px)까지는 '화면 안'으로 본다 */
+  offscreenMargin: number;
+  /** hint: 앵커가 프레임 중심에서 (프레임 대각선 × 이 값)보다 멀면 내지 않는다 */
+  hintMaxDiag: number;
 }
 
 export const DEFAULT_TRACKER_CONFIG: PlanarTrackerOptions = {
@@ -167,14 +227,19 @@ export const DEFAULT_TRACKER_CONFIG: PlanarTrackerOptions = {
   detectMaxIters: 1500,
   minDetectInliers: 10,
   minDetectSpread: 0.12,
-  reanchorInterval: 45,
+  reanchorInterval: 15,
+  periodicOrb: false,
 
   lkWinRadius: 5,
   lkMaxIters: 10,
   lkMinEig: 2,
   lkMaxResidual: 40,
+  lkCoarseEpsilon: 0.1,
+  alignFineRms: 0.5,
+  detectFineRms: 1.2,
+  alignCoarseEpsilon: 0.1,
   fbThreshold: 1.0,
-  fbLevels: 2,
+  fbLevels: 1,
   replenishBelow: 0.7,
   minPointDistance: 6,
   snapPoints: true,
@@ -198,6 +263,14 @@ export const DEFAULT_TRACKER_CONFIG: PlanarTrackerOptions = {
   fracWeak: 0.35,
   maxJumpPx: 40,
   maxJumpFrac: 0.6,
+
+  pinAreaSize: 48,
+  pinAreaShift: 6,
+  pinAreaPeak: 0.06,
+  pinAreaQ: 0,
+  pinAreaPeakWeak: -0.05,
+  offscreenMargin: 2,
+  hintMaxDiag: 3,
 };
 
 /** 기준 프레임에서 만든 모든 것 */
@@ -205,8 +278,8 @@ interface RefModel {
   width: number;
   height: number;
   roi: Rect;
-  /** 요청 ROI 중심 (= 엔지니어가 탭한 곳, 핀 위치의 대리값). 화면 밖이면 표시하지 않는다 */
-  anchor: { x: number; y: number };
+  /** 주석 기준점 (setReference의 anchor, 없으면 요청 ROI 중심). 화면 밖이면 표시하지 않는다 */
+  anchor: Point;
   pyr: Pyramid;
   /** ROI 안 ORB 특징 (재검출용) */
   feats: OrbFeatures;
@@ -229,6 +302,12 @@ interface RefModel {
   inner: VerifyModel | null;
   /** inner가 무늬 없는 영역이라 핀 위치를 직접 확인할 수 없음 → 최대 weak */
   innerBlind: boolean;
+  /**
+   * ROI를 넓히지 않았을 때: 앵커 바로 주변(작은 창) 검증기 — 거부권만 가진다.
+   * 넓은 ROI의 지배 평면(예: 돌출된 키 윗면)과 앵커가 있는 면(키 사이 바닥)이 달라 시차로 어긋나면 표시하지 않는다.
+   * 무늬가 없으면 null (넓은 검증에 맡긴다).
+   */
+  pinArea: VerifyModel | null;
   /** 자기유사성 검사를 통과했는가 (false면 재검출 금지) */
   distinctive: boolean;
   /** 핀 주변 코너 수 (진단용) */
@@ -251,6 +330,11 @@ interface Outcome {
   fromDetect: boolean;
   /** 재검출로 보강할 필요가 있는가 (인라이어 부족 등) */
   wantReanchor: boolean;
+  /**
+   * 넓은(ROI 전체) 검증을 tracking 기준으로 통과했는가 — 핀 주변(inner) 검사는 뺀 것.
+   * 앵커가 화면 밖일 때 hint를 낼 수 있는 조건 (핀 주변은 화면 밖이라 볼 수 없으므로).
+   */
+  hintOk: boolean;
 }
 
 /** 진단 이벤트 (onDebug를 설정했을 때만 만든다) */
@@ -266,6 +350,8 @@ export interface TrackerDebugEvent {
   verify?: VerifyResult;
   /** 핀 주변(요청 ROI) 검증 — ROI를 넓혔을 때만 */
   inner?: VerifyResult;
+  /** 앵커 주변 창 국소 최대 검사 (ROI를 넓히지 않았을 때): 창 NCC, 옮긴 H의 최대 이득, 하위 25% 블록 NCC */
+  pin?: { ncc: number; gain: number; q25: number };
 }
 
 /** 추적 가설 평가 결과 */
@@ -326,10 +412,16 @@ function twinShifts(
       votes.set(key, { n: 1, sx: dx, sy: dy });
     }
   }
-  const list = [...votes.values()].sort((a, b) => b.n - a.n || a.sx - b.sx || a.sy - b.sy);
+  // 표가 하나뿐인 변위는 우연한 닮음(잡음)이 대부분 — 반복 무늬면 여러 특징이 같은 변위에 모인다
+  const list = [...votes.values()].filter((v) => v.n >= 2).sort((a, b) => b.n - a.n || a.sx - b.sx || a.sy - b.sy);
   const out: number[] = [];
   for (const v of list.slice(0, 24)) out.push(Math.round(v.sx / v.n), Math.round(v.sy / v.n));
   return out;
+}
+
+/** 특징 (단계, 위치) 키 — 같은 피라미드에서 같은 코너면 같은 디스크립터 */
+function featKey(f: OrbFeatures, i: number): number {
+  return f.level[i] * 67108864 + Math.round(f.y[i] * 4) * 8192 + Math.round(f.x[i] * 4);
 }
 
 function clamp01(v: number): number {
@@ -349,6 +441,16 @@ export class PlanarTracker implements PlanarTrackerApi {
   /** 진단용 콜백 (기본 없음). 벤치·실험에서 탈락 이유를 보려고 쓴다 */
   onDebug: ((ev: TrackerDebugEvent) => void) | null = null;
   private lastInner: VerifyResult | null = null;
+  private lastPin: { ncc: number; gain: number; q25: number } | null = null;
+  /** 마지막 setReference 단계별 시간(ms)·ROI 확장 반복 수 (진단용) */
+  private refTimings: Record<string, number> = {};
+  /** 앵커 주변 창 국소 최대 검사 (0, 0) + 8방향 이동 */
+  private pinShifts: number[];
+  /** 재검출용: 1배·2배 거리 */
+  private pinShiftsWide: number[];
+  private paG = new Float64Array(0);
+  private paB = new Float32Array(0);
+  private paBlocks: number[] = [];
   private rng: Rng;
   private ref: RefModel | null = null;
   private state: TrackState = "lost";
@@ -364,6 +466,7 @@ export class PlanarTracker implements PlanarTrackerApi {
   private fh = 0;
   private synth: GrayImage | null = null;
   private curScale = new ScalePyramid();
+  private refScale = new ScalePyramid();
   private curFeat = new OrbFeatures(1024);
 
   // 자세 이력
@@ -373,6 +476,9 @@ export class PlanarTracker implements PlanarTrackerApi {
   private tPrev = 0;
   private strongStreak = 0;
   private framesSinceDetect = 0;
+  private framesSinceSlipCheck = 0;
+  /** 추적 중 돕는 재검출이 연달아 실패한 횟수 (간격 늘리기) */
+  private helpFails = 0;
 
   // 추적 점 (capacity = maxTrackedPoints)
   private nPts = 0;
@@ -417,6 +523,8 @@ export class PlanarTracker implements PlanarTrackerApi {
   private vres: VerifyResult = emptyVerify();
 
   private lkParams: LKParams;
+  /** 거친 정렬 단계(마지막 단계 전)용: 다음 단계가 다시 다듬으므로 느슨한 수렴 */
+  private alignCoarse: AlignParams;
   private lkBackParams: LKParams;
   private alignParams: AlignParams;
   private trackRansac: RansacParams;
@@ -450,12 +558,14 @@ export class PlanarTracker implements PlanarTrackerApi {
       winRadius: c.lkWinRadius,
       maxIters: c.lkMaxIters,
       epsilon: 0.02,
+      coarseEpsilon: c.lkCoarseEpsilon,
       minEig: c.lkMinEig,
       levels: c.pyramidLevels,
       maxResidual: c.lkMaxResidual,
     };
     this.lkBackParams = { ...this.lkParams, maxResidual: 0, levels: Math.max(1, Math.min(c.fbLevels, c.pyramidLevels)) };
     this.alignParams = { ...DEFAULT_ALIGN };
+    this.alignCoarse = { ...DEFAULT_ALIGN, epsilon: c.alignCoarseEpsilon, maxIters: 10 };
     this.trackRansac = {
       threshold: c.ransacThreshold,
       maxIters: 200,
@@ -478,6 +588,15 @@ export class PlanarTracker implements PlanarTrackerApi {
       maxWRatio: 3,
     };
     this.matchParams = { maxDistance: c.matchMaxDistance, ratio: c.matchRatio, mutual: true };
+    this.pinShifts = [0, 0];
+    this.pinShiftsWide = [0, 0];
+    for (let a = 0; a < 8; a++) {
+      const th = (a * Math.PI) / 4;
+      const dx = c.pinAreaShift * Math.cos(th);
+      const dy = c.pinAreaShift * Math.sin(th);
+      this.pinShifts.push(dx, dy);
+      this.pinShiftsWide.push(dx, dy, 2 * dx, 2 * dy);
+    }
     this.orbParams = {
       nFeatures: c.orbFeatures,
       nLevels: c.orbLevels,
@@ -515,6 +634,7 @@ export class PlanarTracker implements PlanarTrackerApi {
     pinCorners: number;
     distinctive: boolean;
     trackable: boolean;
+    timings: Record<string, number>;
   } | null {
     const r = this.ref;
     if (!r) return null;
@@ -526,40 +646,56 @@ export class PlanarTracker implements PlanarTrackerApi {
       pinCorners: r.pinCorners,
       distinctive: r.distinctive,
       trackable: r.trackable,
+      timings: { ...this.refTimings },
     };
   }
 
-  setReference(ref: GrayImage, roi: Rect, initialH?: Mat3): ReferenceInfo {
+  setReference(ref: GrayImage, roi: Rect, initialH?: Mat3, anchorPt?: Point): ReferenceInfo {
     this.clearReference();
     this.rng.reseed(this.config.seed);
     const c = this.config;
     const safeRoi: Rect = { x: 0, y: 0, width: 0, height: 0 };
     if (!isValidImage(ref) || !roi || ![roi.x, roi.y, roi.width, roi.height].every(Number.isFinite)) {
-      return { roi: safeRoi, features: 0, trackable: false };
+      return { roi: safeRoi, features: 0, trackable: false, reason: "low_texture" };
     }
     const W = ref.width;
     const H = ref.height;
 
+    const rt: Record<string, number> = { iters: 0 };
+    let tq = now();
+    const lap = (k: string) => {
+      const t2 = now();
+      rt[k] = (rt[k] ?? 0) + (t2 - tq);
+      tq = t2;
+    };
     const pyr = new Pyramid();
     pyr.build(ref, Math.max(4, c.pyramidLevels));
-    const sp = new ScalePyramid();
+    // 스케일 피라미드는 기준 설정 중에만 쓰므로 버퍼를 재사용한다 (기준 피라미드 pyr은 RefModel이 계속 들고 있다)
+    const sp = this.refScale;
     sp.build(pyr, c.orbLevels);
+    lap("pyramid");
 
-    // 기준 프레임 전체 특징 (쌍둥이 판별용)
+    // 기준 프레임 전체 특징 (쌍둥이 판별용). FAST 코너는 캐시해 ROI 넓히기 반복에서 다시 쓴다
+    const cornerCache = new OrbCornerCache();
     const all = new OrbFeatures(1024);
-    this.orb.extract(sp, { ...this.orbParams, nFeatures: 600, cellSize: 16 }, all);
+    this.orb.extract(sp, { ...this.orbParams, nFeatures: 600, cellSize: 16 }, all, null, false, cornerCache);
+    lap("orbAll");
+    const lv0 = pyr.levels[0];
+    const border = c.lkWinRadius + 3;
 
     let r = this.sanitizeRoi(roi, W, H);
     const roi0 = { ...r };
-    const anchor = {
-      x: Math.min(W - 1, Math.max(0, roi.x + roi.width / 2)),
-      y: Math.min(H - 1, Math.max(0, roi.y + roi.height / 2)),
-    };
+    const hasAnchor = !!anchorPt && Number.isFinite(anchorPt.x) && Number.isFinite(anchorPt.y);
+    const ax = hasAnchor ? anchorPt!.x : roi.x + roi.width / 2;
+    const ay = hasAnchor ? anchorPt!.y : roi.y + roi.height / 2;
+    const anchor: Point = { x: Math.min(W - 1, Math.max(0, ax)), y: Math.min(H - 1, Math.max(0, ay)) };
     const raw = new CornerList(2048);
     const sel = new CornerList(512);
-    const lv0 = pyr.levels[0];
     let nPool = -1;
     let feats = new OrbFeatures(512);
+    /** 쌍둥이 캐시: 특징 키 → (거리 << 16) | (all 인덱스 + 1) */
+    const twinCache = new Map<number, number>();
+    let lkCorners: CornerList | null = null;
     let verify: VerifyModel | null = null;
     let uniqueIdx = new Int32Array(0);
     let nUnique = 0;
@@ -573,6 +709,7 @@ export class PlanarTracker implements PlanarTrackerApi {
       minBlock: c.minBlockDetect - 0.1,
     };
     for (let iter = 0; iter < 10; iter++) {
+      rt.iters++;
       feats = new OrbFeatures(512);
       const m = c.roiMargin;
       this.orb.extract(
@@ -580,38 +717,80 @@ export class PlanarTracker implements PlanarTrackerApi {
         { ...this.orbParams, nFeatures: c.maxReferenceFeatures, cellSize: 12 },
         feats,
         { x: r.x - m, y: r.y - m, width: r.width + 2 * m, height: r.height + 2 * m },
+        false,
+        cornerCache,
       );
-      // 쌍둥이 판별
-      const excl = new Float32Array(feats.n);
-      for (let i = 0; i < feats.n; i++) excl[i] = 6 * Math.pow(Math.SQRT2, feats.level[i]);
+      lap("orbRoi");
+      // 쌍둥이 판별. 같은 (단계, 위치)의 특징은 디스크립터도 같으므로 이전 반복 결과를 다시 쓴다
       const twin = new Uint16Array(feats.n);
       const twinIdx = new Int32Array(feats.n);
-      minDistanceOutside(feats.desc, feats.x, feats.y, excl, feats.n, all.desc, all.x, all.y, all.n, twin, twinIdx);
+      const todo: number[] = [];
+      for (let i = 0; i < feats.n; i++) {
+        const hit = twinCache.get(featKey(feats, i));
+        if (hit !== undefined) {
+          twin[i] = hit >>> 16;
+          twinIdx[i] = (hit & 0xffff) - 1;
+        } else {
+          todo.push(i);
+        }
+      }
+      if (todo.length > 0) {
+        const sub = new OrbFeatures(todo.length);
+        for (const i of todo) sub.pushFrom(feats, i);
+        const excl = new Float32Array(sub.n);
+        for (let i = 0; i < sub.n; i++) excl[i] = 6 * Math.pow(Math.SQRT2, sub.level[i]);
+        const tw = new Uint16Array(sub.n);
+        const ti = new Int32Array(sub.n);
+        // 쌍둥이 거리는 twinShifts 한계(twinDistance + 15)까지만 필요하다
+        const tb = c.twinDistance + 16;
+        minDistanceOutside(sub.desc, sub.x, sub.y, excl, sub.n, all.desc, all.x, all.y, all.n, tw, ti, tb);
+        for (let k = 0; k < todo.length; k++) {
+          const i = todo[k];
+          twin[i] = tw[k];
+          twinIdx[i] = ti[k];
+          twinCache.set(featKey(feats, i), tw[k] * 65536 + (ti[k] + 1));
+        }
+      }
       uniqueIdx = new Int32Array(feats.n);
       nUnique = 0;
       for (let i = 0; i < feats.n; i++) if (twin[i] > c.twinDistance) uniqueIdx[nUnique++] = i;
+      lap("twins");
 
-      verify = VerifyModel.build(pyr, r);
+      // LK 점 풀은 특징 조건을 넘었을 때만 센다 (못 넘으면 어차피 넓힌다)
+      const featsOk = feats.n >= c.targetReferenceFeatures && nUnique >= c.targetReferenceFeatures / 2;
+      if (featsOk && iter > 0 && !lkCorners) {
+        // 두 번째 넓히기부터는 0단계 전체 화면 코너를 한 번 구해 영역만 바꿔 쓴다
+        lkCorners = new CornerList(2048);
+        detectFast(lv0, Math.min(10, c.fastThreshold), border, lkCorners);
+        scoreCorners(lv0, lkCorners, "mineig", 3);
+      }
+      nPool = featsOk ? this.buildPool(lv0, r, raw, sel, lkCorners) : -1;
+      lap("pool");
+      const enough = featsOk && nPool >= 2 * c.minInliers;
+      const last = r.width >= W - 0.5 && r.height >= H - 0.5;
+      // 자기유사성 검사(비쌈)는 이 ROI로 끝낼 수 있을 때만 (특징이 모자라면 어차피 넓힌다)
+      verify = null;
       let ambiguous = false;
-      if (c.checkRepeats) {
-        const shifts = twinShifts(feats, all, twin, twinIdx, c.twinDistance + 15);
-        const scan = verify.scanRepeats(pyr, 8, crit, shifts);
-        ambiguous = scan.ambiguous;
-        repeatShifts = scan.peaks;
+      if (enough || last || iter === 9) {
+        verify = VerifyModel.build(pyr, r);
+        lap("verifyBuild");
+        repeatShifts = [];
+        if (c.checkRepeats) {
+          const shifts = twinShifts(feats, all, twin, twinIdx, c.twinDistance + 15);
+          const scan = verify.scanRepeats(pyr, 8, crit, shifts);
+          ambiguous = scan.ambiguous;
+          repeatShifts = scan.peaks;
+        }
+        lap("repeats");
       }
       distinctive = !ambiguous;
-      nPool = this.buildPool(lv0, r, raw, sel);
-      const enough =
-        feats.n >= c.targetReferenceFeatures &&
-        nUnique >= c.targetReferenceFeatures / 2 &&
-        nPool >= 2 * c.minInliers;
       if (enough && !ambiguous) break;
-      if (r.width >= W - 0.5 && r.height >= H - 0.5) break;
+      if (last) break;
       if (iter === 9) break; // (전체 화면에 먼저 닿으므로 실제로는 안 옴) 마지막 ROI와 특징이 어긋나지 않게
       r = this.expandRoi(r, c.roiExpandFactor, W, H);
     }
 
-    if (!verify) verify = VerifyModel.build(pyr, r);
+    if (!verify) verify = VerifyModel.build(pyr, r); // (루프가 항상 마지막 ROI에서 만들므로 안전장치)
 
     // 고유 특징 볼록껍질
     const ux = new Float64Array(nUnique);
@@ -623,8 +802,7 @@ export class PlanarTracker implements PlanarTrackerApi {
     const uniqueHull = hullArea(ux, uy, nUnique, null);
 
     // LK 점 풀: ROI 안 0단계 코너 (마지막 반복의 ROI로 다시 — sel에 남아 있다)
-    if (nPool < 0) nPool = this.buildPool(lv0, r, raw, sel);
-    const border = c.lkWinRadius + 3;
+    if (nPool < 0) nPool = this.buildPool(lv0, r, raw, sel, lkCorners);
     const poolX = new Float64Array(nPool);
     const poolY = new Float64Array(nPool);
     for (let k = 0; k < nPool; k++) {
@@ -632,24 +810,18 @@ export class PlanarTracker implements PlanarTrackerApi {
       poolY[k] = sel.y[k];
     }
 
+    lap("misc");
     // 정렬 템플릿 (단계 0..3)
     const templates: (AlignTemplate | null)[] = [];
     for (let l = 0; l < Math.min(4, pyr.length); l++) {
       const t = buildAlignTemplate(pyr.levels[l], l, r, c.alignSamples, 2);
       templates.push(t.n >= 24 ? t : null);
     }
+    lap("templates");
 
-    // 핀 주변 무늬: 앵커 중심 최소 80×80 (요청 ROI가 더 크면 그것)
-    const pb = clampRect(
-      {
-        x: Math.min(roi0.x, anchor.x - 40),
-        y: Math.min(roi0.y, anchor.y - 40),
-        width: Math.max(roi0.x + roi0.width, anchor.x + 40) - Math.min(roi0.x, anchor.x - 40),
-        height: Math.max(roi0.y + roi0.height, anchor.y + 40) - Math.min(roi0.y, anchor.y - 40),
-      },
-      W,
-      H,
-    );
+    // 핀 주변 무늬: 앵커 중심 80×80. (주석이 실제로 있는 곳 — 선이면 무게중심 — 주변에 무늬가 있어야
+    // 넓힌 ROI가 다른 평면일 때의 시차를 핀 주변 검증으로 잡을 수 있다)
+    const pb = clampRect({ x: anchor.x - 40, y: anchor.y - 40, width: 80, height: 80 }, W, H);
     detectFast(lv0, Math.min(10, c.fastThreshold), border, raw, {
       x0: pb.x,
       y0: pb.y,
@@ -659,22 +831,42 @@ export class PlanarTracker implements PlanarTrackerApi {
     scoreCorners(lv0, raw, "mineig", 3);
     const pinCorners = minDistanceFilter(raw, sel, W, H, 5, 1000, c.lkMinEig);
     const pinNeed = Math.max(c.minPinCorners, Math.round(c.minPinCornerDensity * pb.width * pb.height));
+    lap("pinCorners");
 
-    const trackable =
-      feats.n >= c.minReferenceFeatures &&
-      nPool >= c.minWeakInliers &&
-      templates[0] !== null &&
-      pinCorners >= pinNeed;
+    const textured = feats.n >= c.minReferenceFeatures && nPool >= c.minWeakInliers && templates[0] !== null;
+    const pinOk = pinCorners >= pinNeed;
+    // 고객 쪽(initialH 없음)은 재검출로만 찾을 수 있다 → 반복 무늬라 재검출을 끄면 찾을 방법이 없다
+    const detectable = distinctive && nUnique >= c.minDetectInliers;
+    const trackable = textured && pinOk && (!!initialH || detectable);
+    const reason: ReferenceInfo["reason"] = !textured
+      ? "low_texture"
+      : !pinOk
+        ? "pin_blank"
+        : !detectable
+          ? "ambiguous"
+          : undefined;
 
-    // 넓어졌으면 요청 ROI 검증기
+    // 넓어졌으면 요청 ROI(앵커가 밖이면 앵커 주변까지) 검증기
     let inner: VerifyModel | null = null;
     let innerBlind = false;
+    let pinArea: VerifyModel | null = null;
     if (r.width * r.height >= 1.5 * roi0.width * roi0.height) {
+      const ir = this.unionAround(roi0, anchor, c.minRoiSize / 2, W, H);
       // 핀 주변은 촘촘하게 (0단계 근처) — 작은 로고·글자 하나만 있어도 몇 px 어긋남이 드러나게
-      inner = VerifyModel.build(pyr, roi0, { samples: 3600, blocks: 6, minStd: 5 });
+      inner = VerifyModel.build(pyr, ir, { samples: 3600, blocks: 6, minStd: 5 });
       innerBlind = inner.nTextured.every((k) => k === 0);
+    } else if (c.pinAreaSize > 0) {
+      const h = Math.max(16, Math.min(c.pinAreaSize, Math.min(r.width, r.height)) / 2);
+      const pr = clampRect({ x: anchor.x - h, y: anchor.y - h, width: 2 * h, height: 2 * h }, W, H);
+      if (pr.width >= 16 && pr.height >= 16) {
+        // 1단계(1/2)에서 본다: 압축·블러의 잔무늬엔 둔감, 시차 수 px 어긋남엔 민감
+        const m = VerifyModel.build(pyr, pr, { samples: 576, blocks: 4, minStd: 6, level: 1 });
+        if ((m.nTextured[m.baseLevel] ?? 0) >= 3) pinArea = m;
+      }
     }
 
+    lap("inner");
+    this.refTimings = rt;
     this.ref = {
       width: W,
       height: H,
@@ -692,6 +884,7 @@ export class PlanarTracker implements PlanarTrackerApi {
       verify,
       inner,
       innerBlind,
+      pinArea,
       distinctive,
       pinCorners,
       repeatShifts,
@@ -710,25 +903,31 @@ export class PlanarTracker implements PlanarTrackerApi {
     } else {
       this.state = "searching";
     }
-    return { roi: { ...r }, features: feats.n, trackable };
+    const info: ReferenceInfo = { roi: { ...r }, features: feats.n, trackable };
+    if (reason) info.reason = reason;
+    return info;
   }
 
   process(frame: GrayImage, timestampMs: number): TrackResult {
     const t0 = now();
     const tm: TrackTimings = { total: 0 };
     const ref = this.ref;
-    if (!ref || !ref.trackable || !isValidImage(frame)) {
+    const valid = isValidImage(frame);
+    if (!ref || !ref.trackable || !valid) {
       tm.total = now() - t0;
       // 이 프레임에선 위치를 낼 수 없으니 표시 상태(tracking/weak)로 알리지 않는다 (내부 상태는 유지)
-      return {
+      const res: TrackResult = {
         state: ref && !this.everLocked ? "searching" : "lost",
         H: null,
+        hint: null,
         confidence: 0,
         inliers: 0,
         tracked: 0,
         redetected: false,
         timings: tm,
       };
+      if (ref) res.reason = !valid ? "invalid_frame" : "untrackable";
+      return res;
     }
     const c = this.config;
     const ts = Number.isFinite(timestampMs) ? timestampMs : this.tLast + 33;
@@ -752,13 +951,31 @@ export class PlanarTracker implements PlanarTrackerApi {
     if (tracking && this.prevValid && this.prevPyr && this.nPts > 0 && this.H) {
       out = this.trackStep(this.prevPyr, cur, ts, tm);
       this.framesSinceDetect++;
-      const periodic = c.reanchorInterval > 0 && this.framesSinceDetect >= c.reanchorInterval;
-      const needHelp = !out.ok || (out.wantReanchor && this.framesSinceDetect >= 3);
+      // 주기적 미끄러짐 검사 (싸다, 광도만): 기준의 반복 이동량만큼 옮긴 H가 지금 H만큼 잘 맞으면
+      // 한 주기 미끄러졌을 수 있다 → 그때만 ORB 재검출로 확인. (예전의 주기적 ORB 재검출을 대신한다)
+      let suspect = false;
+      this.framesSinceSlipCheck++;
+      if (out.ok && out.H && c.reanchorInterval > 0 && this.framesSinceSlipCheck >= c.reanchorInterval) {
+        const t1 = now();
+        this.framesSinceSlipCheck = 0;
+        if (ref.repeatShifts.length > 0 && ref.distinctive) {
+          const v = ref.verify.evaluate(cur, out.H, c.blockGood, this.vres);
+          suspect = !this.beatsRepeats(out.H, cur, v);
+        }
+        tm.verify = (tm.verify ?? 0) + (now() - t1);
+      }
+      const periodic = c.periodicOrb && c.reanchorInterval > 0 && this.framesSinceDetect >= c.reanchorInterval;
+      // 추적은 되는데 약해서(인라이어 부족·정렬 실패) 돕는 재검출은, 연달아 실패하면 간격을 3→6→12→24프레임으로
+      // 늘린다 (심한 압축·블러에선 엄격한 재검출 검증도 계속 떨어져 CPU만 쓴다). 추적 실패·미끄러짐 의심은 즉시.
+      const helpGap = 3 << Math.min(3, this.helpFails);
+      const needHelp = !out.ok || suspect || (out.wantReanchor && this.framesSinceDetect >= helpGap);
       if ((needHelp || periodic) && this.canDetect()) {
         this.framesSinceDetect = 0;
+        const assisting = out.ok;
         // 추적이 살아 있으면 예측 위치 주변만 (미끄러짐은 한두 주기 안) → 절반 이하 비용
         const region = out.ok && out.H ? this.searchRegion(out.H, cur.width, cur.height) : null;
         const det = this.detectStep(cur, tm, region);
+        if (assisting) this.helpFails = det.ok ? 0 : this.helpFails + 1;
         if (det.ok && det.H) {
           // 둘 다 통과했는데 서로 다르면 더 잘 맞는 쪽 (재검출은 고유 특징·엄격 검증을 거쳤으므로 약간 우대)
           const adopt =
@@ -804,23 +1021,37 @@ export class PlanarTracker implements PlanarTrackerApi {
     this.prevPyr = cur;
     this.prevValid = true;
 
-    // 추적은 계속하되, 앵커(핀)가 화면 밖이면 '놓침'으로 알린다 (보이지 않는 핀을 표시 중이라 하지 않기).
+    // 추적은 계속하되, 앵커가 화면 밖이면 '놓침'으로 알린다 (보이지 않는 주석을 표시 중이라 하지 않기).
     // 내부 상태는 그대로라 다시 들어오면 재검출 없이 바로 표시된다.
+    // 이번 프레임 검증을 강하게 통과했으면 그 H를 hint로 (화면 밖 방향 화살표 전용).
     let state = this.state;
-    if (H && !this.anchorVisible(H, frame.width, frame.height)) {
-      state = "lost";
-      H = null;
+    let hint: Mat3 | null = null;
+    let reason: LostReason | undefined;
+    if (H) {
+      const vis = this.anchorVisibility(H, frame.width, frame.height);
+      if (vis !== "in") {
+        if (vis === "out" && out && out.hintOk) hint = H.slice();
+        state = "lost";
+        H = null;
+        reason = hint ? "offscreen" : "unverified";
+      }
+    } else {
+      // 반복 무늬라 재검출이 꺼진 기준을 놓쳤으면 다시 찾을 방법이 없다 → 새로 찍어야 한다
+      reason = this.canDetect() ? "unverified" : "untrackable";
     }
     tm.total = now() - t0;
-    return {
+    const res: TrackResult = {
       state,
       H: H ? H.slice() : null,
+      hint,
       confidence: H ? conf : 0,
       inliers: out ? out.inliers : 0,
       tracked: out ? out.tracked : 0,
       redetected: out ? out.redetected : false,
       timings: tm,
     };
+    if (reason) res.reason = reason;
+    return res;
   }
 
   // ───────────────────────── 내부: 기준 ─────────────────────────
@@ -850,17 +1081,43 @@ export class PlanarTracker implements PlanarTrackerApi {
     return this.fitInside({ x, y, width: w, height: h }, W, H);
   }
 
-  /** LK 점 풀 후보: r 안 0단계 FAST 코너 → Shi–Tomasi 점수 → 최소 간격 5px. sel에 점수순으로 */
-  private buildPool(lv0: GrayImage, r: Rect, raw: CornerList, sel: CornerList): number {
+  /**
+   * LK 점 풀 후보: r 안 0단계 FAST 코너 → Shi–Tomasi 점수 → 최소 간격 5px. sel에 점수순으로.
+   * cached(전체 화면 코너·점수)가 있으면 검출 대신 영역으로 거른다.
+   */
+  private buildPool(lv0: GrayImage, r: Rect, raw: CornerList, sel: CornerList, cached: CornerList | null = null): number {
     const c = this.config;
-    detectFast(lv0, Math.min(10, c.fastThreshold), c.lkWinRadius + 3, raw, {
-      x0: r.x,
-      y0: r.y,
-      x1: r.x + r.width,
-      y1: r.y + r.height,
-    });
-    scoreCorners(lv0, raw, "mineig", 3);
+    const x0 = Math.floor(r.x);
+    const y0 = Math.floor(r.y);
+    const x1 = Math.ceil(r.x + r.width);
+    const y1 = Math.ceil(r.y + r.height);
+    if (cached) {
+      raw.reserve(cached.n);
+      let n = 0;
+      for (let i = 0; i < cached.n; i++) {
+        const x = cached.x[i];
+        const y = cached.y[i];
+        if (x < x0 || y < y0 || x >= x1 || y >= y1) continue;
+        raw.x[n] = x;
+        raw.y[n] = y;
+        raw.score[n] = cached.score[i];
+        n++;
+      }
+      raw.n = n;
+    } else {
+      detectFast(lv0, Math.min(10, c.fastThreshold), c.lkWinRadius + 3, raw, { x0, y0, x1, y1 });
+      scoreCorners(lv0, raw, "mineig", 3);
+    }
     return minDistanceFilter(raw, sel, lv0.width, lv0.height, 5, c.maxTrackedPoints * 3, c.lkMinEig);
+  }
+
+  /** r ∪ (p ± h) 를 프레임으로 자른 것 */
+  private unionAround(r: Rect, p: Point, h: number, W: number, H: number): Rect {
+    const x0 = Math.min(r.x, p.x - h);
+    const y0 = Math.min(r.y, p.y - h);
+    const x1 = Math.max(r.x + r.width, p.x + h);
+    const y1 = Math.max(r.y + r.height, p.y + h);
+    return clampRect({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, W, H);
   }
 
   /** 크기를 유지한 채 프레임 안으로 밀어 넣는다 (프레임보다 크면 자름) */
@@ -880,14 +1137,23 @@ export class PlanarTracker implements PlanarTrackerApi {
     return this.fitInside({ x: cx - w / 2, y: cy - h / 2, width: w, height: h }, W, H);
   }
 
-  /** 앵커가 프레임 안(가장자리 반 픽셀 포함)에 보이는가 */
-  private anchorVisible(H: Mat3, W: number, Hh: number): boolean {
+  /**
+   * 앵커가 프레임에 보이는가: "in" = [−m, W−1+m] × [−m, H−1+m] 안 (m = offscreenMargin),
+   * "out" = 밖이지만 방향을 믿을 만함 (카메라 앞, 프레임 중심에서 대각선 × hintMaxDiag 이내),
+   * "far" = 카메라 뒤이거나 너무 멀어 방향도 믿기 어려움.
+   */
+  private anchorVisibility(H: Mat3, W: number, Hh: number): "in" | "out" | "far" {
     const a = this.ref!.anchor;
+    const c = this.config;
     const w = H[6] * a.x + H[7] * a.y + H[8];
-    if (!(w > 1e-9)) return false;
+    if (!(w > 1e-9)) return "far";
     const x = (H[0] * a.x + H[1] * a.y + H[2]) / w;
     const y = (H[3] * a.x + H[4] * a.y + H[5]) / w;
-    return x >= -0.5 && y >= -0.5 && x <= W - 0.5 && y <= Hh - 0.5;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return "far";
+    const m = c.offscreenMargin;
+    if (x >= -m && y >= -m && x <= W - 1 + m && y <= Hh - 1 + m) return "in";
+    const d = Math.hypot(x - (W - 1) / 2, y - (Hh - 1) / 2);
+    return d <= c.hintMaxDiag * Math.hypot(W, Hh) ? "out" : "far";
   }
 
   private canDetect(): boolean {
@@ -898,6 +1164,7 @@ export class PlanarTracker implements PlanarTrackerApi {
   // ───────────────────────── 내부: 상태 관리 ─────────────────────────
 
   private resetTracking(): void {
+    this.helpFails = 0;
     this.nPts = 0;
     if (this.inUse.length) this.inUse.fill(0);
     this.H = null;
@@ -996,6 +1263,7 @@ export class PlanarTracker implements PlanarTrackerApi {
       ncc: 0,
       fromDetect: false,
       wantReanchor: true,
+      hintOk: false,
     };
   }
 
@@ -1086,6 +1354,7 @@ export class PlanarTracker implements PlanarTrackerApi {
           hypotheses: hyps.length,
           verify: verify ? { ...verify } : undefined,
           inner: this.lastInner ? { ...this.lastInner } : undefined,
+          pin: this.lastPin ? { ...this.lastPin } : undefined,
         });
     };
     if (hyps.length === 0) {
@@ -1095,8 +1364,10 @@ export class PlanarTracker implements PlanarTrackerApi {
 
     // 3) 가설마다 기준 템플릿 직접 정렬 + 형상·시간·광도 검증 → 가장 잘 맞는 것
     let best: HypEval | null = null;
-    for (const Hh of hyps) {
-      const e = this.evalHypothesis(Hh, cur, pred, m, tm);
+    for (let hi = 0; hi < hyps.length; hi++) {
+      const Hh = hyps[hi];
+      const tight = hi === 0 && inl >= c.minInliers && this.inlierRms(Hh, m) <= c.alignFineRms;
+      const e = this.evalHypothesis(Hh, cur, pred, m, tm, tight);
       if (e && (!best || e.score > best.score)) best = e;
     }
     if (!best) {
@@ -1109,14 +1380,11 @@ export class PlanarTracker implements PlanarTrackerApi {
     const inl2 = countInliers(Hfin, this.cSx, this.cSy, this.cDx, this.cDy, m, c.ransacThreshold, this.cMask);
     const blocksOk = v.blocksVisible >= 1;
     this.lastInner = null;
+    this.lastPin = null;
     const inner = this.innerCheck(Hfin, cur);
-    const strong =
-      inner === 2 &&
-      inl2 >= c.minInliers &&
-      (aligned || !c.alignEnabled) &&
-      blocksOk &&
-      v.ncc >= c.nccTrack &&
-      v.fracGood >= c.fracTrack;
+    const wideStrong =
+      inl2 >= c.minInliers && (aligned || !c.alignEnabled) && blocksOk && v.ncc >= c.nccTrack && v.fracGood >= c.fracTrack;
+    const strong = inner === 2 && wideStrong;
     const weak = inner >= 1 && inl2 >= c.minWeakInliers && blocksOk && v.ncc >= c.nccWeak && v.fracGood >= c.fracWeak;
     if (!weak) {
       dbg("verify", inl2, v);
@@ -1170,7 +1438,20 @@ export class PlanarTracker implements PlanarTrackerApi {
       ncc: v.ncc,
       fromDetect: false,
       wantReanchor: inl2 < c.minInliers || !aligned,
+      hintOk: wideStrong && v.blocksVisible >= 2,
     };
+  }
+
+  /** cMask 인라이어의 재투영 RMS (px) */
+  private inlierRms(H: Mat3, m: number): number {
+    let s = 0;
+    let k = 0;
+    for (let j = 0; j < m; j++) {
+      if (!this.cMask[j]) continue;
+      s += reprojError2(H, this.cSx[j], this.cSy[j], this.cDx[j], this.cDy[j]);
+      k++;
+    }
+    return k > 0 ? Math.sqrt(s / k) : Infinity;
   }
 
   private confidence(v: VerifyResult, inliers: number): number {
@@ -1206,14 +1487,16 @@ export class PlanarTracker implements PlanarTrackerApi {
   }
 
   /** 추적 가설 평가: 정렬 → 형상 → 시간(점프) → 광도. 통과 못 하면 null */
-  private evalHypothesis(Hlk: Mat3, cur: Pyramid, pred: Mat3, m: number, tm: TrackTimings): HypEval | null {
+  private evalHypothesis(Hlk: Mat3, cur: Pyramid, pred: Mat3, m: number, tm: TrackTimings, tight = false): HypEval | null {
     const c = this.config;
     const ref = this.ref!;
     let t = now();
     let H = Hlk;
     let aligned = false;
     if (c.alignEnabled) {
-      const a = this.alignFrom(Hlk, cur, [1, 0]);
+      // LK 점들이 이미 촘촘히 맞으면(재투영 RMS 작음) 0단계 정렬만 — 안 되면 거친 단계부터 다시
+      let a = tight ? this.alignFrom(Hlk, cur, [0]) : null;
+      if (!a || maxCornerDistance(a, Hlk, ref.roi) > c.alignMaxShift) a = this.alignFrom(Hlk, cur, [1, 0]);
       if (a && maxCornerDistance(a, Hlk, ref.roi) <= c.alignMaxShift) {
         H = a;
         aligned = true;
@@ -1244,7 +1527,8 @@ export class PlanarTracker implements PlanarTrackerApi {
     const { templates, roi } = this.ref!;
     let H = H0;
     let done = 0;
-    for (const base of passes) {
+    for (let pi = 0; pi < passes.length; pi++) {
+      const base = passes[pi];
       const k = localScale(H, { x: roi.x + roi.width / 2, y: roi.y + roi.height / 2 }, 4);
       let e = Number.isFinite(k) && k > 0 ? Math.round(Math.log2(k)) : 0;
       if (e > 3) e = 3;
@@ -1255,7 +1539,7 @@ export class PlanarTracker implements PlanarTrackerApi {
       lc = Math.min(lc, cur.length - 1);
       const tpl = templates[lr];
       if (!tpl) continue;
-      const r = this.aligner.align(tpl, cur.levels[lc], lc, H, this.alignParams);
+      const r = this.aligner.align(tpl, cur.levels[lc], lc, H, pi < passes.length - 1 ? this.alignCoarse : this.alignParams);
       if (!r.ok) return null;
       H = r.H;
       done++;
@@ -1315,13 +1599,38 @@ export class PlanarTracker implements PlanarTrackerApi {
   // ───────────────────────── 내부: 검증·재검출 ─────────────────────────
 
   /**
-   * 요청 ROI(핀 주변) 검증: 0 = 어긋남, 1 = 약함(또는 확인 불가), 2 = 좋음.
-   * ROI를 넓히지 않았으면 항상 2 (넓은 검증이 곧 핀 주변 검증).
+   * 핀 주변 검증: 0 = 어긋남(표시 금지), 1 = 약함(또는 확인 불가), 2 = 좋음.
+   * ROI를 넓혔으면 요청 ROI 검증기(inner)로 블록 NCC를 직접 본다.
+   * 넓히지 않았으면 앵커 주변 작은 창(pinArea)의 국소 최대 검사 — 거부(0)만 하고 나머지는 2.
    */
-  private innerCheck(H: Mat3, cur: Pyramid): 0 | 1 | 2 {
+  private innerCheck(H: Mat3, cur: Pyramid, fresh = false): 0 | 1 | 2 {
     const ref = this.ref!;
     const c = this.config;
-    if (!ref.inner) return 2;
+    if (!ref.inner) {
+      // 넓히지 않은 ROI: 앵커 주변 작은 창이 "옆으로 조금 옮긴 H"에서 더 잘 맞으면 거부 (국소 최대 검사).
+      // 절대 NCC가 아니라 상대 비교라 압축·블러·손 가림엔 둔감하고, 앵커가 다른 면(시차)이라 수 px 어긋난 것엔 민감하다.
+      // 재검출(fresh)은 이전 자세와 이어지지 않은 새 주장이라 두 배 거리(시차가 큰 경우)까지 본다.
+      const pa = ref.pinArea;
+      if (!pa) return 2;
+      const shifts = fresh ? this.pinShiftsWide : this.pinShifts;
+      const ns = shifts.length >> 1;
+      if (this.paG.length < ns) this.paG = new Float64Array(ns);
+      if (this.paB.length < ns * pa.nBlocks) this.paB = new Float32Array(ns * pa.nBlocks);
+      pa.shiftScores(cur, H, shifts, this.paG, this.paB);
+      const g0 = this.paG[0];
+      if (g0 <= -2) return 2;
+      const q = this.paBlocks;
+      q.length = 0;
+      for (let b = 0; b < pa.nBlocks; b++) if (!Number.isNaN(this.paB[b])) q.push(this.paB[b]);
+      if (q.length < 3) return 2;
+      q.sort((a, b) => a - b);
+      const q25 = q[Math.floor(q.length * 0.25)];
+      let dg = -Infinity;
+      for (let i = 1; i < ns; i++) if (this.paG[i] > -2) dg = Math.max(dg, this.paG[i] - g0);
+      this.lastPin = { ncc: g0, gain: dg, q25 };
+      if (dg > c.pinAreaPeak || (q25 < c.pinAreaQ && dg > c.pinAreaPeakWeak)) return 0;
+      return 2;
+    }
     if (ref.innerBlind) return 1;
     const v = ref.inner.evaluate(cur, H, c.blockGood, emptyVerify());
     this.lastInner = v;
@@ -1431,9 +1740,9 @@ export class PlanarTracker implements PlanarTrackerApi {
       // 영역 넓이에 비례한 개수 (특징 밀도 유지, 최소 150)
       const frac = (region.width * region.height) / (cur.width * cur.height);
       const nF = Math.max(150, Math.round(c.orbFeatures * frac));
-      this.orb.extract(this.curScale, { ...this.orbParams, nFeatures: nF }, f, region);
+      this.orb.extract(this.curScale, { ...this.orbParams, nFeatures: nF }, f, region, true);
     } else {
-      this.orb.extract(this.curScale, this.orbParams, f);
+      this.orb.extract(this.curScale, this.orbParams, f, null, true);
     }
     tm.detect = (tm.detect ?? 0) + (now() - t);
 
@@ -1441,9 +1750,18 @@ export class PlanarTracker implements PlanarTrackerApi {
     const ml = this.matches;
     const nm = this.matcher.match(ref.feats.desc, ref.uniqueIdx, ref.nUnique, f.desc, f.n, this.matchParams, ml);
     tm.match = (tm.match ?? 0) + (now() - t);
+    this.lastPin = null;
     const dbg = (result: string, inliers: number, spread?: number, verify?: VerifyResult) => {
       if (this.onDebug)
-        this.onDebug({ kind: "detect", result, matches: nm, inliers, spread, verify: verify ? { ...verify } : undefined });
+        this.onDebug({
+          kind: "detect",
+          result,
+          matches: nm,
+          inliers,
+          spread,
+          verify: verify ? { ...verify } : undefined,
+          pin: this.lastPin ? { ...this.lastPin } : undefined,
+        });
     };
     if (nm < c.minDetectInliers) {
       dbg("matches", 0);
@@ -1477,11 +1795,12 @@ export class PlanarTracker implements PlanarTrackerApi {
       return out;
     }
 
-    // 정밀 정렬 (거친 단계부터)
+    // 정밀 정렬 (거친 단계부터). ORB 인라이어가 촘촘히 맞으면(RMS 작음) 2단계는 건너뛴다
     t = now();
     let Hfin: Mat3 | null = H1;
     if (c.alignEnabled) {
-      Hfin = this.alignFrom(H1, cur, [2, 1, 0]);
+      const tight = this.inlierRms(H1, nm) <= c.detectFineRms;
+      Hfin = this.alignFrom(H1, cur, tight ? [1, 0] : [2, 1, 0]);
       if (Hfin && maxCornerDistance(Hfin, H1, ref.roi) > Math.max(12, 3 * c.detectRansacThreshold)) Hfin = null;
     }
     tm.align = (tm.align ?? 0) + (now() - t);
@@ -1517,7 +1836,7 @@ export class PlanarTracker implements PlanarTrackerApi {
       return out;
     }
     // 넓힌 ROI면 핀 주변도 확실히 맞아야 (다른 평면의 배경만 맞은 경우 배제)
-    if (this.innerCheck(Hfin, cur) === 0) {
+    if (this.innerCheck(Hfin, cur, true) === 0) {
       tm.verify = (tm.verify ?? 0) + (now() - t);
       dbg("inner", inl, spread, v);
       return out;
@@ -1536,6 +1855,7 @@ export class PlanarTracker implements PlanarTrackerApi {
       ncc: v.ncc,
       fromDetect: true,
       wantReanchor: false,
+      hintOk: true,
     };
   }
 }

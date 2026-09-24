@@ -28,7 +28,7 @@ export function defaultJobs(): number {
 }
 
 /** 작업자 진입점: tsx CJS 등록 후 TS 모듈을 require (실행 환경이 tsx든 vitest든 같게) */
-function workerSource(): string {
+export function workerSource(): string {
   const req = createRequire(__filename);
   const api = req.resolve("tsx/cjs/api");
   const entry = path.join(__dirname, "render-worker.ts");
@@ -37,7 +37,7 @@ function workerSource(): string {
 
 /**
  * 캐시가 없는 시나리오의 프레임을 병렬로 렌더해 캐시에 쓴다. 이미 만든 Sequence를 넘기면 다시 만들지 않는다.
- * 시나리오는 SCENARIOS의 것 그대로이거나 duration만 바꾼 사본이어야 한다 (작업자는 id로 다시 찾는다).
+ * 시나리오는 목록(catalog)의 것 그대로이거나 duration만 바꾼 사본이어야 한다 (작업자는 id로 다시 찾는다).
  * jobs ≤ 1이면 이 프로세스에서 차례로 렌더.
  * 반환: 새로 렌더한 시나리오 수
  */

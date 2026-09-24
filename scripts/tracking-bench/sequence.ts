@@ -22,11 +22,18 @@ import {
   TARGET_AFFINE,
   workDims,
 } from "./camera";
-import { fitLongSide, jpegRoundTripGray, jpegSimGray, scaleBy, toWorking } from "./imageops";
-import { type CameraFrame, CameraRenderer, type HandSetup, type PhotoParams, type SceneSetup } from "./render";
+import { fitLongSide, jpegRoundTripGray, jpegSimGray, limitedToFull, scaleBy, toWorking, toWorkingLimited } from "./imageops";
+import { IspPipeline, cameraIndex } from "./isp";
+import { distort, lensFor, undistort } from "./lens";
+import { type AreaLight, type CameraFrame, CameraRenderer, type HandSetup, type PhotoParams, type SceneSetup } from "./render";
+import { type ReliefHit, buildReliefMap, heightAt, traceRelief } from "./relief";
+import { BASE_RELIEF } from "./relief";
 import { hashString, smootherstep } from "./rng";
 import type { Scenario, SceneCtx, Side } from "./scenarios";
 import { TEXTURES, type TextureMeta, loadTexture, readTextureMeta } from "./textures";
+import { fitHomography } from "./dlt";
+import { type CodecCapture, codecKey, codecRange, loadCodecCapture } from "./codec-cache";
+import { BASE_SOURCES, REALISM_SOURCES, probeRealism, probeScene, sourceHash } from "./codehash";
 
 export const CAMERA_FPS = 30;
 export const DEFAULT_TRANSPORT = { quality: 75, scale: 1 };
@@ -102,6 +109,14 @@ export interface Sequence {
   occludedAt(t: number, p: Point): boolean;
   /** 엔지니어 쪽 영상 압축 품질 (압축 없으면 100) */
   qualityAt(t: number): number;
+  /** 핀의 3D 높이 (평면 단위, 부조 윗면이면 +) — 실감 시나리오 */
+  pinZ: number;
+  /** 실제 코덱 캡처 (실감 codec 시나리오, 캐시에 있을 때) */
+  codec: CodecCapture | null;
+  /** 카메라 프레임 i(30fps)의 ISP 출력까지 (코덱 캡처 입력용, 스트림 해상도) */
+  renderCameraIndex(i: number, color: boolean): CameraFrame;
+  /** 코덱 캡처 키 (codec 시나리오만, 아니면 "") */
+  codecKey: string;
 }
 
 const metaCache = new Map<string, TextureMeta>();
@@ -218,12 +233,65 @@ export function buildScene(sc: Scenario, ctx: SceneCtx, color: boolean): SceneSe
   const lp = sc.glossLightMm ?? [100, -500, -1500];
   const ld = [0.25, 0.45, 1];
   const ln = Math.hypot(ld[0], ld[1], ld[2]);
+  const real = sc.realism;
+  let realStreamAt = streamAt;
+  let realFocus = focusSigma;
+  if (real?.af && sc.autofocus !== false) {
+    // 초점 = 거리 역수를 AF_LAG로 늦게 따라감 + 헌팅. 흐림 σ ∝ |1/d − 1/d_f|, 호흡: 화각 배율 ∝ (1 + F/d_f)
+    const hunts = real.af.hunts ?? [];
+    const invFocus = (t: number) => {
+      let num = 0;
+      let den = 0;
+      for (let i = 0; i < 16; i++) {
+        const lag = ((i + 0.5) / 16) * 4 * AF_LAG;
+        const w = Math.exp(-lag / AF_LAG);
+        num += w * invDist(t - lag);
+        den += w;
+      }
+      let f = num / den;
+      for (const h of hunts) {
+        const u = (t - h.t) / h.dur;
+        if (u > 0 && u < 1) f += (h.diopters / 1000) * Math.sin(2 * Math.PI * u) * Math.sin(Math.PI * u);
+      }
+      return Math.max(0, f);
+    };
+    realFocus = (t: number) => {
+      const K = streamAt(t);
+      return DEFOCUS_PX_PER_DIOPTER_MM * (Math.max(K.width, K.height) / 640) * Math.abs(invDist(t) - invFocus(t));
+    };
+    if (real.af.breathing) {
+      const ref = 1 + LENS_FOCAL_MM / BREATHING_REF_MM;
+      realStreamAt = (t: number) => {
+        const K = streamAt(t);
+        return { ...K, f: (K.f * (1 + LENS_FOCAL_MM * invFocus(t))) / ref };
+      };
+    }
+  }
+  let area: AreaLight | undefined;
+  if (real?.area) {
+    const a = real.area;
+    area = {
+      x: def.width / 2 + a.x * upm,
+      y: def.height / 2 + a.y * upm,
+      dist: a.dist * upm,
+      w: a.w * upm,
+      h: a.h * upm,
+      angle: a.angle ?? 0,
+      strength: a.strength,
+      blur: Math.max(1, a.blurMm * upm),
+    };
+  }
+  const reliefBoxes = real?.relief ? (ctx.meta.relief ?? BASE_RELIEF[sc.target as keyof typeof BASE_RELIEF]?.() ?? []) : [];
+  const relief =
+    reliefBoxes.length > 0
+      ? buildReliefMap(sc.target, reliefBoxes, def.width, def.height, upm, typeof real?.relief === "number" ? real.relief : 1)
+      : undefined;
   return {
     target,
     bg,
     bgPlane: { z: (def.bgDepthMm ?? 0) * upm, affine: [sb, 0, ox, 0, sb, oy] },
     poseAt,
-    streamAt,
+    streamAt: realStreamAt,
     exposureMs: sc.exposureMs ?? 12,
     readoutMs: sc.readoutMs ?? 16,
     photoAt,
@@ -241,8 +309,12 @@ export function buildScene(sc: Scenario, ctx: SceneCtx, color: boolean): SceneSe
     shadow: sc.shadow?.(ctx),
     lightDir: [ld[0] / ln, ld[1] / ln, ld[2] / ln],
     seed,
-    focusSigma,
+    focusSigma: realFocus,
     flicker: sc.flicker,
+    lens: real?.lens,
+    relief,
+    area,
+    ispTone: real?.isp?.tone,
   };
 }
 
@@ -250,19 +322,53 @@ export function buildScene(sc: Scenario, ctx: SceneCtx, color: boolean): SceneSe
  * 롤링 셔터를 반영한 평면 점의 스트림 좌표(가장자리 규약): 행 y는 t + (y/H - 0.5)·판독시간에 찍힌다.
  * 점이 찍힌 행과 그 행의 시각이 서로를 결정하므로 고정점 반복 (보통 2~3번이면 수렴).
  */
-export function projectRS(scene: SceneSetup, t: number, p: Point): Point | null {
+export function projectRS(scene: SceneSetup, t: number, p: Point, z = 0): Point | null {
   const K = scene.streamAt(t);
   const ro = scene.readoutMs / 1000;
+  const L = scene.lens ? lensFor(scene.lens, K.width, K.height) : null;
   let tau = t;
   let q: Point | null = null;
-  for (let i = 0; i < 5; i++) {
-    q = project(planeToImage(K, scene.poseAt(tau), 0, TARGET_AFFINE), p.x, p.y);
+  for (let i = 0; i < (L ? 8 : 5); i++) {
+    q = project(planeToImage(K, scene.poseAt(tau), z, TARGET_AFFINE), p.x, p.y);
+    if (q && L) q = distort(L, q.x, q.y);
     if (!q || ro === 0) return q;
     const next = t + (q.y / K.height - 0.5) * ro;
     if (Math.abs(next - tau) < 1e-7) break;
     tau = next;
   }
   return q;
+}
+
+/**
+ * 센서 점(가장자리 규약) → 평면 Z=z 위의 점. 롤링 셔터: 센서 행이 곧 시각이라 반복 없이 정확하다.
+ */
+export function unprojectRS(scene: SceneSetup, t: number, s: Point, z = 0): Point | null {
+  const K = scene.streamAt(t);
+  const tau = t + (s.y / K.height - 0.5) * (scene.readoutMs / 1000);
+  const q = scene.lens ? undistort(lensFor(scene.lens, K.width, K.height), s.x, s.y) : s;
+  const Hm = planeToImage(K, scene.poseAt(tau), z, TARGET_AFFINE);
+  const inv = invertOrThrow(Hm);
+  return project(inv, q.x, q.y);
+}
+
+/**
+ * 평면 점 (x, y, 높이 z=−h)이 부조에 가려지는지 (시각 t, 센서 점 s에서 본 첫 표면이 그 점이 아니면 가려짐).
+ */
+export function hiddenByRelief(scene: SceneSetup, t: number, s: Point, p: Point, z: number): boolean {
+  const R = scene.relief;
+  if (!R) return false;
+  const K = scene.streamAt(t);
+  const tau = t + (s.y / K.height - 0.5) * (scene.readoutMs / 1000);
+  const q = scene.lens ? undistort(lensFor(scene.lens, K.width, K.height), s.x, s.y) : s;
+  const pose = scene.poseAt(tau);
+  const d = [(q.x - K.cx) / K.f, (q.y - K.cy) / K.f, 1];
+  const Rm = pose.R; // 월드→카메라, 광선 = Rᵀ·d
+  const dx = Rm[0] * d[0] + Rm[3] * d[1] + Rm[6] * d[2];
+  const dy = Rm[1] * d[0] + Rm[4] * d[1] + Rm[7] * d[2];
+  const dz = Rm[2] * d[0] + Rm[5] * d[1] + Rm[8] * d[2];
+  const hit: ReliefHit = { u: 0, v: 0, z: 0, wall: false };
+  if (!traceRelief(R, pose.C[0], pose.C[1], pose.C[2], dx, dy, dz, hit)) return false;
+  return hit.wall || Math.abs(hit.z - z) > 0.3 * Math.max(1, R.hMax / 6) || Math.hypot(hit.u - p.x, hit.v - p.y) > 3;
 }
 
 /** 처리 프레임 시각: 처리 클록(fps)이 돌 때마다 가장 최근 카메라 프레임(30fps)을 집는다 */
@@ -297,6 +403,10 @@ export function autoExposureGain(meanLinear: number): number {
 export const AF_LAG = 0.45;
 /** 초점 흐림 σ(640px 스트림 기준 px) / |1/d − 1/d_f| (1/mm) — 폰 메인 카메라(f≈4.2mm, f/1.8, 화소 ~10µm@640) 근사 */
 export const DEFOCUS_PX_PER_DIOPTER_MM = 386;
+/** 초점 호흡: 상 거리 v ≈ f·(1 + f/d_f) → 화각 배율 (1 + F/d_f). 폰 메인 카메라 실제 초점거리(mm) */
+export const LENS_FOCAL_MM = 4.2;
+/** 호흡 배율 1이 되는 초점 거리 (mm) — 기본 화각(65°)은 이 거리에 초점이 맞았을 때 */
+export const BREATHING_REF_MM = 250;
 
 /**
  * 엔지니어 쪽 영상 압축 품질: 프레임 사이 움직임이 크면 같은 비트레이트에서 화질이 떨어진다 (VP8/H.264 흉내).
@@ -312,7 +422,8 @@ export function buildSequence(sc: Scenario): Sequence {
   const blurMode = pipelineOptions.exactBlur ? "subframes" : "fast";
   const renderer = new CameraRenderer(scene, false, blurMode);
   let colorRenderer: CameraRenderer | null = null;
-  const { refTime, times, fps } = processTimes(sc);
+  const real = sc.realism;
+  const nominal = processTimes(sc);
   // 동적 자동노출: 1/30초마다 측광 → 로그 이득을 시상수 AE_TAU로 따라감 (시작은 수렴 상태)
   {
     const dt = 1 / CAMERA_FPS;
@@ -333,9 +444,31 @@ export function buildSequence(sc: Scenario): Sequence {
       return gains[i] + (gains[i + 1] - gains[i]) * (f - i);
     };
   }
-  const transport = sc.transport === undefined ? DEFAULT_TRANSPORT : sc.transport;
+  // 실제 코덱: 원본(ISP까지) 프레임 지문 → 캡처 키 → 캐시에 있으면 그 디코드 결과를 쓴다
+  let codecKeyStr = "";
+  let codec: CodecCapture | null = null;
+  if (real?.codec) {
+    codecKeyStr = codecKey(codecSourceFingerprint(sc, scene), real.codec);
+    codec = loadCodecCapture(sc.id, codecKeyStr);
+  }
+  const transport = real?.codec ? null : sc.transport === undefined ? DEFAULT_TRANSPORT : sc.transport;
   const side = sc.side;
+  // 엔지니어 쪽 코덱: 처리 프레임 = 실제로 디코드되어 화면에 나온 프레임, 기준 = 탭 순간 화면의 (마지막으로 받은) 프레임
+  let refTime = nominal.refTime;
+  let times = nominal.times;
+  const fps = nominal.fps;
+  if (codec) {
+    const refIdx = Math.round(refTime * CAMERA_FPS);
+    const got = codec.indices;
+    const r = [...got].reverse().find((i) => i <= refIdx);
+    if (r !== undefined) refTime = r / CAMERA_FPS;
+    if (side === "engineer") times = got.filter((i) => i > r! && i / CAMERA_FPS <= sc.duration + 1e-9).map((i) => i / CAMERA_FPS);
+    else times = processTimes({ ...sc, refTime }).times;
+  }
   const pinPlane = ctx.pin;
+  // 부조: 핀은 그 자리 윗면(또는 바닥)에 있다
+  const pinZ = scene.relief ? -heightAt(scene.relief, pinPlane.x, pinPlane.y) : 0;
+  const lensOn = !!scene.lens;
 
   const planeToStream = (t: number) => planeToImage(scene.streamAt(t), scene.poseAt(t), 0, TARGET_AFFINE);
 
@@ -365,8 +498,8 @@ export function buildSequence(sc: Scenario): Sequence {
   const engineerView = (gray: Uint8Array, w: number, h: number, t: number) => {
     if (!transport) return { data: gray, width: w, height: h };
     const s = scaleBy(gray, w, h, transport.scale ?? 1);
-    const codec = pipelineOptions.exactJpeg ? jpegRoundTripGray : jpegSimGray;
-    return { data: codec(s.data, s.width, s.height, qualityAt(t)), width: s.width, height: s.height };
+    const codecFn = pipelineOptions.exactJpeg ? jpegRoundTripGray : jpegSimGray;
+    return { data: codecFn(s.data, s.width, s.height, qualityAt(t)), width: s.width, height: s.height };
   };
   /** 영상 크기 사슬만 계산 (렌더 없이 GT용) */
   const engineerDims = (w: number, h: number): [number, number] => {
@@ -389,32 +522,76 @@ export function buildSequence(sc: Scenario): Sequence {
     return { M: mul3(streamToWork(K.width, K.height, ww, wh), planeToStream(t)), w: ww, h: wh };
   };
 
-  const pinStream = (t: number): Point | null => projectRS(scene, t, pinPlane);
+  const pinStream = (t: number): Point | null => projectRS(scene, t, pinPlane, pinZ);
   const occludedAt = (t: number, p: Point): boolean => {
     const hand = scene.hand;
     if (!hand) return false;
     const hp = hand.at(t);
     if (!hp) return false;
-    const Hh = planeToImage(scene.streamAt(t), scene.poseAt(t), -hand.heightUnits, handAffine(hp, hand.unitsPerMm));
+    const K = scene.streamAt(t);
+    const q = lensOn ? undistort(lensFor(scene.lens!, K.width, K.height), p.x, p.y) : p;
+    const Hh = planeToImage(K, scene.poseAt(t), -hand.heightUnits, handAffine(hp, hand.unitsPerMm));
     const inv = invertOrThrow(Hh);
-    const q = project(inv, p.x, p.y);
-    return !!q && handSdf(q.x, q.y) < 0;
+    const r = project(inv, q.x, q.y);
+    return !!r && handSdf(r.x, r.y) < 0;
   };
   const streamToWorkPt = (t: number, isRef: boolean, p: Point): Point => {
     const K = scene.streamAt(t);
     const [ww, wh] = workDimsAt(t, isRef);
     return { x: (p.x * ww) / K.width - 0.5, y: (p.y * wh) / K.height - 0.5 };
   };
+  const workToStreamPt = (t: number, isRef: boolean, p: Point): Point => {
+    const K = scene.streamAt(t);
+    const [ww, wh] = workDimsAt(t, isRef);
+    return { x: ((p.x + 0.5) * K.width) / ww, y: ((p.y + 0.5) * K.height) / wh };
+  };
+
+  // ISP (TNR·샤프닝): 카메라 프레임 번호 단위. 없으면 렌더 그대로
+  const ispSpec = real?.isp && (real.isp.tnr || real.isp.sharpen) ? real.isp : null;
+  const isp = ispSpec ? new IspPipeline(ispSpec, (i) => renderer.render(i / CAMERA_FPS)) : null;
+  let colorIsp: IspPipeline | null = null;
+  const getColorRenderer = (): CameraRenderer => {
+    if (!colorRenderer) {
+      const cs = buildScene(sc, ctx, true);
+      cs.ae = scene.ae;
+      colorRenderer = new CameraRenderer(cs, true, blurMode);
+    }
+    return colorRenderer;
+  };
+  const cameraGray = (t: number): CameraFrame => (isp ? isp.frame(cameraIndex(t, CAMERA_FPS)) : renderer.render(t));
+  const renderCameraIndex = (i: number, color: boolean): CameraFrame => {
+    if (!color) return isp ? isp.frame(i) : renderer.render(i / CAMERA_FPS);
+    const cr = getColorRenderer();
+    if (!ispSpec) return cr.render(i / CAMERA_FPS);
+    if (!colorIsp) colorIsp = new IspPipeline(ispSpec, (j) => cr.render(j / CAMERA_FPS));
+    return colorIsp.frame(i);
+  };
+  const codecFrame = (t: number): GrayImage => {
+    const i = Math.round(t * CAMERA_FPS);
+    const f = codec?.frame(i);
+    if (!f) throw new Error(`${sc.id}: 코덱 캡처에 프레임 ${i}가 없습니다 (npm run bench:tracking -- --scenario=${sc.id}로 캡처)`);
+    return f;
+  };
 
   // 기준 이미지 — 처음 쓸 때 렌더 (캐시 확인·기준선 추적기는 필요 없음)
   const refP = planeToWorkAt(refTime, true);
   let refImg: GrayImage | null = null;
   const renderRef = (): GrayImage => {
-    const refCam = renderer.render(refTime);
-    const ev = engineerView(refCam.planes[0], refCam.width, refCam.height, refTime);
+    let ev: { data: Uint8Array; width: number; height: number };
+    // 코덱 캡처는 디코더 Y 평면(16~235). 엔지니어 추적은 런타임처럼 리샘플과 범위 변환을 한 번에,
+    // 고객에게 보내는 기준 이미지는 캔버스(YUV→RGB, 전체 범위)에서 만들어지므로 먼저 전체 범위로.
+    let limited = false;
+    if (real?.codec) {
+      const f = codecFrame(refTime);
+      limited = side === "engineer";
+      ev = { data: limited ? (f.data as Uint8Array) : limitedToFull(f.data as Uint8Array), width: f.width, height: f.height };
+    } else {
+      const refCam = cameraGray(refTime);
+      ev = engineerView(refCam.planes[0], refCam.width, refCam.height, refTime);
+    }
     let img: GrayImage;
     if (side === "engineer") {
-      img = toWorking(ev.data, ev.width, ev.height);
+      img = limited ? toWorkingLimited(ev.data, ev.width, ev.height) : toWorking(ev.data, ev.width, ev.height);
     } else {
       const f = fitLongSide(ev.data, ev.width, ev.height, REF_JPEG.maxLong);
       const j = jpegRoundTripGray(f.data, f.width, f.height, REF_JPEG.quality);
@@ -434,11 +611,46 @@ export function buildSequence(sc: Scenario): Sequence {
   const roi = clampRect({ x: pinRef.x - side2 / 2, y: pinRef.y - side2 / 2, width: side2, height: side2 }, refP.w, refP.h);
   const refInv = invertOrThrow(refP.M);
 
-  // 프레임별 GT
+  // 렌즈 왜곡이 있으면 ref→프레임이 호모그래피가 아니다: ROI 격자(대상 평면 Z=0)를 정확한 모델로 옮겨
+  // 가장 잘 맞는 H를 정답 H로 (핀은 따로 정확히). 롤링 셔터도 점마다 정확히.
   const G = 7;
+  const GF = 9;
+  let roiPlane: (Point | null)[] | null = null;
+  let fitPlane: { ref: Point; plane: Point }[] | null = null;
+  if (lensOn) {
+    roiPlane = [];
+    for (let j = 0; j < G; j++) {
+      for (let i = 0; i < G; i++) {
+        const w = { x: roi.x + ((i + 0.5) / G) * roi.width, y: roi.y + ((j + 0.5) / G) * roi.height };
+        roiPlane.push(unprojectRS(scene, refTime, workToStreamPt(refTime, true, w), 0));
+      }
+    }
+    fitPlane = [];
+    for (let j = 0; j < GF; j++) {
+      for (let i = 0; i < GF; i++) {
+        const w = { x: roi.x + (i / (GF - 1)) * roi.width, y: roi.y + (j / (GF - 1)) * roi.height };
+        const pl = unprojectRS(scene, refTime, workToStreamPt(refTime, true, w), 0);
+        if (pl) fitPlane.push({ ref: w, plane: pl });
+      }
+    }
+  }
+
+  // 프레임별 GT
   const gt: FrameGT[] = times.map((t, k) => {
     const P = planeToWorkAt(t, false);
-    const H = mul3(P.M, refInv);
+    let H = mul3(P.M, refInv);
+    if (fitPlane) {
+      const src: Point[] = [];
+      const dst: Point[] = [];
+      for (const f of fitPlane) {
+        const s = projectRS(scene, t, f.plane, 0);
+        if (!s) continue;
+        src.push(f.ref);
+        dst.push(streamToWorkPt(t, false, s));
+      }
+      const Hf = src.length >= 8 ? fitHomography(src, dst) : null;
+      if (Hf) H = Hf;
+    }
     const ps = pinStream(t);
     const pin = ps ? streamToWorkPt(t, false, ps) : null;
     let inFrame = false;
@@ -449,13 +661,21 @@ export function buildSequence(sc: Scenario): Sequence {
       offscreenBy = Math.hypot(dx, dy);
       inFrame = offscreenBy === 0;
     }
-    const occluded = !!ps && inFrame && occludedAt(t, ps);
+    const occluded =
+      !!ps && inFrame && (occludedAt(t, ps) || (!!scene.relief && hiddenByRelief(scene, t, ps, pinPlane, pinZ)));
     // ROI 가시 비율
     let vis = 0;
     const K = scene.streamAt(t);
     for (let j = 0; j < G; j++) {
       for (let i = 0; i < G; i++) {
-        const q = project(H, roi.x + ((i + 0.5) / G) * roi.width, roi.y + ((j + 0.5) / G) * roi.height);
+        let q: Point | null;
+        if (roiPlane) {
+          const pl = roiPlane[j * G + i];
+          const s = pl ? projectRS(scene, t, pl, 0) : null;
+          q = s ? streamToWorkPt(t, false, s) : null;
+        } else {
+          q = project(H, roi.x + ((i + 0.5) / G) * roi.width, roi.y + ((j + 0.5) / G) * roi.height);
+        }
         if (!q || q.x < -0.5 || q.y < -0.5 || q.x > P.w - 0.5 || q.y > P.h - 0.5) continue;
         if (scene.hand) {
           const s = { x: ((q.x + 0.5) * K.width) / P.w, y: ((q.y + 0.5) * K.height) / P.h };
@@ -494,39 +714,68 @@ export function buildSequence(sc: Scenario): Sequence {
     roi,
     pinRef,
     pinPlane,
+    pinZ,
     initialH: side === "engineer" ? [1, 0, 0, 0, 1, 0, 0, 0, 1] : undefined,
     refPlaneToWork: refP.M,
     gt,
     ctx,
     scene,
+    codec,
+    codecKey: codecKeyStr,
     renderFrame(k: number): GrayImage {
       const t = times[k];
-      const cam = renderer.render(t);
-      const g = cam.planes[0];
       let img: GrayImage;
-      if (side === "engineer") {
-        const ev = engineerView(g, cam.width, cam.height, t);
-        img = toWorking(ev.data, ev.width, ev.height);
+      if (side === "engineer" && real?.codec) {
+        const f = codecFrame(t);
+        img = toWorkingLimited(f.data as Uint8Array, f.width, f.height);
       } else {
-        img = toWorking(g, cam.width, cam.height);
+        const cam = cameraGray(t);
+        const g = cam.planes[0];
+        if (side === "engineer") {
+          const ev = engineerView(g, cam.width, cam.height, t);
+          img = toWorking(ev.data, ev.width, ev.height);
+        } else {
+          img = toWorking(g, cam.width, cam.height);
+        }
       }
       const want = gt[k];
       if (img.width !== want.width || img.height !== want.height) throw new Error(`${sc.id}: frame dims mismatch`);
       return img;
     },
     renderCamera(t: number, color = false): CameraFrame {
+      if (real) return renderCameraIndex(cameraIndex(t, CAMERA_FPS), color);
       if (!color) return renderer.render(t);
-      if (!colorRenderer) {
-        const cs = buildScene(sc, ctx, true);
-        cs.ae = scene.ae;
-        colorRenderer = new CameraRenderer(cs, true, blurMode);
-      }
-      return colorRenderer.render(t);
+      return getColorRenderer().render(t);
     },
+    renderCameraIndex,
     streamAt: scene.streamAt,
     planeToStream,
     pinStream,
     occludedAt,
     qualityAt,
   };
+}
+
+/** 코덱 캡처 원본(엔지니어에게 가는 고객 카메라 영상, ISP 포함)의 지문 — 앞 구간부터 끝까지 30fps */
+function codecSourceFingerprint(sc: Scenario, scene: SceneSetup): string {
+  const parts: (string | number)[] = [
+    sourceHash([...BASE_SOURCES, ...REALISM_SOURCES]),
+    sc.id,
+    sc.target,
+    sc.pin,
+    JSON.stringify({ ...sc.realism, codec: undefined }),
+    scene.exposureMs,
+    scene.readoutMs,
+    JSON.stringify(scene.noise),
+    scene.seed,
+    JSON.stringify(scene.flicker ?? null),
+    readTextureMeta(sc.target)?.hash ?? "?",
+    readTextureMeta(sc.background ?? TEXTURES[sc.target].background ?? "wall")?.hash ?? "?",
+  ];
+  const [i0, i1] = codecRange(sc, CAMERA_FPS);
+  for (let i = i0; i <= i1; i++) {
+    probeScene(scene, i / CAMERA_FPS, parts, 100);
+    probeRealism(scene, i / CAMERA_FPS, parts);
+  }
+  return hashString(parts.join(",")).toString(16).padStart(8, "0");
 }

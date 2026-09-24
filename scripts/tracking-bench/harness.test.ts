@@ -5,9 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { runSequence } from "./harness";
-import { SCENARIOS } from "./scenarios";
+import { allScenarios, selectScenarios } from "./catalog";
+import { SCENARIOS, suiteOf } from "./scenarios";
 import { buildSequence } from "./sequence";
-import { ensureTextures } from "./textures";
+import { HOLDOUT_TARGET_IDS, ensureTextures } from "./textures";
 import { getTracker } from "./trackers";
 import { rgbaToGray } from "../../src/lib/tracking/cv/color";
 import { decodeMarker, exportY4m, markerBits } from "./y4m";
@@ -115,12 +116,20 @@ describe("baseline trackers validate the metrics", () => {
         if (sc.category === "reentry") {
           expect(o.reentries.length, sc.id).toBeGreaterThanOrEqual(1);
           reentries += o.reentries.length;
+          expect(o.hint.offscreenFrames, sc.id).toBeGreaterThan(0);
         }
+        // 화면 밖이면 oracle은 정답 hint → 제공률 100%, 방향 오차 0, 오안내 0
+        if (o.hint.offscreenFrames) {
+          expect(o.hint.available, sc.id).toBe(1);
+          expect(o.hint.angle.max ?? 0, sc.id).toBeLessThan(1e-6);
+        }
+        expect(o.hint.falseOffscreenFrames, sc.id).toBe(0);
         expect(o.checks.every((c) => c.pass !== false), sc.id).toBe(true);
 
         const n = runSequence(seq, nul, { blankFrames: true }).metrics;
         expect(n.tracked, sc.id).toBe(0);
         expect(n.wrong, sc.id).toBe(0);
+        expect(n.hint.hintFrames, sc.id).toBe(0);
 
         const s = runSequence(seq, shifted, { blankFrames: true });
         const shown = s.records.filter((r) => r.displayed).length;
@@ -130,6 +139,63 @@ describe("baseline trackers validate the metrics", () => {
       expect(reentries).toBeGreaterThanOrEqual(6);
     },
     120_000,
+  );
+});
+
+describe("realism & holdout suites", () => {
+  it("suites: base unchanged, realism variants point at base scenarios, ≥12 holdout scenarios excluded by default", () => {
+    const all = allScenarios();
+    const real = all.filter((s) => suiteOf(s) === "realism");
+    const hold = all.filter((s) => suiteOf(s) === "holdout");
+    expect(all.filter((s) => suiteOf(s) === "base")).toHaveLength(SCENARIOS.length);
+    expect(real.length).toBeGreaterThanOrEqual(12);
+    for (const r of real) {
+      expect(SCENARIOS.some((b) => b.id === r.variantOf), r.id).toBe(true);
+      expect(r.realism, r.id).toBeDefined();
+    }
+    expect(real.some((s) => s.realism?.codec && s.side === "engineer")).toBe(true);
+    expect(hold.length).toBeGreaterThanOrEqual(12);
+    expect(new Set(hold.map((s) => s.seed)).size).toBe(hold.length);
+    for (const h of hold) {
+      expect(h.holdout, h.id).toBe(true);
+      expect(h.realism?.lens && h.realism.relief && h.realism.isp, h.id).toBeTruthy();
+    }
+    expect(hold.some((s) => (HOLDOUT_TARGET_IDS as string[]).includes(s.target))).toBe(true);
+    // 기본 실행(base+realism)·필터에 홀드아웃이 섞이지 않는다
+    expect(selectScenarios(undefined).some((s) => s.holdout)).toBe(false);
+    expect(selectScenarios("acquire").some((s) => s.holdout)).toBe(false);
+    expect(selectScenarios(undefined, ["holdout"])).toHaveLength(hold.length);
+  });
+
+  it(
+    "GT sanity + oracle/null baselines on every realism/holdout scenario (blank frames)",
+    async () => {
+      await ensureTextures(HOLDOUT_TARGET_IDS);
+      const oracle = await getTracker("oracle");
+      const nul = await getTracker("null");
+      for (const sc of allScenarios().filter((s) => suiteOf(s) !== "base")) {
+        const seq = buildSequence(sc);
+        expect(seq.gt.every((g) => g.pin !== null), `${sc.id}: pin behind camera`).toBe(true);
+        const nominal = 0.5 * Math.min(seq.roi.width + 1, seq.roi.height + 1);
+        expect(seq.roi.width * seq.roi.height, sc.id).toBeGreaterThan(0.5 * nominal * nominal);
+        if (["jitter", "motion", "repetitive", "lowtex", "drift", "acquire"].includes(sc.category)) {
+          expect(seq.gt.filter((g) => g.visible).length / seq.gt.length, `${sc.id} visibility`).toBe(1);
+        }
+        if (sc.side === "engineer") {
+          const g = seq.gt[0];
+          expect(Math.hypot(g.pin!.x - seq.pinRef.x, g.pin!.y - seq.pinRef.y), sc.id).toBeLessThan(8);
+        }
+        const o = runSequence(seq, oracle, { blankFrames: true }).metrics;
+        expect(o.tracked, sc.id).toBe(1);
+        expect(o.wrong, sc.id).toBe(0);
+        expect(o.suite, sc.id).toBe(suiteOf(sc));
+        if (o.hint.offscreenFrames) expect(o.hint.angle.max ?? 0, sc.id).toBeLessThan(1e-6);
+        if (sc.category === "reentry") expect(o.reentries.length, sc.id).toBeGreaterThanOrEqual(1);
+        const n = runSequence(seq, nul, { blankFrames: true }).metrics;
+        expect(n.wrong, sc.id).toBe(0);
+      }
+    },
+    180_000,
   );
 });
 

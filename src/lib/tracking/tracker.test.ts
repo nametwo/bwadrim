@@ -237,12 +237,100 @@ describe("PlanarTracker", () => {
         if (r.state === "lost") lostWhileOut++;
         // 내부적으로는 계속 추적 중
         expect(tr.getState() === "tracking" || tr.getState() === "weak").toBe(true);
+        // ROI 대부분이 화면 밖이라 인라이어가 적다(내부 weak) → 방향 hint를 믿을 수 없으니 내지 않는다
+        if (tr.getState() === "weak") {
+          expect(r.hint).toBeNull();
+          expect(r.reason).toBe("unverified");
+        } else {
+          expect(r.reason).toBe("offscreen");
+          expect(r.hint).not.toBeNull();
+        }
       } else {
         expect(shown(r)).toBe(true);
         expect(pinError(r, s4, 0, t, pin)).toBeLessThan(2);
       }
     }
     expect(lostWhileOut).toBeGreaterThan(3);
+  });
+
+  it("anchor near the ROI edge leaves the frame → lost/offscreen with a hint that points at the pin", () => {
+    // 앵커(주석 기준점)가 ROI 오른쪽 끝 → 화면 밖으로 나가도 ROI 대부분은 보여 내부 추적이 강하다
+    const anchor = { x: 205, y: 120 };
+    const shift = (t: number) => (t < 4 ? 0 : t < 12 ? (t - 3) * 18 : t < 18 ? 144 : 144 - (t - 17) * 18);
+    const s8 = makeSeq(world, 26, (t) => camHomography({ cx: 450, cy: 350, tx: -290 + shift(t), ty: -230, scale: 0.6 }), 2, 21);
+    const tr = new PlanarTracker();
+    const info = tr.setReference(s8.frames[0], roi, IDENTITY, anchor);
+    expect(info.trackable).toBe(true);
+    expect(info.reason).toBeUndefined();
+    let hints = 0;
+    for (let t = 1; t < 26; t++) {
+      const r = tr.process(s8.frames[t], t * 50);
+      const gt = applyH(mul3(s8.views[t], invert3(s8.views[0])!), anchor)!;
+      const m = DEFAULT_TRACKER_CONFIG.offscreenMargin;
+      const onScreen = gt.x >= -m && gt.x <= W - 1 + m;
+      if (onScreen) {
+        expect(shown(r)).toBe(true);
+        expect(r.hint).toBeNull();
+        expect(r.reason).toBeUndefined();
+        expect(pinError(r, s8, 0, t, anchor)).toBeLessThan(2);
+      } else {
+        expect(r.state).toBe("lost");
+        expect(r.H).toBeNull();
+        expect(r.reason).toBe("offscreen");
+        expect(r.hint).not.toBeNull();
+        const h = applyH(r.hint!, anchor)!;
+        expect(h.x).toBeGreaterThan(W - 1);
+        expect(Math.hypot(h.x - gt.x, h.y - gt.y)).toBeLessThan(2);
+        hints++;
+      }
+    }
+    expect(hints).toBeGreaterThanOrEqual(8);
+  });
+
+  it("no hint when it is disabled or the anchor is too far; reason stays unverified", () => {
+    const anchor = { x: 205, y: 120 };
+    const s9 = makeSeq(world, 8, (t) => camHomography({ cx: 450, cy: 350, tx: -290 + (t < 2 ? 0 : 150), ty: -230, scale: 0.6 }), 2, 22);
+    const tr = new PlanarTracker({ hintMaxDiag: 0 });
+    tr.setReference(s9.frames[0], roi, IDENTITY, anchor);
+    for (let t = 2; t < 8; t++) {
+      const r = tr.process(s9.frames[t], t * 50);
+      expect(r.state).toBe("lost");
+      expect(r.hint).toBeNull();
+      expect(r.reason).toBe("unverified");
+      expect(tr.getState()).toBe("tracking");
+    }
+  });
+
+  it("reasons: invalid_frame, untrackable, unverified; tracking has no reason", () => {
+    const tr = new PlanarTracker();
+    expect(tr.process(seq.frames[1], 0).reason).toBeUndefined(); // 기준 없음
+    tr.setReference(seq.frames[0], roi, IDENTITY);
+    const ok = tr.process(seq.frames[1], 50);
+    expect(ok.state).toBe("tracking");
+    expect(ok.reason).toBeUndefined();
+    expect(ok.hint).toBeNull();
+    const bad = tr.process({ width: 4, height: 4, data: new Uint8Array(16) }, 100);
+    expect(bad.state).toBe("lost");
+    expect(bad.reason).toBe("invalid_frame");
+    // 대상이 사라짐 (무늬 없는 화면) → 검증된 위치 없음
+    const blank = makeFlat(W, H, 8, 1);
+    const lost = tr.process(blank, 150);
+    expect(lost.state).toBe("lost");
+    expect(lost.reason).toBe("unverified");
+    // 고객 쪽: 아직 못 찾음 → searching + unverified
+    const cu = new PlanarTracker();
+    cu.setReference(seq.frames[0], roi);
+    const s0 = cu.process(blank, 0);
+    expect(s0.state).toBe("searching");
+    expect(s0.reason).toBe("unverified");
+    // 추적 불가 기준
+    const flat = new PlanarTracker();
+    const info = flat.setReference(blank, roi);
+    expect(info.trackable).toBe(false);
+    expect(info.reason).toBe("low_texture");
+    const u = flat.process(seq.frames[1], 0);
+    expect(u.state).toBe("searching");
+    expect(u.reason).toBe("untrackable");
   });
 
   /** 무늬 없는 사각 패널(월드 360..560 × 280..430) + 작은 로고 두 획 */
@@ -273,8 +361,29 @@ describe("PlanarTracker", () => {
     const tr = new PlanarTracker();
     const info = tr.setReference(s5.frames[0], { x: p0.x - 30, y: p0.y - 30, width: 60, height: 60 }, IDENTITY);
     expect(info.trackable).toBe(false);
+    expect(info.reason).toBe("pin_blank");
     expect(tr.getReferenceDiagnostics()!.pinCorners).toBeLessThan(5);
-    for (let t = 1; t < 6; t++) expect(shown(tr.process(s5.frames[t], t * 50))).toBe(false);
+    for (let t = 1; t < 6; t++) {
+      const r = tr.process(s5.frames[t], t * 50);
+      expect(shown(r)).toBe(false);
+      expect(r.reason).toBe("untrackable");
+    }
+  });
+
+  it("anchor (not the ROI centre) decides pin_blank: textured ROI but the annotation sits on the blank panel", () => {
+    const w = makeTexture(900, 700, 23);
+    // 무늬 없는 넓은 판 (월드 300..600 × 250..500 → 화면 약 180×150px)
+    for (let y = 250; y < 500; y++) for (let x = 300; x < 600; x++) w.data[y * w.width + x] = 180;
+    const s5 = makeSeq(w, 2, (t) => panelView(t), 1.5, 13);
+    // 판 한가운데 주석, ROI는 판 왼쪽 위 바깥의 무늬 많은 배경 쪽 (앵커를 조금 걸침)
+    const a = applyH(s5.views[0], { x: 450, y: 375 })!;
+    const texturedRoi: Rect = { x: a.x - 150, y: a.y - 125, width: 110, height: 90 };
+    const withAnchor = new PlanarTracker().setReference(s5.frames[0], texturedRoi, IDENTITY, a);
+    expect(withAnchor.trackable).toBe(false);
+    expect(withAnchor.reason).toBe("pin_blank");
+    // 같은 ROI, 앵커 없음(= ROI 중심, 무늬 많은 곳) → 추적 가능
+    const centre = new PlanarTracker().setReference(s5.frames[0], texturedRoi, IDENTITY);
+    expect(centre.trackable).toBe(true);
   });
 
   it("small tap ROI → expands for features, still tracks accurately (pin-area gate passes)", () => {
@@ -358,6 +467,26 @@ describe("PlanarTracker", () => {
       camHomography({ cx: 320, cy: 120, tx: -160 + dx, ty: 0, ...extra });
     const portRoi: Rect = { x: 136, y: 76, width: 48, height: 48 };
     const portPin = { x: 160, y: 108 };
+
+    it("identical ports only: ambiguous → customer cannot search (untrackable), engineer tracks but cannot re-find", () => {
+      const ref = renderView(rowWorld, rowView(0), W, H, { noise: 1.5, rng: new Rng(1) });
+      const cust = new PlanarTracker();
+      const ci = cust.setReference(ref, portRoi);
+      expect(ci.reason).toBe("ambiguous");
+      expect(ci.trackable).toBe(false);
+      const r0 = cust.process(ref, 0);
+      expect(r0.state).toBe("searching");
+      expect(r0.reason).toBe("untrackable");
+      const eng = new PlanarTracker();
+      const ei = eng.setReference(ref, portRoi, IDENTITY);
+      expect(ei.reason).toBe("ambiguous");
+      expect(ei.trackable).toBe(true);
+      expect(eng.process(renderView(rowWorld, rowView(3), W, H, { noise: 1.5, rng: new Rng(5) }), 50).state).toBe("tracking");
+      // 놓치면(무늬 없는 화면) 다시 찾을 방법이 없다 → untrackable (새로 찍어야 함)
+      const gone = eng.process(makeFlat(W, H, 2, 1), 100);
+      expect(gone.state).toBe("lost");
+      expect(gone.reason).toBe("untrackable");
+    });
 
     it("customer search never locks onto a neighbouring copy", () => {
       const tr = new PlanarTracker();

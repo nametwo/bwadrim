@@ -4,8 +4,8 @@
 //   틀린 표시(wrong)  = 표시 중인데 (핀이 화면 밖 — 8px 여유 — 이거나 오차 > 8px)   ← 분모: 전체 처리 프레임
 //   추적률(tracked)   = 핀이 보이는(화면 안·안 가려진) 프레임 중 "표시 && 오차 ≤ 8px" 비율
 //   손에 가려진 핀을 제자리(오차 ≤ 8px)에 계속 그리는 것은 틀린 표시가 아니다 (손 위에 핀이 보이는 게 맞다).
-import type { Point, TrackState } from "../../src/lib/tracking/types";
-import type { Category, Side } from "./scenarios";
+import type { LostReason, Point, TrackState } from "../../src/lib/tracking/types";
+import type { Category, Side, Suite } from "./scenarios";
 
 export const ERR_PX = 8;
 /** 복귀 판정: 핀이 이만큼(초) 이상 안 보였다가 다시 보이면 "복귀" 이벤트 */
@@ -14,6 +14,8 @@ export const REENTRY_MIN_ABSENT_S = 0.3;
 export const REENTRY_MIN_ROI_VISIBLE = 0.5;
 export const ACQUIRE_WITHIN = 5;
 export const REACQUIRE_WITHIN = 10;
+/** 화면 밖 안내 화살표가 이 각도(도)보다 틀리면 "엉뚱한 쪽을 가리킴"으로 센다 */
+export const WRONG_ARROW_DEG = 45;
 
 export interface FrameRecord {
   k: number;
@@ -38,6 +40,14 @@ export interface FrameRecord {
   inliers: number;
   tracked: number;
   confidence: number;
+  /** TrackResult.reason (없으면 null) */
+  reason: LostReason | null;
+  /** 표시 안 함 + reason=offscreen + 유효한 hint가 나왔는지 */
+  hint: boolean;
+  /** hint로 옮긴 앵커(ref 핀) — 화면 밖 화살표가 가리키는 점. hint가 카메라 뒤를 가리키면 null */
+  hintPin: Point | null;
+  /** 핀이 화면 밖(카메라 앞)이고 hint가 있을 때: 프레임 중심에서 본 화살표 방향 오차(도, 0~180) */
+  hintErrDeg: number | null;
 }
 
 export interface Stats {
@@ -88,9 +98,31 @@ export interface Check {
   pass: boolean | null;
 }
 
+/**
+ * 화면 밖 안내(TrackResult.hint) 지표. "핀이 화면 밖" = 정답 핀이 카메라 앞에 있고 프레임 밖(inFrame=false).
+ * 방향 오차 = 프레임 중심에서 (hint·핀) 방향과 (정답 핀) 방향 사이 각도.
+ */
+export interface HintMetrics {
+  /** 핀이 화면 밖(카메라 앞)인 프레임 수 */
+  offscreenFrames: number;
+  /** 그중 hint가 나온 프레임 수 */
+  hintFrames: number;
+  /** hint 제공률 (hintFrames / offscreenFrames) */
+  available: number | null;
+  /** 방향 오차(도) 통계 */
+  angle: Stats;
+  /** 방향 오차 > WRONG_ARROW_DEG 비율 (hint가 나온 프레임 중) */
+  wrongArrow: number | null;
+  /** 핀이 화면 안인데 reason=offscreen을 낸 프레임 수 (화면 밖이라고 잘못 안내) */
+  falseOffscreenFrames: number;
+  /** 핀이 화면 안인 프레임 수 (falseOffscreen 분모) */
+  inFrameFrames: number;
+}
+
 export interface ScenarioMetrics {
   id: string;
   category: Category;
+  suite: Suite;
   side: Side;
   title: string;
   frames: number;
@@ -113,6 +145,7 @@ export interface ScenarioMetrics {
   msRedetect: Stats;
   msAll: Stats;
   drift?: { firstMedian: number | null; lastMedian: number | null };
+  hint: HintMetrics;
   checks: Check[];
 }
 
@@ -146,6 +179,36 @@ export function classifyFrame(
   return { err, wrong, correct: !wrong };
 }
 
+/** 프레임 중심에서 본 두 점의 방향 차이 (도, 0~180). 화살표가 가리킬 점이 없거나(카메라 뒤) 중심과 같으면 180 */
+export function arrowErrorDeg(center: Point, hintPin: Point | null, gtPin: Point): number {
+  if (!hintPin) return 180;
+  const ax = hintPin.x - center.x;
+  const ay = hintPin.y - center.y;
+  const bx = gtPin.x - center.x;
+  const by = gtPin.y - center.y;
+  if (Math.hypot(ax, ay) < 1e-9 || Math.hypot(bx, by) < 1e-9) return 180;
+  let d = Math.abs(Math.atan2(ay, ax) - Math.atan2(by, bx));
+  if (d > Math.PI) d = 2 * Math.PI - d;
+  return (d * 180) / Math.PI;
+}
+
+/** 프레임 기록들 → 화면 밖 안내 지표 */
+export function hintMetrics(recs: FrameRecord[]): HintMetrics {
+  const off = recs.filter((r) => r.gtPin !== null && !r.inFrame);
+  const withHint = off.filter((r) => r.hint && r.hintErrDeg !== null);
+  const angles = withHint.map((r) => r.hintErrDeg as number);
+  const inFrame = recs.filter((r) => r.inFrame);
+  return {
+    offscreenFrames: off.length,
+    hintFrames: withHint.length,
+    available: off.length ? withHint.length / off.length : null,
+    angle: stats(angles),
+    wrongArrow: angles.length ? angles.filter((a) => a > WRONG_ARROW_DEG).length / angles.length : null,
+    falseOffscreenFrames: inFrame.filter((r) => !r.displayed && r.reason === "offscreen").length,
+    inFrameFrames: inFrame.length,
+  };
+}
+
 /** 복귀 이벤트: REENTRY_MIN_ABSENT_S 이상 안 보이다가 (보인 적이 있은 뒤) 다시 보이고 ROI 절반 이상이 화면에 들어온 프레임 */
 export function findReentries(recs: FrameRecord[]): Reentry[] {
   const out: Reentry[] = [];
@@ -177,10 +240,18 @@ export function findReentries(recs: FrameRecord[]): Reentry[] {
   return out;
 }
 
-export function scenarioMetrics(
-  meta: { id: string; category: Category; side: Side; title: string; trackable: boolean; refFeatures: number },
-  recs: FrameRecord[],
-): ScenarioMetrics {
+export interface ScenarioMeta {
+  id: string;
+  category: Category;
+  /** 기본 base */
+  suite?: Suite;
+  side: Side;
+  title: string;
+  trackable: boolean;
+  refFeatures: number;
+}
+
+export function scenarioMetrics(meta: ScenarioMeta, recs: FrameRecord[]): ScenarioMetrics {
   const visible = recs.filter((r) => r.visible);
   const errs = recs.filter((r) => r.displayed && r.inFrame && r.err !== null).map((r) => r.err as number);
   const wrongFrames = recs.filter((r) => r.wrong).length;
@@ -193,6 +264,7 @@ export function scenarioMetrics(
   }
   const m: ScenarioMetrics = {
     ...meta,
+    suite: meta.suite ?? "base",
     frames: recs.length,
     visibleFrames: visible.length,
     tracked: visible.length ? visible.filter((r) => r.correct).length / visible.length : null,
@@ -206,6 +278,7 @@ export function scenarioMetrics(
     msTrack: stats(recs.filter((r) => !r.redetected).map((r) => r.ms)),
     msRedetect: stats(recs.filter((r) => r.redetected).map((r) => r.ms)),
     msAll: stats(recs.map((r) => r.ms)),
+    hint: hintMetrics(recs),
     checks: [],
   };
   if (meta.category === "drift" && recs.length) {
@@ -251,6 +324,7 @@ export function categoryChecks(
 
 export interface CategoryMetrics {
   category: Category;
+  suite: Suite;
   scenarios: string[];
   frames: number;
   visibleFrames: number;
@@ -260,24 +334,29 @@ export interface CategoryMetrics {
   acquireRate: number | null;
   reacquireRate: number | null;
   reentries: number;
+  hint: HintMetrics;
   checks: Check[];
   pass: boolean;
 }
 
-/** 범주별 합산 (프레임을 모아서) — 품질 게이트의 공식 판정 */
+export const SUITE_ORDER: Suite[] = ["base", "realism", "holdout"];
+export const CATEGORY_ORDER: Category[] = ["jitter", "motion", "repetitive", "lowtex", "reentry", "acquire", "stress", "drift"];
+
+/** 범주별 합산 (프레임을 모아서) — 품질 게이트의 공식 판정. 묶음(suite: base/realism/holdout)은 섞지 않는다 */
 export function aggregate(
   results: { metrics: ScenarioMetrics; records: FrameRecord[] }[],
 ): { categories: CategoryMetrics[]; perf: { msTrack: Stats; msRedetect: Stats; checks: Check[] }; pass: boolean } {
-  const cats = new Map<Category, { metrics: ScenarioMetrics; records: FrameRecord[] }[]>();
+  const cats = new Map<string, { metrics: ScenarioMetrics; records: FrameRecord[] }[]>();
+  const key = (suite: Suite, cat: Category) => `${suite}|${cat}`;
   for (const r of results) {
-    const l = cats.get(r.metrics.category) ?? [];
+    const k = key(r.metrics.suite ?? "base", r.metrics.category);
+    const l = cats.get(k) ?? [];
     l.push(r);
-    cats.set(r.metrics.category, l);
+    cats.set(k, l);
   }
-  const order: Category[] = ["jitter", "motion", "repetitive", "lowtex", "reentry", "acquire", "stress", "drift"];
   const categories: CategoryMetrics[] = [];
-  for (const cat of order) {
-    const l = cats.get(cat);
+  for (const suite of SUITE_ORDER) for (const cat of CATEGORY_ORDER) {
+    const l = cats.get(key(suite, cat));
     if (!l) continue;
     const recs = l.flatMap((x) => x.records);
     const visible = recs.filter((r) => r.visible);
@@ -289,6 +368,7 @@ export function aggregate(
     const checks = categoryChecks(cat, { tracked, medianErr: errs.median, wrong, acquire, reentries });
     categories.push({
       category: cat,
+      suite,
       scenarios: l.map((x) => x.metrics.id),
       frames: recs.length,
       visibleFrames: visible.length,
@@ -300,6 +380,7 @@ export function aggregate(
         ? reentries.filter((r) => r.latency !== null && r.latency < REACQUIRE_WITHIN).length / reentries.length
         : null,
       reentries: reentries.length,
+      hint: hintMetrics(recs),
       checks,
       pass: checks.every((c) => c.pass !== false),
     });
@@ -335,6 +416,19 @@ export function categoryName(c: Category): string {
   return CAT_KO[c];
 }
 
+const SUITE_KO: Record<Suite, string> = { base: "", realism: "[실감] ", holdout: "[홀드아웃] " };
+/** 묶음 접두어 (base는 빈 문자열) */
+export function suiteLabel(s: Suite): string {
+  return SUITE_KO[s];
+}
+
+/** 화면 밖 안내 요약 (표 칸 하나): "제공% 중앙°" */
+export function hintCell(h: HintMetrics): string {
+  if (h.offscreenFrames === 0) return h.falseOffscreenFrames ? `-(오${h.falseOffscreenFrames})` : "-";
+  const med = h.angle.median;
+  return `${pct(h.available, 0)} ${med === null ? "-" : `${med.toFixed(0)}°`}${h.falseOffscreenFrames ? `(오${h.falseOffscreenFrames})` : ""}`;
+}
+
 const pct = (v: number | null | undefined, d = 1) => (v === null || v === undefined ? "-" : `${(v * 100).toFixed(d)}%`);
 const num = (v: number | null | undefined, d = 1) =>
   v === null || v === undefined ? "-" : Number.isFinite(v) ? v.toFixed(d) : "inf";
@@ -368,7 +462,7 @@ function checkMark(checks: Check[]): string {
 
 export function scenarioTable(ms: ScenarioMetrics[]): string {
   const rows: string[][] = [
-    ["시나리오", "범주", "쪽", "프레임", "보임", "추적률", "오차중앙", "p95", "틀림", "탐색", "재검출≤10", "ms추적 중앙/p95", "ms재검출 중앙/p95(n)", "판정"],
+    ["시나리오", "범주", "쪽", "프레임", "보임", "추적률", "오차중앙", "p95", "틀림", "탐색", "재검출≤10", "화면밖 hint", "ms추적 중앙/p95", "ms재검출 중앙/p95(n)", "판정"],
   ];
   for (const m of ms) {
     const re = m.reentries.length
@@ -387,12 +481,13 @@ export function scenarioTable(ms: ScenarioMetrics[]): string {
       pct(m.wrong, 2),
       acq,
       re,
+      hintCell(m.hint),
       `${num(m.msTrack.median, 2)}/${num(m.msTrack.p95, 1)}`,
       m.msRedetect.n ? `${num(m.msRedetect.median, 1)}/${num(m.msRedetect.p95, 1)}(${m.msRedetect.n})` : "-",
       checkMark(m.checks),
     ]);
   }
-  return formatTable(rows, [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  return formatTable(rows, [3, 4, 5, 6, 7, 8, 9, 10, 12, 13]);
 }
 
 export function categoryTable(cs: CategoryMetrics[]): string {
@@ -409,7 +504,7 @@ export function categoryTable(cs: CategoryMetrics[]): string {
       .filter(Boolean)
       .join(" ");
     rows.push([
-      `${categoryName(c.category)}${TARGETS[c.category].readme ? "" : "*"}`,
+      `${suiteLabel(c.suite)}${categoryName(c.category)}${TARGETS[c.category].readme ? "" : "*"}`,
       String(c.scenarios.length),
       String(c.frames),
       pct(c.tracked),
@@ -423,4 +518,27 @@ export function categoryTable(cs: CategoryMetrics[]): string {
     ]);
   }
   return formatTable(rows, [1, 2, 3, 4, 5, 6, 7, 8]);
+}
+
+/**
+ * 화면 밖 안내(hint) 표 — 범주별. 핀이 화면 밖(카메라 앞)인 프레임에서 reason=offscreen + hint를 낸 비율과
+ * 프레임 중심에서 본 화살표 방향 오차. "오안내" = 핀이 화면 안인데 reason=offscreen.
+ */
+export function hintTable(cs: CategoryMetrics[]): string {
+  const rows: string[][] = [["범주", "화면밖 프레임", "hint 제공", "방향오차 중앙", "p95", "최대", `>${WRONG_ARROW_DEG}°`, "오안내(화면 안인데 offscreen)"]];
+  for (const c of cs) {
+    const h = c.hint;
+    if (h.offscreenFrames === 0 && h.falseOffscreenFrames === 0) continue;
+    rows.push([
+      `${suiteLabel(c.suite)}${categoryName(c.category)}`,
+      String(h.offscreenFrames),
+      h.offscreenFrames ? `${pct(h.available, 1)} (${h.hintFrames})` : "-",
+      h.angle.median === null ? "-" : `${h.angle.median.toFixed(1)}°`,
+      h.angle.p95 === null ? "-" : `${h.angle.p95.toFixed(1)}°`,
+      h.angle.max === null ? "-" : `${h.angle.max.toFixed(1)}°`,
+      h.wrongArrow === null ? "-" : pct(h.wrongArrow, 1),
+      h.inFrameFrames ? `${h.falseOffscreenFrames} (${pct(h.falseOffscreenFrames / h.inFrameFrames, 2)})` : "-",
+    ]);
+  }
+  return rows.length > 1 ? formatTable(rows, [1, 2, 3, 4, 5, 6, 7]) : "";
 }

@@ -2,43 +2,42 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CallSession, type CallState } from "@/lib/webrtc/call";
+import { fromRTCDataChannel, type ChannelDataLink } from "@/lib/webrtc/data-link";
 import { fetchIceServers } from "@/lib/webrtc/ice";
-import { endRoom, markRoomActive } from "./actions";
+import { EngineerCallView, type FreezeUsedProps } from "@/components/call/engineer-call-view";
+import type { PointerUsedProps } from "@/components/call/usage";
+import { endRoom, logFreezeUsed, logPointerUsed, markRoomActive } from "./actions";
 
 type PanelState =
   | { phase: "idle" }
   | { phase: "call"; call: CallState; peerPresent: boolean }
   | { phase: "confirm-end" }; // 종료 후 "원격 해결?" 확인
 
+/** 한 통화에서 보낼 pointer_used 상한 (폭주 방지 — 지표는 이 정도면 충분) */
+const MAX_POINTER_EVENTS = 200;
+
 // 엔지니어 통화 패널. 폰 한 손 조작 기준: 버튼 크게, 도구 최소.
+// 연결되면 화면 전체를 영상으로 덮는다 (탭 = 핀, 끌기 = 선 → 고객 화면의 같은 사물 위에 표시).
 export function CallPanel({ roomId, code }: { roomId: string; code: string }) {
   const [state, setState] = useState<PanelState>({ phase: "idle" });
   const [micOn, setMicOn] = useState(false);
   const [ending, setEnding] = useState(false);
   const [turnError, setTurnError] = useState<string | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  // 'draw' DataChannel 링크 — 통화 세션마다 하나, 재연결 때는 새 채널로 attach (객체는 그대로)
+  const [link, setLink] = useState<ChannelDataLink | null>(null);
   const sessionRef = useRef<CallSession | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const linkRef = useRef<ChannelDataLink | null>(null);
+  const pointerEvents = useRef(0);
 
   useEffect(() => {
     return () => {
       sessionRef.current?.destroy();
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
+      linkRef.current?.dispose();
     };
   }, []);
-
-  // remote stream을 video에 연결
-  useEffect(() => {
-    if (
-      state.phase === "call" &&
-      videoRef.current &&
-      remoteStreamRef.current &&
-      videoRef.current.srcObject !== remoteStreamRef.current
-    ) {
-      videoRef.current.srcObject = remoteStreamRef.current;
-    }
-  });
 
   // 마이크 요청은 반드시 버튼 탭(제스처) 이후
   async function start() {
@@ -54,6 +53,9 @@ export function CallPanel({ roomId, code }: { roomId: string; code: string }) {
 
     const ice = await fetchIceServers(code);
     setTurnError(ice.turnError);
+    const dataLink = fromRTCDataChannel(null);
+    linkRef.current = dataLink;
+    setLink(dataLink);
     const session = new CallSession({
       roomId,
       role: "engineer",
@@ -67,10 +69,9 @@ export function CallPanel({ roomId, code }: { roomId: string; code: string }) {
         }));
         if (call === "connected") markRoomActive(roomId);
       },
-      onRemoteStream: (stream) => {
-        remoteStreamRef.current = stream;
-        if (videoRef.current) videoRef.current.srcObject = stream;
-      },
+      onRemoteStream: (stream) => setRemoteStream(stream),
+      // 고객이 다시 접속하면(새 연결) 새 채널이 온다 → 같은 링크에 갈아 끼운다
+      onDataChannel: (dc) => dataLink.attach(dc),
       onPeerPresent: (present) => {
         setState((prev) =>
           prev.phase === "call" ? { ...prev, peerPresent: present } : prev,
@@ -85,6 +86,16 @@ export function CallPanel({ roomId, code }: { roomId: string; code: string }) {
   function hangup() {
     sessionRef.current?.hangup();
     setState({ phase: "confirm-end" });
+  }
+
+  // 지표 — 실패해도 통화를 막지 않는다
+  function onPointerUsed(props: PointerUsedProps) {
+    if (++pointerEvents.current > MAX_POINTER_EVENTS) return;
+    logPointerUsed(roomId, props).catch(() => {});
+  }
+
+  function onFreezeUsed(props: FreezeUsedProps) {
+    logFreezeUsed(roomId, props).catch(() => {});
   }
 
   async function finish(resolvedRemotely: boolean) {
@@ -145,34 +156,29 @@ export function CallPanel({ roomId, code }: { roomId: string; code: string }) {
     </p>
   );
 
-  if (call === "connected" || (call === "connecting" && peerPresent)) {
+  if ((call === "connected" || (call === "connecting" && peerPresent)) && link) {
+    // 화면 전체: 영상 + 터치 입력, 아래쪽에 버튼 3개 (한 손 조작)
     return (
-      <section className="mt-2 flex flex-1 flex-col gap-3">
-        {turnWarning}
-        <div className="relative flex-1 overflow-hidden rounded-2xl bg-black">
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            className="h-full w-full object-contain"
-          />
-          {call !== "connected" && (
-            <p className="absolute inset-0 flex items-center justify-center text-white/70">
-              연결 중…
-            </p>
-          )}
-        </div>
-        <div className="flex items-center gap-3">
-          {!micOn && (
-            <span className="text-sm text-amber-600">마이크 꺼짐(보기만)</span>
-          )}
-          <button
-            onClick={hangup}
-            className="ml-auto h-14 rounded-xl bg-red-600 px-8 text-lg font-semibold text-white active:opacity-80"
-          >
-            종료
-          </button>
-        </div>
+      <section className="fixed inset-0 z-40 bg-black" aria-label="고객 영상">
+        <EngineerCallView
+          stream={remoteStream}
+          link={link}
+          connecting={call !== "connected"}
+          micOn={micOn}
+          notice={
+            turnError ? (
+              <span
+                title={turnError}
+                className="whitespace-nowrap rounded-full bg-amber-400 px-3 py-1.5 text-xs font-semibold text-black shadow-lg"
+              >
+                ⚠ TURN 없이 연결 중 (모바일망끼리는 끊길 수 있음)
+              </span>
+            ) : undefined
+          }
+          onHangup={hangup}
+          onPointerUsed={onPointerUsed}
+          onFreezeUsed={onFreezeUsed}
+        />
       </section>
     );
   }

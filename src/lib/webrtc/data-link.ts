@@ -130,7 +130,8 @@ class RTCChannelLink implements ChannelDataLink {
     if (this.queuedBytes + size > this.opts.maxQueueBytes) return false;
     this.queue.push(data);
     this.queuedBytes += size;
-    this.schedulePoll();
+    // 채널 버퍼에 이미 자리가 있으면 폴링을 기다리지 않고 바로 흘려보낸다 (순서는 큐가 지킨다)
+    this.flush();
     return true;
   }
 
@@ -267,7 +268,10 @@ class RTCChannelLink implements ChannelDataLink {
   };
 
   private handleError = (e: Event) => {
-    console.warn("[data-link] 채널 오류:", (e as { error?: unknown }).error ?? e);
+    const err = (e as { error?: { message?: unknown } }).error;
+    // pc.close()·채널 close()로 닫을 때 Chrome이 보내는 "User-Initiated Abort"는 정상 종료 — 경고하지 않는다
+    const benign = typeof err?.message === "string" && /User-Initiated Abort/i.test(err.message);
+    if (!benign) console.warn("[data-link] 채널 오류:", err ?? e);
     if (this.dc?.readyState !== "open") this.handleClose();
   };
 
@@ -277,37 +281,36 @@ class RTCChannelLink implements ChannelDataLink {
 
   private handleMessage = (e: Event) => {
     const d = (e as MessageEvent).data as unknown;
+    let item: LinkData | Promise<ArrayBuffer>;
     if (typeof d === "string" || d instanceof ArrayBuffer) {
-      if (this.chain) {
-        const dc = this.dc;
-        this.chain = this.chain.then(() => {
-          if (this.dc === dc) this.emit(d);
-        });
-      } else {
-        this.emit(d);
-      }
-      return;
-    }
-    if (ArrayBuffer.isView(d)) {
+      item = d;
+    } else if (ArrayBuffer.isView(d)) {
       const copy = new Uint8Array(d.byteLength);
       copy.set(new Uint8Array(d.buffer, d.byteOffset, d.byteLength));
-      this.emit(copy.buffer);
+      item = copy.buffer;
+    } else if (typeof Blob !== "undefined" && d instanceof Blob) {
+      // binaryType 설정 전에 도착한 경우 등 — 비동기 변환. 읽기는 바로 시작하고 넘기는 순서만 지킨다
+      item = d.arrayBuffer();
+    } else {
       return;
     }
-    if (typeof Blob !== "undefined" && d instanceof Blob) {
-      // binaryType 설정 전에 도착한 경우 등 — 비동기 변환이므로 이후 메시지는 체인 뒤로
-      const dc = this.dc;
-      const p: Promise<void> = (this.chain ?? Promise.resolve())
-        .then(() => d.arrayBuffer())
-        .then((buf) => {
-          if (this.dc === dc) this.emit(buf);
-        })
-        .catch(() => {})
-        .finally(() => {
-          if (this.chain === p) this.chain = null;
-        });
-      this.chain = p;
+    if (!this.chain && !(item instanceof Promise)) {
+      this.emit(item);
+      return;
     }
+    // 앞선 비동기 변환이 끝날 때까지 모든 메시지를 체인 뒤로 (순서 보장). 체인이 비면 다시 동기로 넘긴다
+    const dc = this.dc;
+    const pending = item;
+    const p: Promise<void> = (this.chain ?? Promise.resolve())
+      .then(() => pending)
+      .then((v) => {
+        if (this.dc === dc) this.emit(v);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (this.chain === p) this.chain = null;
+      });
+    this.chain = p;
   };
 }
 

@@ -1,10 +1,20 @@
-import type { GrayImage, Mat3, Rect, ReferenceInfo, TrackerConfig, TrackUpdate } from "./types";
+import type { GrayImage, Mat3, Point, Rect, ReferenceInfo, TrackerConfig, TrackUpdate } from "./types";
 import type { WorkerRequest, WorkerResponse } from "./tracker.worker";
-import { FrameSource, type FrameSourceOptions, type FrameSourceStats, type Size } from "./frame-source";
+import { isLostReason } from "./protocol";
+import {
+  FrameSource,
+  type AcquisitionMode,
+  type FramePacket,
+  type FrameSourceOptions,
+  type FrameSourceStats,
+  type Size,
+} from "./frame-source";
 
 // 메인 스레드 추적 오케스트레이터: <video> → FrameSource → tracker.worker → TrackUpdate.
 // - 앵커가 있을 때만 프레임 루프를 돌린다 (유휴 비용 0). Worker는 첫 앵커 때 만들어 재사용.
 // - 한 번에 프레임 1장만 Worker에 가 있다 (FrameSource 역압). 버퍼는 transfer로 왕복해 재사용.
+// - 가능하면 VideoFrame을 그대로 Worker로 넘긴다 (메인 스레드는 픽셀을 만지지 않음). Worker가 못 읽으면
+//   (형식·전송 실패) FrameSource를 다음 획득 방식(메인 VideoFrame 읽기 → 캔버스)으로 내린다.
 // - 세대(gen) 번호로 앵커 교체 전에 보낸 프레임의 결과를 버린다.
 // - Worker 오류는 UI로 던지지 않는다: 'lost' 갱신 + console.warn, 가능하면 Worker를 되살려 탐색 모드로 재개.
 //
@@ -28,6 +38,8 @@ export interface FrameSourceLike {
   destroy(): void;
   frameSize(): Size | null;
   getStats?(): FrameSourceStats;
+  /** 획득 방식 끄기 (Worker가 VideoFrame을 못 읽을 때) */
+  demote?(mode: AcquisitionMode, reason: string): void;
 }
 
 export interface AnchorTrackerOptions {
@@ -39,6 +51,8 @@ export interface AnchorTrackerOptions {
   trackerConfig?: Partial<TrackerConfig>;
   /** Worker가 죽었을 때 앵커당 되살리기 최대 횟수 (기본 3) */
   maxRestarts?: number;
+  /** 획득 방식 선호 순서 (기본: videoframe-worker → videoframe → canvas, 지원하는 것만) */
+  acquisition?: readonly AcquisitionMode[];
   /** 테스트·주입용 */
   createWorker?: () => WorkerLike;
   createFrameSource?: (video: HTMLVideoElement, opts: FrameSourceOptions) => FrameSourceLike;
@@ -52,7 +66,15 @@ export interface AnchorSpec {
   roi: Rect;
   /** 있으면 "지금 프레임이 곧 기준"(엔지니어: 단위행렬) — 탐색 없이 바로 tracking */
   initialH?: Mat3 | null;
+  /**
+   * 주석 기준점 (ref 픽셀) — 추적기의 화면 밖 판정·핀 주변 검증 기준 (계약 v2 setReference의 anchor).
+   * 핀이면 핀 위치, 선이면 선의 중심. 없으면 추적기가 ROI 중심을 쓴다.
+   */
+  anchor?: Point | null;
 }
+
+/** ready 전에 연속으로 죽은 Worker가 이만큼이면 스크립트 로드 실패로 보고 더 만들지 않는다 (앵커마다 재시도 방지) */
+const WORKER_LOAD_FAILURE_LIMIT = 3;
 
 function defaultCreateWorker(): WorkerLike {
   // Turbopack/webpack이 이 형태를 보고 Worker 번들을 따로 만든다 (리터럴 그대로 둘 것)
@@ -74,6 +96,10 @@ function isValidGray(g: GrayImage | null | undefined): g is GrayImage {
   );
 }
 
+function validPoint(p: Point | null | undefined): p is Point {
+  return !!p && Number.isFinite(p.x) && Number.isFinite(p.y);
+}
+
 interface ActiveAnchor {
   spec: AnchorSpec;
   gen: number;
@@ -91,13 +117,26 @@ export class AnchorTracker {
   private readonly pending = new Map<number, (info: ReferenceInfo | null) => void>();
   private destroyed = false;
   private inFlight = false;
+  /** Worker 쪽 VideoFrame 읽기 연속 실패 (형식 문제가 아닌 것) */
+  private acquireFailures = 0;
+  /** 지금 Worker가 ready를 보냈는지 (스크립트 로드 성공) */
+  private workerReady = false;
+  /** ready 전에 죽은 Worker 수 (연속). 한도를 넘으면 이 추적기에서는 Worker를 더 만들지 않는다 */
+  private workerLoadFailures = 0;
+  private lastAcquireMs = 0;
 
   constructor(
     video: HTMLVideoElement,
     private readonly opts: AnchorTrackerOptions = {},
   ) {
     const make = opts.createFrameSource ?? ((v, o) => new FrameSource(v, o));
-    this.source = make(video, { maxFps: opts.fps ?? 30, longSide: opts.longSide, onFrame: this.handleFrame });
+    this.source = make(video, {
+      maxFps: opts.fps ?? 30,
+      longSide: opts.longSide,
+      onFrame: this.handleFrame,
+      onPacket: this.handlePacket,
+      acquisition: opts.acquisition,
+    });
   }
 
   /**
@@ -113,7 +152,12 @@ export class AnchorTracker {
     const gen = ++this.gen;
     this.flushPending();
     this.anchor = {
-      spec: { ...spec, roi: { ...spec.roi }, initialH: spec.initialH ? spec.initialH.slice() : null },
+      spec: {
+        ...spec,
+        roi: { ...spec.roi },
+        initialH: spec.initialH ? spec.initialH.slice() : null,
+        anchor: validPoint(spec.anchor) ? { x: spec.anchor.x, y: spec.anchor.y } : null,
+      },
       gen,
       restarts: 0,
       refSize: { width: spec.ref.width, height: spec.ref.height },
@@ -161,6 +205,11 @@ export class AnchorTracker {
     return this.source.getStats?.() ?? null;
   }
 
+  /** 마지막 videoFrame 읽기 시간 (Worker 안, ms) — 진단용 */
+  lastAcquireMsInWorker(): number {
+    return this.lastAcquireMs;
+  }
+
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
@@ -189,8 +238,10 @@ export class AnchorTracker {
   private ensureWorker(): WorkerLike | null {
     if (this.worker) return this.worker;
     if (this.destroyed) return null;
+    if (this.workerLoadFailures >= WORKER_LOAD_FAILURE_LIMIT) return null;
     try {
       const w = (this.opts.createWorker ?? defaultCreateWorker)();
+      this.workerReady = false;
       w.onmessage = this.handleMessage;
       w.onerror = this.handleWorkerError;
       w.onmessageerror = this.handleWorkerError;
@@ -237,7 +288,7 @@ export class AnchorTracker {
 
   private postReference(a: ActiveAnchor, withInitialH: boolean): boolean {
     if (!this.ensureWorker()) return false;
-    const { ref, roi, initialH } = a.spec;
+    const { ref, roi, initialH, anchor } = a.spec;
     const data = ref.data instanceof Uint8Array ? ref.data : new Uint8Array(ref.data);
     // transfer 없이 보낸다 (구조적 복제 = 복사) → 호출측 이미지와 되살리기용 사본이 그대로 남는다
     return this.safePost({
@@ -246,6 +297,7 @@ export class AnchorTracker {
       ref: { width: ref.width, height: ref.height, data },
       roi: { ...roi },
       initialH: withInitialH && initialH ? initialH : null,
+      anchor: anchor ? { ...anchor } : null,
     });
   }
 
@@ -254,6 +306,7 @@ export class AnchorTracker {
       anchorId: a.spec.id,
       state: "lost",
       H: null,
+      hint: null,
       confidence: 0,
       refSize: { ...a.refSize },
       frameSize: this.lastFrameSize ? { ...this.lastFrameSize } : { ...a.refSize },
@@ -304,6 +357,32 @@ export class AnchorTracker {
     if (!this.postReference(a, false)) this.failAnchor("Worker를 만들 수 없음");
   }
 
+  private handlePacket = (p: FramePacket, ts: number) => {
+    if (p.kind === "gray") {
+      this.handleFrame(p.frame, ts);
+      return;
+    }
+    const vf = p.frame;
+    const a = this.anchor;
+    if (this.destroyed || !a || !this.worker) {
+      safeClose(vf);
+      this.source.release(null);
+      return;
+    }
+    try {
+      this.worker.postMessage(
+        { type: "videoFrame", gen: a.gen, frame: vf, width: p.width, height: p.height, ts },
+        [vf as unknown as Transferable],
+      );
+      this.inFlight = true;
+    } catch (e) {
+      // VideoFrame을 Worker로 못 보냄 (전송 미지원 브라우저 등) → 메인에서 읽는 방식으로
+      safeClose(vf);
+      this.source.demote?.("videoframe-worker", `transfer 실패: ${e instanceof Error ? e.message : String(e)}`);
+      this.source.release(null);
+    }
+  };
+
   private handleFrame = (frame: GrayImage, ts: number) => {
     const a = this.anchor;
     if (this.destroyed || !a || !this.worker) {
@@ -326,6 +405,8 @@ export class AnchorTracker {
     if (!m || typeof m !== "object") return;
     switch (m.type) {
       case "ready":
+        this.workerReady = true;
+        this.workerLoadFailures = 0;
         return;
       case "reference": {
         if (m.error) console.warn("[tracker] 기준 설정 오류:", m.error);
@@ -336,6 +417,21 @@ export class AnchorTracker {
       }
       case "result": {
         this.inFlight = false;
+        if (m.acquireError) {
+          // VideoFrame을 못 읽음: 형식 문제면 바로, 아니면 3번 연속이면 다른 방식으로 (추적기는 멀쩡하다)
+          if (m.unsupported) {
+            this.source.demote?.("videoframe-worker", m.acquireError);
+            this.source.demote?.("videoframe", m.acquireError);
+          } else if (++this.acquireFailures >= 3) {
+            this.source.demote?.("videoframe-worker", m.acquireError);
+          }
+          this.source.release(null);
+          return;
+        }
+        if (typeof m.acquireMs === "number") {
+          this.acquireFailures = 0;
+          this.lastAcquireMs = m.acquireMs;
+        }
         const data = m.frame?.data;
         this.source.release(data instanceof Uint8Array && data.byteLength > 0 ? data : null, m.processMs);
         const a = this.anchor;
@@ -348,15 +444,19 @@ export class AnchorTracker {
         const frameSize = { width: m.frame.width, height: m.frame.height };
         this.lastFrameSize = frameSize;
         const shown = (r.state === "tracking" || r.state === "weak") && Array.isArray(r.H) && r.H.length === 9;
-        this.emit({
+        const hint = !shown && Array.isArray(r.hint) && r.hint.length === 9 ? r.hint : null;
+        const u: TrackUpdate = {
           anchorId: a.spec.id,
           state: r.state,
           H: shown ? r.H : null,
+          hint,
           confidence: r.confidence,
           refSize: { ...a.refSize },
           frameSize,
           processMs: m.processMs,
-        });
+        };
+        if (isLostReason(r.reason)) u.reason = r.reason;
+        this.emit(u);
         return;
       }
       case "error":
@@ -368,6 +468,9 @@ export class AnchorTracker {
   private handleWorkerError = (e: Event) => {
     const detail = (e as ErrorEvent).message ?? e.type;
     console.warn("[tracker] Worker 오류:", detail);
+    if (!this.workerReady && ++this.workerLoadFailures >= WORKER_LOAD_FAILURE_LIMIT) {
+      console.warn("[tracker] Worker 스크립트를 불러오지 못함 — 이 화면에서는 추적을 끈다");
+    }
     this.killWorker();
     const a = this.anchor;
     if (!a) {
@@ -376,4 +479,12 @@ export class AnchorTracker {
     }
     this.recover(`Worker 오류: ${detail}`);
   };
+}
+
+function safeClose(vf: { close(): void }) {
+  try {
+    vf.close();
+  } catch {
+    // 무시
+  }
 }

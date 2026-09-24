@@ -48,6 +48,8 @@ export interface VerifyBuildParams {
   blocks: number;
   /** 블록 표준편차가 이 이상이어야 '무늬 있음' */
   minStd: number;
+  /** 기준 단계를 강제 (없으면 샘플 간격으로 고름) */
+  level?: number;
 }
 
 export const DEFAULT_VERIFY_BUILD: VerifyBuildParams = {
@@ -96,6 +98,8 @@ export class VerifyModel {
   /** 마지막 evaluate의 블록별 NCC (무늬 없거나 안 보이면 NaN) — 진단용 */
   blockNcc = new Float32Array(0);
   private acc = new Float64Array(0);
+  private sacc = new Float64Array(0);
+  private gacc = new Float64Array(0);
 
   static build(refPyr: Pyramid, roi: Rect, p: VerifyBuildParams = DEFAULT_VERIFY_BUILD): VerifyModel {
     const m = new VerifyModel();
@@ -109,7 +113,10 @@ export class VerifyModel {
     const sx = roi.width / m.gx;
     const sy = roi.height / m.gy;
     m.spacing = Math.max(sx, sy);
-    m.baseLevel = Math.max(0, Math.min(refPyr.length - 1, Math.floor(Math.log2(m.spacing)) - 1));
+    m.baseLevel = Math.max(
+      0,
+      Math.min(refPyr.length - 1, p.level ?? Math.floor(Math.log2(m.spacing)) - 1),
+    );
     m.qx = new Float64Array(m.n);
     m.qy = new Float64Array(m.n);
     m.blk = new Uint16Array(m.n);
@@ -280,6 +287,82 @@ export class VerifyModel {
   }
 
   /**
+   * 국소 최대 검사용: H와, H를 프레임에서 (dx_i, dy_i) px만큼 옮긴 후보들의 전역·블록 NCC를 한 번에.
+   * 단계는 H로 한 번 고르고 모든 이동에 같은 단계를 쓴다 (비교가 공정하도록).
+   * global[i] = i번째 이동의 전역 NCC (보이는 샘플이 절반 미만이면 −2),
+   * blocks[i·nBlocks + b] = 블록 b의 NCC (무늬 없거나 충분히 안 보이면 NaN). 이동 개수를 돌려준다.
+   */
+  shiftScores(
+    cur: Pyramid,
+    H: Mat3,
+    shifts: ArrayLike<number>,
+    global: Float64Array,
+    blocks: Float32Array,
+  ): number {
+    const ns = shifts.length >> 1;
+    const [lr, lc] = this.chooseLevels(H, cur.length);
+    const img = cur.levels[lc];
+    const W = img.width;
+    const Hh = img.height;
+    const d = img.data;
+    const sc = 1 / (1 << lc);
+    const vals = this.vals[lr];
+    const tex = this.textured[lr];
+    const nB = this.nBlocks;
+    if (this.sacc.length < ns * nB * 6) this.sacc = new Float64Array(ns * nB * 6);
+    if (this.gacc.length < ns * 6) this.gacc = new Float64Array(ns * 6);
+    const acc = this.sacc;
+    const gacc = this.gacc;
+    acc.fill(0, 0, ns * nB * 6);
+    gacc.fill(0, 0, ns * 6);
+    const xm = W - 1;
+    const ym = Hh - 1;
+    let nt = 0;
+    for (let k = 0; k < this.n; k++) {
+      const b = this.blk[k];
+      if (!tex[b]) continue;
+      nt++;
+      const qx = this.qx[k];
+      const qy = this.qy[k];
+      const w = H[6] * qx + H[7] * qy + H[8];
+      if (!(w > 1e-9)) continue;
+      const x0 = ((H[0] * qx + H[1] * qy + H[2]) / w) * sc;
+      const y0 = ((H[3] * qx + H[4] * qy + H[5]) / w) * sc;
+      const a = vals[k];
+      for (let i = 0; i < ns; i++) {
+        const x = x0 + shifts[2 * i] * sc;
+        const y = y0 + shifts[2 * i + 1] * sc;
+        if (!(x >= 0 && y >= 0 && x < xm && y < ym)) continue;
+        const v = bilinear(d, W, x, y);
+        const o = (i * nB + b) * 6;
+        acc[o] += 1;
+        acc[o + 1] += a;
+        acc[o + 2] += v;
+        acc[o + 3] += a * a;
+        acc[o + 4] += v * v;
+        acc[o + 5] += a * v;
+        const g = i * 6;
+        gacc[g] += 1;
+        gacc[g + 1] += a;
+        gacc[g + 2] += v;
+        gacc[g + 3] += a * a;
+        gacc[g + 4] += v * v;
+        gacc[g + 5] += a * v;
+      }
+    }
+    for (let i = 0; i < ns; i++) {
+      const g = i * 6;
+      global[i] = gacc[g] >= Math.max(8, 0.5 * nt) ? nccFromSums(gacc, g) : -2;
+      for (let b = 0; b < nB; b++) {
+        const o = (i * nB + b) * 6;
+        blocks[i * nB + b] =
+          tex[b] && acc[o] >= Math.max(4, 0.6 * this.blockSize[b]) ? nccFromSums(acc, o) : NaN;
+      }
+    }
+    return ns;
+  }
+
+  /**
    * 빠른 전역 NCC: l단계 영상에서 (ref px 기준 이동 dx, dy) 위치의 샘플과 비교.
    * stride개마다 한 샘플. 보이는 샘플이 절반 미만이면 −2.
    */
@@ -349,7 +432,7 @@ export class VerifyModel {
     const step = 1 << L;
     // 거친 단계에서 ROI 픽셀 수 정도만 샘플
     const areaL = (this.roi.width / step) * (this.roi.height / step);
-    const stride = Math.max(1, Math.floor(this.n / Math.max(64, Math.min(256, areaL))));
+    const stride = Math.max(1, Math.floor(this.n / Math.max(64, Math.min(160, areaL))));
     const cxl = (this.roi.x + this.roi.width / 2) / step;
     const cyl = (this.roi.y + this.roi.height / 2) / step;
     const dx0 = Math.ceil(-cxl);
@@ -360,32 +443,21 @@ export class VerifyModel {
     const mh = dy1 - dy0 + 1;
     const cands: number[] = []; // (dx, dy) ref px 쌍
     if (mw > 0 && mh > 0) {
-      // 샘플별 정수 위치·쌍선형 가중치 (정수 이동이면 소수부가 그대로라 한 번만 계산)
+      // 샘플별 가장 가까운 픽셀 (거친 지도는 봉우리 후보만 찾는다 — 정밀화는 아래에서 쌍선형으로)
       const ns = Math.ceil(this.n / stride);
       const ix = new Int32Array(ns);
       const iy = new Int32Array(ns);
-      const wts = new Float32Array(ns * 4);
       const va = new Float32Array(ns);
       const vals = this.vals[L];
       const sc = 1 / step;
       let m = 0;
       for (let k = 0; k < this.n; k += stride, m++) {
-        const x = this.qx[k] * sc;
-        const y = this.qy[k] * sc;
-        const fx0 = Math.floor(x);
-        const fy0 = Math.floor(y);
-        const fx = x - fx0;
-        const fy = y - fy0;
-        ix[m] = fx0;
-        iy[m] = fy0;
-        wts[m * 4] = (1 - fx) * (1 - fy);
-        wts[m * 4 + 1] = fx * (1 - fy);
-        wts[m * 4 + 2] = (1 - fx) * fy;
-        wts[m * 4 + 3] = fx * fy;
+        ix[m] = Math.round(this.qx[k] * sc);
+        iy[m] = Math.round(this.qy[k] * sc);
         va[m] = vals[k];
       }
       const map = new Float32Array(mw * mh);
-      nccShiftMapKernel(img.data, W, Hh, ix, iy, wts, va, m, dx0, dy0, mw, mh, map);
+      nccShiftMapKernel(img.data, W, Hh, ix, iy, va, m, dx0, dy0, mw, mh, map);
       const found: { s: number; dx: number; dy: number }[] = [];
       for (let yy = 0; yy < mh; yy++) {
         for (let xx = 0; xx < mw; xx++) {
@@ -413,25 +485,35 @@ export class VerifyModel {
       found.sort((a, b) => b.s - a.s);
       for (let i = 0; i < Math.min(10, found.length); i++) cands.push(found[i].dx, found[i].dy);
     }
+    const nMap = cands.length;
     if (extraShifts) {
-      for (let i = 0; i + 1 < extraShifts.length && cands.length < 60; i += 2) {
+      // 이미 있는 후보와 거친 단계 한 칸 안이면 정밀화가 같은 봉우리로 가므로 건너뛴다
+      const tol = 0.75 * step;
+      for (let i = 0; i + 1 < extraShifts.length && cands.length < 48; i += 2) {
         const dx = extraShifts[i];
         const dy = extraShifts[i + 1];
         if (Math.abs(dx) < minShift && Math.abs(dy) < minShift) continue;
-        cands.push(dx, dy);
+        let dup = false;
+        for (let j = 0; j + 1 < cands.length && !dup; j += 2) {
+          dup = Math.abs(cands[j] - dx) <= tol && Math.abs(cands[j + 1] - dy) <= tol;
+        }
+        if (!dup) cands.push(dx, dy);
       }
     }
 
     const out = emptyVerify();
     const fStride = Math.max(1, Math.floor(this.n / 256));
     for (let c = 0; c + 1 < cands.length; c += 2) {
-      // 단계를 내려가며 ±1칸 정밀화 (전역 NCC 기준)
+      // 단계를 내려가며 ±1칸 정밀화 (전역 NCC 기준). 특징 쌍둥이 변위는 이미 몇 px 정확도라
+      // 거친 단계를 건너뛰고 기준 단계 근처에서만 찾는다 (잔무늬 반복은 거친 단계에서 뭉개지기도 한다).
       let bx = cands[c];
       let by = cands[c + 1];
-      for (let l = L; l >= lv; l--) {
+      const lTop = c < nMap ? L : Math.min(L, lv + 1);
+      let bs = -2;
+      for (let l = lTop; l >= lv; l--) {
         const st = 1 << l;
         const im = refPyr.levels[l];
-        let bs = this.quickNcc(im, l, bx, by, fStride);
+        bs = this.quickNcc(im, l, bx, by, fStride);
         let nbx = bx;
         let nby = by;
         for (let oy = -1; oy <= 1; oy++) {
@@ -449,6 +531,8 @@ export class VerifyModel {
         by = nby;
       }
       if (Math.abs(bx) < minShift && Math.abs(by) < minShift) continue;
+      // 전역 NCC가 봉우리 목록(0.4)·모호 판정(crit.ncc)에 한참 못 미치면 블록 검증은 생략
+      if (bs < Math.min(0.4, crit.ncc) - 0.07) continue;
       const T: Mat3 = [1, 0, bx, 0, 1, by, 0, 0, 1];
       this.evaluate(refPyr, T, crit.blockGood, out, [lv, lv]);
       if (out.ncc >= 0.4 && !peakList.some((p) => Math.abs(p.dx - bx) <= 4 && Math.abs(p.dy - by) <= 4)) {
@@ -503,9 +587,20 @@ export class VerifyModel {
   }
 }
 
+/** 누적합 (n, Σa, Σb, Σa², Σb², Σab) → NCC. 한쪽이 평평하면 0 */
+function nccFromSums(s: Float64Array, o: number): number {
+  const c = s[o];
+  const ma = s[o + 1] / c;
+  const mb = s[o + 2] / c;
+  const va = s[o + 3] / c - ma * ma;
+  const vb = s[o + 4] / c - mb * mb;
+  const cov = s[o + 5] / c - ma * mb;
+  return va > 1e-6 && vb > 1 ? cov / Math.sqrt(va * vb) : 0;
+}
+
 /**
  * 정수 이동 (dx0..dx0+mw−1, dy0..dy0+mh−1) 마다 전역 NCC. 보이는 샘플이 절반 미만이면 −2.
- * 샘플 k의 위치 = (ix, iy) + 소수부(가중치 wts), 이동은 정수라 가중치 재사용.
+ * 샘플 k의 위치 = 가장 가까운 픽셀 (ix, iy) — 봉우리 후보 찾기용 거친 지도.
  */
 function nccShiftMapKernel(
   d: Uint8Array | Uint8ClampedArray,
@@ -513,7 +608,6 @@ function nccShiftMapKernel(
   Hh: number,
   ix: Int32Array,
   iy: Int32Array,
-  wts: Float32Array,
   va: Float32Array,
   ns: number,
   dx0: number,
@@ -522,10 +616,56 @@ function nccShiftMapKernel(
   mh: number,
   map: Float32Array,
 ): void {
+  // 샘플 경계 상자와 선형 오프셋: 이동 후에도 상자가 영상 안이면 경계 검사 없는 빠른 경로
+  let bx0 = Infinity;
+  let by0 = Infinity;
+  let bx1 = -Infinity;
+  let by1 = -Infinity;
+  let SA = 0;
+  let SAA = 0;
+  const off = new Int32Array(ns);
+  for (let k = 0; k < ns; k++) {
+    bx0 = Math.min(bx0, ix[k]);
+    by0 = Math.min(by0, iy[k]);
+    bx1 = Math.max(bx1, ix[k]);
+    by1 = Math.max(by1, iy[k]);
+    off[k] = iy[k] * W + ix[k];
+    SA += va[k];
+    SAA += va[k] * va[k];
+  }
   for (let yy = 0; yy < mh; yy++) {
     const dy = yy + dy0;
     for (let xx = 0; xx < mw; xx++) {
       const dx = xx + dx0;
+      // 경계 상자가 절반 넘게 밖이면 보이는 샘플도 절반 미만 (균일 격자) → 계산 없이 −2
+      const ox = Math.min(bx1 + dx, W - 1) - Math.max(bx0 + dx, 0) + 1;
+      const oy = Math.min(by1 + dy, Hh - 1) - Math.max(by0 + dy, 0) + 1;
+      if (ox <= 0 || oy <= 0 || ox * oy < 0.45 * (bx1 - bx0 + 1) * (by1 - by0 + 1)) {
+        map[yy * mw + xx] = -2;
+        continue;
+      }
+      if (bx0 + dx >= 0 && by0 + dy >= 0 && bx1 + dx < W && by1 + dy < Hh) {
+        const base = dy * W + dx;
+        let B = 0;
+        let BB = 0;
+        let AB = 0;
+        for (let k = 0; k < ns; k++) {
+          const b = d[off[k] + base];
+          B += b;
+          BB += b * b;
+          AB += va[k] * b;
+        }
+        let r = -2;
+        if (ns >= 8) {
+          const ma = SA / ns;
+          const mb = B / ns;
+          const v1 = SAA / ns - ma * ma;
+          const v2 = BB / ns - mb * mb;
+          r = v1 > 1e-6 && v2 > 1e-6 ? (AB / ns - ma * mb) / Math.sqrt(v1 * v2) : 0;
+        }
+        map[yy * mw + xx] = r;
+        continue;
+      }
       let nv = 0;
       let A = 0;
       let B = 0;
@@ -535,10 +675,8 @@ function nccShiftMapKernel(
       for (let k = 0; k < ns; k++) {
         const x = ix[k] + dx;
         const y = iy[k] + dy;
-        if (x < 0 || y < 0 || x >= W - 1 || y >= Hh - 1) continue;
-        const i = y * W + x;
-        const o = k * 4;
-        const b = wts[o] * d[i] + wts[o + 1] * d[i + 1] + wts[o + 2] * d[i + W] + wts[o + 3] * d[i + W + 1];
+        if (x < 0 || y < 0 || x >= W || y >= Hh) continue;
+        const b = d[y * W + x];
         const a = va[k];
         nv++;
         A += a;

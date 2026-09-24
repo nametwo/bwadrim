@@ -5,7 +5,8 @@ import { PlanarTracker } from "./tracker";
 import { Rng } from "./cv/rng";
 import { camHomography, makeTexture, renderView } from "./cv/testing/synth";
 
-// 성능 확인 (README: 데스크톱 Node 320×240, tracking 중앙값 ≤ 5ms, 재검출 ≤ 15ms).
+// 성능 확인 (데스크톱 Node 320×240). 저가 안드로이드는 3~4배 느리다고 보고 잡은 목표:
+//   추적 프레임 중앙값 ≤ 3ms · p95 ≤ 5ms, 재검출(ORB 탐색) 프레임 중앙값 ≤ 8ms · p95 ≤ 12ms, setReference ≤ 25ms.
 // 다른 테스트 파일과 병렬로 돌면 흔들리므로 기본은 목표의 1.6배까지 허용하고 실제 값을 로그로 남긴다.
 // TRACKING_PERF_STRICT=1 이면 목표 그대로 검사.
 
@@ -52,7 +53,7 @@ describe("PlanarTracker performance (320×240)", () => {
   for (let t = 0; t < N; t++) frames.push(renderView(world, view(t), W, H, { noise: 2, rng: noise }));
   const roi: Rect = { x: 100, y: 60, width: 120, height: 120 };
 
-  it("tracking frames: median ≤ 5ms", { timeout: 60000 }, () => {
+  it("tracking frames: median ≤ 3ms, p95 ≤ 5ms", { timeout: 60000 }, () => {
     const tr = new PlanarTracker({ reanchorInterval: 0 });
     tr.setReference(frames[0], roi, IDENTITY);
     const ms: number[] = [];
@@ -69,17 +70,21 @@ describe("PlanarTracker performance (320×240)", () => {
     console.log(
       `[perf] tracking frame 320x240: median ${med.toFixed(2)}ms, p95 ${p95(ms).toFixed(2)}ms (n=${ms.length}) — ${stageMedians(stages)}`,
     );
-    expect(med).toBeLessThan(5 * SLACK);
+    expect(med).toBeLessThan(3 * SLACK);
+    expect(p95(ms)).toBeLessThan(5 * SLACK);
   });
 
-  it("redetect (ORB search) frames: median ≤ 15ms", { timeout: 60000 }, () => {
+  it("redetect (ORB search) frames: median ≤ 8ms, p95 ≤ 12ms; setReference ≤ 25ms", { timeout: 60000 }, () => {
     const tr = new PlanarTracker();
     const ms: number[] = [];
+    const refMs: number[] = [];
     const stages: Record<string, number>[] = [];
     let found = 0;
     for (let k = 0; k < 60; k++) {
       // 매번 새 기준(고객 쪽 searching) → 다음 process는 반드시 ORB 재검출 프레임
+      const t0 = performance.now();
       tr.setReference(frames[k], roi);
+      if (k >= 15) refMs.push(performance.now() - t0);
       const r = tr.process(frames[k + 8], k * 50);
       expect(r.redetected).toBe(true);
       if (r.state === "tracking") found++;
@@ -92,7 +97,10 @@ describe("PlanarTracker performance (320×240)", () => {
     console.log(
       `[perf] redetect frame 320x240: median ${med.toFixed(2)}ms, p95 ${p95(ms).toFixed(2)}ms (n=${ms.length}, found ${found}/60) — ${stageMedians(stages)}`,
     );
+    console.log(`[perf] setReference 320x240: median ${median(refMs).toFixed(2)}ms, max ${Math.max(...refMs).toFixed(2)}ms`);
     expect(found).toBeGreaterThanOrEqual(57);
-    expect(med).toBeLessThan(15 * SLACK);
+    expect(med).toBeLessThan(8 * SLACK);
+    expect(p95(ms)).toBeLessThan(12 * SLACK);
+    expect(median(refMs)).toBeLessThan(25 * SLACK);
   });
 });

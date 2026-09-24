@@ -1,4 +1,4 @@
-// 이미지 파이프라인 조각: 면적 평균 축소(런타임 frame-source와 같은 필터), JPEG 왕복(WebRTC·기준 이미지 압축 흉내)
+// 이미지 파이프라인 조각: 면적 평균 축소·선형 확대(런타임 frame-source와 같은 필터), JPEG 왕복(WebRTC·기준 이미지 압축 흉내)
 import jpeg from "jpeg-js";
 import type { GrayImage } from "../../src/lib/tracking/types";
 import { rgbaToGray } from "../../src/lib/tracking/cv/color";
@@ -13,50 +13,96 @@ interface AreaWeights {
 
 const weightCache = new Map<string, AreaWeights>();
 
-/** 1차원 면적 평균 가중치: 출력 칸 i는 입력 구간 [i·r, (i+1)·r)를 덮는다 (r = src/dst) */
+/**
+ * 1차원 리샘플 가중치 (런타임 src/lib/tracking/frame-source.ts axisWeights와 같은 식).
+ * 축소: 면적 평균 — 출력 칸 i는 입력 구간 [i·r, (i+1)·r)를 덮는다 (r = src/dst).
+ * 확대: 픽셀 중심 정렬 선형 보간 (가장자리 복제).
+ */
 function areaWeights(src: number, dst: number): AreaWeights {
   const key = `${src}>${dst}`;
   const hit = weightCache.get(key);
   if (hit) return hit;
+  let res: AreaWeights;
   const r = src / dst;
-  const stride = Math.ceil(r) + 2;
-  const start = new Int32Array(dst);
-  const count = new Int32Array(dst);
-  const w = new Float32Array(dst * stride);
-  for (let i = 0; i < dst; i++) {
-    const a = i * r;
-    const b = (i + 1) * r;
-    const s0 = Math.floor(a);
-    const s1 = Math.min(src, Math.ceil(b - 1e-9));
-    start[i] = s0;
-    count[i] = s1 - s0;
-    for (let k = s0; k < s1; k++) {
-      const lo = Math.max(a, k);
-      const hi = Math.min(b, k + 1);
-      w[i * stride + (k - s0)] = (hi - lo) / r;
+  if (dst <= src) {
+    const stride = Math.ceil(r) + 2;
+    const start = new Int32Array(dst);
+    const count = new Int32Array(dst);
+    const w = new Float32Array(dst * stride);
+    for (let i = 0; i < dst; i++) {
+      const a = i * r;
+      const b = (i + 1) * r;
+      const s0 = Math.floor(a);
+      const s1 = Math.min(src, Math.ceil(b - 1e-9));
+      start[i] = s0;
+      count[i] = s1 - s0;
+      for (let k = s0; k < s1; k++) {
+        const lo = Math.max(a, k);
+        const hi = Math.min(b, k + 1);
+        w[i * stride + (k - s0)] = (hi - lo) / r;
+      }
     }
+    res = { start, count, w, stride };
+  } else {
+    const start = new Int32Array(dst);
+    const count = new Int32Array(dst);
+    const w = new Float32Array(dst * 2);
+    for (let i = 0; i < dst; i++) {
+      const sp = Math.min(src - 1, Math.max(0, (i + 0.5) * r - 0.5));
+      const s0 = Math.min(src - 1, Math.floor(sp));
+      const f = sp - s0;
+      start[i] = s0;
+      if (s0 + 1 < src && f > 1e-9) {
+        count[i] = 2;
+        w[i * 2] = 1 - f;
+        w[i * 2 + 1] = f;
+      } else {
+        count[i] = 1;
+        w[i * 2] = 1;
+      }
+    }
+    res = { start, count, w, stride: 2 };
   }
-  const res = { start, count, w, stride };
   weightCache.set(key, res);
   return res;
 }
 
+const LIMITED_SCALE = 255 / 219;
+
 /**
- * 면적 평균 축소 (분리형, 정확한 겹침 가중치). 정수배면 박스 평균과 같다 (2배 → 2x2 평균, 반올림).
- * 축소만 지원 (dst ≤ src).
+ * 리샘플 (런타임 frame-source.ts resamplePlane과 같은 결과): 축소 = 정확한 겹침 가중치 면적 평균,
+ * 확대 = 선형 보간, 반올림 floor(v + 0.5 + 1e-4). 가로·세로 모두 정수배 축소면 박스 합으로 정확히 (2배 → 2x2 평균).
+ * limited면 16~235 휘도(영상 디코더 Y)를 (Y−16)·255/219로 편다 — 리샘플 뒤 한 번만 반올림.
  */
-export function downscaleArea(
+export function resampleGray(
   src: Uint8Array | Uint8ClampedArray,
   sw: number,
   sh: number,
   dw: number,
   dh: number,
+  limited = false,
   out?: Uint8Array,
 ): Uint8Array {
-  if (dw > sw || dh > sh) throw new Error(`downscaleArea: upscale not supported ${sw}x${sh}→${dw}x${dh}`);
   const dst = out && out.length === dw * dh ? out : new Uint8Array(dw * dh);
-  if (dw === sw && dh === sh) {
+  if (dw === sw && dh === sh && !limited) {
     dst.set(src);
+    return dst;
+  }
+  const kx = sw / dw;
+  const ky = sh / dh;
+  if (Number.isInteger(kx) && Number.isInteger(ky)) {
+    const area = kx * ky;
+    for (let y = 0; y < dh; y++) {
+      for (let x = 0; x < dw; x++) {
+        let s = 0;
+        let r = ky * y * sw + kx * x;
+        for (let j = 0; j < ky; j++, r += sw) for (let i = 0; i < kx; i++) s += src[r + i];
+        let v = s / area;
+        if (limited) v = (v - 16) * LIMITED_SCALE;
+        const q = Math.floor(v + 0.5 + 1e-4);
+        dst[y * dw + x] = q < 0 ? 0 : q > 255 ? 255 : q;
+      }
+    }
     return dst;
   }
   const hw = areaWeights(sw, dw);
@@ -80,17 +126,49 @@ export function downscaleArea(
     for (let x = 0; x < dw; x++) {
       let acc = 0;
       for (let k = 0; k < n; k++) acc += tmp[(s0 + k) * dw + x] * vw.w[wo + k];
+      if (limited) acc = (acc - 16) * LIMITED_SCALE;
       const v = Math.floor(acc + 0.5 + 1e-4);
-      dst[y * dw + x] = v > 255 ? 255 : v;
+      dst[y * dw + x] = v < 0 ? 0 : v > 255 ? 255 : v;
     }
   }
   return dst;
 }
 
-/** 스트림 프레임 → 작업 해상도(긴 변 320) 그레이 */
+/**
+ * 면적 평균 축소 (분리형, 정확한 겹침 가중치). 정수배면 박스 평균과 같다 (2배 → 2x2 평균, 반올림).
+ * 런타임 frame-source(VideoFrame 경로)와 비트 단위로 같다. 확대도 되지만(선형) 이름대로 주로 축소에 쓴다.
+ */
+export function downscaleArea(
+  src: Uint8Array | Uint8ClampedArray,
+  sw: number,
+  sh: number,
+  dw: number,
+  dh: number,
+  out?: Uint8Array,
+): Uint8Array {
+  return resampleGray(src, sw, sh, dw, dh, false, out);
+}
+
+/** 스트림 프레임 → 작업 해상도(긴 변 320 — 작으면 확대, 런타임과 같다) 그레이 */
 export function toWorking(gray: Uint8Array, w: number, h: number): GrayImage {
   const [ww, wh] = workDims(w, h);
-  return { width: ww, height: wh, data: downscaleArea(gray, w, h, ww, wh) };
+  return { width: ww, height: wh, data: resampleGray(gray, w, h, ww, wh) };
+}
+
+/** 디코더 Y 평면(16~235) → 작업 해상도 그레이 (런타임 VideoFrame 경로: 리샘플과 범위 변환을 한 번에) */
+export function toWorkingLimited(y: Uint8Array, w: number, h: number): GrayImage {
+  const [ww, wh] = workDims(w, h);
+  return { width: ww, height: wh, data: resampleGray(y, w, h, ww, wh, true) };
+}
+
+/** 디코더 Y 평면(16~235) → 전체 범위 그레이, 같은 크기 (캔버스 경로 YUV→RGB→회색과 같은 값) */
+export function limitedToFull(y: Uint8Array): Uint8Array {
+  const out = new Uint8Array(y.length);
+  for (let i = 0; i < y.length; i++) {
+    const v = Math.floor((y[i] - 16) * LIMITED_SCALE + 0.5 + 1e-4);
+    out[i] = v < 0 ? 0 : v > 255 ? 255 : v;
+  }
+  return out;
 }
 
 export function grayToRgba(gray: Uint8Array, w: number, h: number): Uint8Array {

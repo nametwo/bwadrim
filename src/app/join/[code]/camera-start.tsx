@@ -2,12 +2,19 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CallSession, type CallState } from "@/lib/webrtc/call";
+import { fromRTCDataChannel, type ChannelDataLink } from "@/lib/webrtc/data-link";
 import { fetchIceServers } from "@/lib/webrtc/ice";
+import { CustomerCallView } from "@/components/call/customer-call-view";
+import type { AnchorOutcome } from "@/components/call/usage";
 
 type Phase = "ready" | "starting" | "call" | "denied";
 
+/** 한 통화에서 보낼 추적 결과 요약 상한 (폭주 방지) */
+const MAX_OUTCOME_EVENTS = 100;
+
 // 고객 화면: 한 화면에 한 가지 행동. 큰 버튼 하나 → 카메라 → 자동 연결.
 // getUserMedia는 반드시 버튼 탭(사용자 제스처) 이후 호출 (iOS 정책)
+// 기사님이 영상에 표시하면 내 화면의 같은 사물 위에 자동으로 보인다 (고객은 누를 것 없음).
 export function CameraStart({
   roomId,
   code,
@@ -18,15 +25,19 @@ export function CameraStart({
   const [phase, setPhase] = useState<Phase>("ready");
   const [callState, setCallState] = useState<CallState>("waiting");
   const [facing, setFacing] = useState<"environment" | "user">("environment");
+  // 미리보기 스트림 (카메라 전환 때 바뀐다 — 추적 세션은 같은 <video>로 계속)
+  const [preview, setPreview] = useState<MediaStream | null>(null);
+  const [link, setLink] = useState<ChannelDataLink | null>(null);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const sessionRef = useRef<CallSession | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+  const linkRef = useRef<ChannelDataLink | null>(null);
+  const outcomeEvents = useRef(0);
 
   function postEvent(name: string, props: Record<string, unknown> = {}) {
-    // 지표 기록 — 실패해도 진행을 막지 않는다
+    // 지표 기록 — 실패해도 진행을 막지 않는다 (keepalive: 페이지를 닫는 중에도 전송)
     fetch("/api/events", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -49,9 +60,13 @@ export function CameraStart({
       return;
     }
     streamRef.current = stream;
+    setPreview(stream);
     postEvent("camera_granted");
 
     const ice = await fetchIceServers(code);
+    const dataLink = fromRTCDataChannel(null);
+    linkRef.current = dataLink;
+    setLink(dataLink);
     const session = new CallSession({
       roomId,
       role: "customer",
@@ -76,6 +91,8 @@ export function CameraStart({
         remoteStreamRef.current = remote;
         if (audioRef.current) audioRef.current.srcObject = remote;
       },
+      // offer마다 새 'draw' 채널 → 같은 링크에 갈아 끼운다 (재연결)
+      onDataChannel: (dc) => dataLink.attach(dc),
     });
     sessionRef.current = session;
     session.join();
@@ -100,7 +117,7 @@ export function CameraStart({
         ...(old?.getAudioTracks() ?? []),
       ]);
       streamRef.current = merged;
-      if (videoRef.current) videoRef.current.srcObject = merged;
+      setPreview(merged);
       setFacing(next);
     } catch {
       // 전환 실패(전면 카메라 없음 등) — 현 카메라 유지
@@ -111,11 +128,15 @@ export function CameraStart({
     sessionRef.current?.hangup();
   }
 
-  // 로컬 미리보기 연결
+  // 기사님 표시 하나가 끝날 때마다 추적 결과 요약 (찾기까지 걸린 시간, 보인 비율 등)
+  // 이벤트 이름은 고정 목록의 pointer_used (actor=customer, props.side="customer")
+  function onOutcome(o: AnchorOutcome) {
+    if (++outcomeEvents.current > MAX_OUTCOME_EVENTS) return;
+    postEvent("pointer_used", { ...o });
+  }
+
+  // 기사님 음성 연결 (통화 화면이 뜬 뒤)
   useEffect(() => {
-    if (phase === "call" && videoRef.current && streamRef.current) {
-      videoRef.current.srcObject = streamRef.current;
-    }
     if (phase === "call" && audioRef.current && remoteStreamRef.current) {
       audioRef.current.srcObject = remoteStreamRef.current;
     }
@@ -126,6 +147,7 @@ export function CameraStart({
     return () => {
       sessionRef.current?.destroy();
       streamRef.current?.getTracks().forEach((t) => t.stop());
+      linkRef.current?.dispose();
     };
   }, []);
 
@@ -185,41 +207,19 @@ export function CameraStart({
           : "기사님을 기다리는 중…";
 
     return (
-      <main className="relative flex min-h-screen flex-col bg-black">
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className="absolute inset-0 h-full w-full object-cover"
-        />
+      <main className="fixed inset-0 bg-black">
+        {link && (
+          <CustomerCallView
+            stream={preview}
+            link={link}
+            statusText={statusText}
+            connected={callState === "connected"}
+            onFlip={flipCamera}
+            onHangup={hangup}
+            onOutcome={onOutcome}
+          />
+        )}
         <audio ref={audioRef} autoPlay />
-
-        <div className="relative mt-4 flex justify-center">
-          <span
-            className={`rounded-full px-4 py-2 text-sm font-medium text-white ${
-              callState === "connected" ? "bg-green-600/90" : "bg-black/50"
-            }`}
-          >
-            {statusText}
-          </span>
-        </div>
-
-        <div className="relative mt-auto flex items-center justify-center gap-4 bg-gradient-to-t from-black/70 to-transparent p-6 pb-10">
-          <button
-            onClick={flipCamera}
-            className="h-16 w-16 rounded-full bg-white/20 text-2xl text-white active:bg-white/40"
-            aria-label="카메라 전환"
-          >
-            🔄
-          </button>
-          <button
-            onClick={hangup}
-            className="h-16 rounded-full bg-red-600 px-10 text-lg font-bold text-white active:opacity-80"
-          >
-            종료
-          </button>
-        </div>
       </main>
     );
   }

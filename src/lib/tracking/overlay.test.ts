@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  ARROW_INSET_CSS,
+  ARROW_LENGTH_CSS,
+  GuideArrowState,
   PIN_MAX_CSS_RADIUS,
+  annotationBounds,
+  guideArrowBounds,
   PIN_MIN_CSS_RADIUS,
+  annotationAnchorPx,
+  computeGuideArrow,
+  primaryAnchorPx,
+  renderGuideArrow,
+  visibleRect,
+  type ArrowContext,
+  type GuideArrow,
+  type GuideUpdate,
   canvasBackingSize,
   computeDisplayMapping,
   cssToFrame,
@@ -333,5 +346,265 @@ describe("renderAnnotations", () => {
     // frame 픽셀 (80,60) → css: (80+0.5)·2 = 161
     expect(arcs[0].args[0]).toBeCloseTo(161, 9);
     expect(arcs[0].args[1]).toBeCloseTo(121, 9);
+  });
+});
+
+// ───────────────────────── 화면 밖 안내 화살표 ─────────────────────────
+
+describe("annotation anchor points", () => {
+  it("pin = position, stroke = length-weighted centroid (uneven sampling does not bias it)", () => {
+    expect(annotationAnchorPx({ id: "p", kind: "pin", p: { x: 0.25, y: 0.5 } }, 320, 240)).toEqual({ x: 80, y: 120 });
+    // 가로 선: 왼쪽에 점이 몰려 있어도 중심은 선의 가운데
+    const dense = [0, 0.01, 0.02, 0.03, 0.04, 0.05, 1].map((x) => ({ x, y: 0.5 }));
+    const c = annotationAnchorPx({ id: "s", kind: "stroke", points: dense }, 320, 240)!;
+    expect(c.x).toBeCloseTo(160, 9);
+    expect(c.y).toBeCloseTo(120, 9);
+    // 길이 0 → 점 평균
+    const z = annotationAnchorPx({ id: "z", kind: "stroke", points: [{ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }] }, 320, 240);
+    expect(z).toEqual({ x: 160, y: 120 });
+  });
+
+  it("primary = first annotation", () => {
+    const anns: Annotation[] = [
+      { id: "a", kind: "pin", p: { x: 0.1, y: 0.2 } },
+      { id: "b", kind: "pin", p: { x: 0.9, y: 0.9 } },
+    ];
+    expect(primaryAnchorPx(anns, 100, 100)).toEqual({ x: 10, y: 20 });
+    expect(primaryAnchorPx([], 100, 100)).toBeNull();
+  });
+});
+
+describe("computeGuideArrow", () => {
+  const ref = { width: 320, height: 240 };
+  const fs = { width: 320, height: 240 };
+  // 요소 = 프레임 크기 (1 CSS px = 1 frame px, contain)
+  const mc = computeDisplayMapping(320, 240, 320, 240, "contain")!;
+  const anchor = { x: 160, y: 120 };
+  const T = (tx: number, ty: number): Mat3 => [1, 0, tx, 0, 1, ty, 0, 0, 1];
+  const upd = (over: Partial<GuideUpdate>): GuideUpdate => ({
+    state: "tracking",
+    H: I,
+    hint: null,
+    refSize: ref,
+    frameSize: fs,
+    ...over,
+  });
+
+  it("visible pin → no arrow; unknown pose → no arrow", () => {
+    expect(computeGuideArrow(upd({}), anchor, mc)).toBeNull();
+    expect(computeGuideArrow(upd({ state: "searching", H: null }), anchor, mc)).toBeNull();
+    // lost인데 이유가 offscreen이 아니면 hint가 있어도 쓰지 않는다
+    expect(computeGuideArrow(upd({ state: "lost", H: null, hint: T(400, 0), reason: "unverified" }), anchor, mc)).toBeNull();
+    expect(computeGuideArrow(upd({ state: "lost", H: null, hint: null, reason: "offscreen" }), anchor, mc)).toBeNull();
+  });
+
+  it("hint to the right → arrow at the right inset edge pointing right", () => {
+    const a = computeGuideArrow(upd({ state: "lost", H: null, hint: T(400, 0), reason: "offscreen" }), anchor, mc)!;
+    expect(a.source).toBe("hint");
+    expect(a.x).toBeCloseTo(320 - ARROW_INSET_CSS, 9);
+    expect(a.y).toBeCloseTo(120.5, 9);
+    expect(a.angle).toBeCloseTo(0, 9);
+    expect(a.target!.x).toBeCloseTo(560.5, 9);
+  });
+
+  it("direction for each side and diagonals (clamped into the inset rectangle)", () => {
+    const cases: [number, number, number][] = [
+      [-400, 0, Math.PI],
+      [0, -300, -Math.PI / 2],
+      [0, 300, Math.PI / 2],
+    ];
+    for (const [tx, ty, ang] of cases) {
+      const a = computeGuideArrow(upd({ state: "lost", H: null, hint: T(tx, ty), reason: "offscreen" }), anchor, mc)!;
+      expect(Math.abs(Math.atan2(Math.sin(a.angle - ang), Math.cos(a.angle - ang)))).toBeLessThan(1e-9);
+      expect(a.x).toBeGreaterThanOrEqual(ARROW_INSET_CSS - 1e-9);
+      expect(a.x).toBeLessThanOrEqual(320 - ARROW_INSET_CSS + 1e-9);
+      expect(a.y).toBeGreaterThanOrEqual(ARROW_INSET_CSS - 1e-9);
+      expect(a.y).toBeLessThanOrEqual(240 - ARROW_INSET_CSS + 1e-9);
+    }
+    // 오른쪽 아래 멀리 → 오른쪽 아래 모서리, 목표를 향함
+    const d = computeGuideArrow(upd({ state: "lost", H: null, hint: T(1000, 800), reason: "offscreen" }), anchor, mc)!;
+    expect(d.x).toBeCloseTo(320 - ARROW_INSET_CSS, 9);
+    expect(d.y).toBeCloseTo(240 - ARROW_INSET_CSS, 9);
+    expect(d.angle).toBeCloseTo(Math.atan2(d.target!.y - d.y, d.target!.x - d.x), 9);
+    expect(d.angle).toBeGreaterThan(0);
+    expect(d.angle).toBeLessThan(Math.PI / 2);
+  });
+
+  it("cover crop: inside the frame but outside the element → arrow from H (source track), with hysteresis", () => {
+    // 4:3 영상을 세로 폰 요소(390×844)에 cover → 영상 폭 1125.33, 좌우 367.67px씩 잘림
+    const m = computeDisplayMapping(640, 480, 390, 844, "cover")!;
+    expect(visibleRect(m)).toEqual({ x: 0, y: 0, width: 390, height: 844 });
+    // 핀을 frame x = 40으로 (프레임 안) → css x = m.x + 40.5·(1125.33/320) ≈ -225 → 안 보임
+    const u = upd({ H: T(40 - 160, 0) });
+    const a = computeGuideArrow(u, anchor, m)!;
+    expect(a).not.toBeNull();
+    expect(a.source).toBe("track");
+    expect(a.x).toBeCloseTo(ARROW_INSET_CSS, 9);
+    expect(a.angle).toBeCloseTo(Math.PI, 6);
+    // 같은 자세도 contain이면 보인다 (프레임 전체가 화면에)
+    expect(computeGuideArrow(u, anchor, computeDisplayMapping(640, 480, 390, 844, "contain")!)).toBeNull();
+    // 가장자리 바로 안쪽(5px): 새로 띄우지는 않지만, 띄우고 있었으면 12px 안쪽까지 유지
+    const sx = m.width / 320;
+    const fxAt = (css: number) => (css - m.x) / sx - 0.5;
+    const edge = upd({ H: T(fxAt(5) - 160, 0) });
+    expect(computeGuideArrow(edge, anchor, m, { showing: false })).toBeNull();
+    expect(computeGuideArrow(edge, anchor, m, { showing: true })).not.toBeNull();
+    expect(computeGuideArrow(upd({ H: T(fxAt(20) - 160, 0) }), anchor, m, { showing: true })).toBeNull();
+  });
+
+  it("contain letterbox counts as not visible (visible = video rect)", () => {
+    const m = computeDisplayMapping(640, 480, 390, 844, "contain")!;
+    const V = visibleRect(m);
+    expect(V.y).toBeCloseTo((844 - 292.5) / 2, 9);
+    expect(V.height).toBeCloseTo(292.5, 9);
+    const a = computeGuideArrow(upd({ state: "lost", H: null, hint: T(0, -400), reason: "offscreen" }), anchor, m)!;
+    // 화살표는 영상 사각형 안쪽 위 가장자리 (레터박스가 아니라)
+    expect(a.y).toBeCloseTo(V.y + ARROW_INSET_CSS, 9);
+    expect(a.angle).toBeCloseTo(-Math.PI / 2, 9);
+  });
+
+  it("per-side insets keep the arrow clear of UI chrome", () => {
+    const a = computeGuideArrow(upd({ state: "lost", H: null, hint: T(0, 400), reason: "offscreen" }), anchor, mc, {
+      inset: { bottom: 100 },
+    })!;
+    expect(a.y).toBeCloseTo(140, 9);
+    expect(a.angle).toBeCloseTo(Math.PI / 2, 9);
+  });
+
+  it("anchor behind the camera / at infinity still gets a sensible direction", () => {
+    // w = 1 − 0.004·x_ref: ref 중심(160) w=0.36 > 0, 기준점 x=300 → w = −0.2 (카메라 뒤, 오른쪽 방향)
+    const H: Mat3 = [1, 0, 0, 0, 1, 0, -0.004, 0, 1];
+    const a = computeGuideArrow(upd({ state: "lost", H: null, hint: H, reason: "offscreen" }), { x: 300, y: 120 }, mc)!;
+    expect(a.target).toBeNull();
+    expect(Math.cos(a.angle)).toBeGreaterThan(0.9); // 오른쪽
+    expect(a.x).toBeCloseTo(320 - ARROW_INSET_CSS, 9);
+    // H 전체 부호가 뒤집혀도 같은 답 (호모그래피는 스케일 임의)
+    const neg = H.map((v) => -v);
+    const b = computeGuideArrow(upd({ state: "lost", H: null, hint: neg, reason: "offscreen" }), { x: 300, y: 120 }, mc)!;
+    expect(b.angle).toBeCloseTo(a.angle, 9);
+    expect(b.x).toBeCloseTo(a.x, 9);
+    // 추적 중 H라도 기준점이 카메라 뒤면 (그릴 수 없으니) 화살표
+    expect(computeGuideArrow(upd({ H }), { x: 300, y: 120 }, mc)).not.toBeNull();
+  });
+
+  it("non-finite input → null", () => {
+    expect(computeGuideArrow(upd({ H: [Number.NaN, 0, 0, 0, 1, 0, 0, 0, 1] }), anchor, mc)).toBeNull();
+    expect(computeGuideArrow(upd({}), { x: Number.NaN, y: 0 }, mc)).toBeNull();
+  });
+});
+
+describe("GuideArrowState", () => {
+  const ref = { width: 320, height: 240 };
+  const mc = computeDisplayMapping(320, 240, 320, 240, "contain")!;
+  const hintU: GuideUpdate = { state: "lost", H: null, hint: [1, 0, 400, 0, 1, 0, 0, 0, 1], reason: "offscreen", refSize: ref, frameSize: ref };
+  const lostU: GuideUpdate = { state: "lost", H: null, hint: null, reason: "unverified", refSize: ref, frameSize: ref };
+  const visU: GuideUpdate = { state: "tracking", H: I, hint: null, refSize: ref, frameSize: ref };
+  const p = { x: 160, y: 120 };
+
+  it("holds briefly across gaps, clears immediately when the pin is visible", () => {
+    const g = new GuideArrowState(300);
+    expect(g.next(hintU, p, mc, 0)).not.toBeNull();
+    expect(g.next(lostU, p, mc, 100)).not.toBeNull(); // 공백 메움
+    expect(g.showing()).toBe(true);
+    expect(g.next(lostU, p, mc, 350)).toBeNull(); // 300ms 지남
+    expect(g.next(hintU, p, mc, 400)).not.toBeNull();
+    expect(g.next(visU, p, mc, 410)).toBeNull(); // 보이면 즉시
+    g.next(hintU, p, mc, 500);
+    g.reset();
+    expect(g.showing()).toBe(false);
+    expect(g.next(null, null, null, 510)).toBeNull();
+  });
+});
+
+describe("renderGuideArrow", () => {
+  function arrowRecorder() {
+    const base = recorder();
+    const tf: string[] = [];
+    const ctx = Object.assign(base.ctx, {
+      translate: (x: number, y: number) => tf.push(`t${x.toFixed(2)},${y.toFixed(2)}`),
+      rotate: (a: number) => tf.push(`r${a.toFixed(3)}`),
+      scale: (x: number) => tf.push(`s${x.toFixed(3)}`),
+    }) as unknown as ArrowContext;
+    return { ...base, ctx, tf };
+  }
+
+  it("draws dark + white outlines and a red fill, rotated toward the target, tip never past the clamp", () => {
+    const r = arrowRecorder();
+    const a: GuideArrow = { x: 300, y: 100, angle: Math.PI / 2, target: null, source: "hint" };
+    renderGuideArrow(r.ctx, a, { timeMs: 0 });
+    expect(r.paths.map((p) => [p.style, p.width])).toEqual([
+      ["rgba(0,0,0,0.45)", 11],
+      ["#FFFFFF", 6],
+    ]);
+    expect(r.ops.filter((o) => o.op === "fill").map((o) => o.style)).toEqual(["#FF3B30"]);
+    expect(r.tf[0]).toBe("t300.00,100.00");
+    expect(r.tf[1]).toBe(`r${(Math.PI / 2).toFixed(3)}`);
+    // 맥동: t=0이면 8px 뒤, 반 주기(600ms)에 끝 = 클램프 위치
+    expect(r.tf[2]).toBe("t-8.00,0.00");
+    const r2 = arrowRecorder();
+    renderGuideArrow(r2.ctx, a, { timeMs: 600 });
+    expect(r2.tf[2]).toBe("t0.00,0.00");
+    // 모양의 끝은 원점(+x 방향 최대)
+    const xs = r.paths[0].points.map((p) => p.x);
+    expect(Math.max(...xs)).toBe(0);
+    expect(Math.min(...xs)).toBe(-ARROW_LENGTH_CSS);
+  });
+
+  it("skips invalid arrows and zero opacity", () => {
+    const r = arrowRecorder();
+    renderGuideArrow(r.ctx, { x: Number.NaN, y: 0, angle: 0, target: null, source: "hint" });
+    renderGuideArrow(r.ctx, { x: 1, y: 1, angle: 0, target: null, source: "hint" }, { opacity: 0 });
+    expect(r.paths.length + r.ops.length).toBe(0);
+  });
+});
+
+describe("draw bounds (partial clears)", () => {
+  const ref = { width: 320, height: 240 };
+  const m: DisplayMapping = computeDisplayMapping(320, 240, 320, 240, "fill")!;
+  it("cover everything renderAnnotations / renderGuideArrow touch", () => {
+    const anns: Annotation[] = [
+      { id: "p", kind: "pin", p: { x: 0.5, y: 0.5 } },
+      { id: "s", kind: "stroke", points: [{ x: 0.1, y: 0.1 }, { x: 0.9, y: 0.2 }] },
+    ];
+    for (const H of [I, [4, 0, -400, 0, 4, -300, 0, 0, 1], [3, 0, 0, 0, 3, 0, 0, 0.004, 1]] as Mat3[]) {
+      const b = annotationBounds(anns, H, ref, frame, m)!;
+      for (const t of [0, 400, 800, 1200, 1599]) {
+        const r = recorder();
+        renderAnnotations(r.ctx, anns, H, ref, frame, m, { timeMs: t });
+        for (const path of r.paths) {
+          for (const p of path.points) {
+            const pad = path.width / 2;
+            expect(p.x - pad).toBeGreaterThanOrEqual(b.x);
+            expect(p.x + pad).toBeLessThanOrEqual(b.x + b.width);
+            expect(p.y - pad).toBeGreaterThanOrEqual(b.y);
+            expect(p.y + pad).toBeLessThanOrEqual(b.y + b.height);
+          }
+        }
+      }
+    }
+    // 카메라 뒤로 가는 점이 있으면 모름(null) → 전체 지우기
+    expect(annotationBounds(anns, [1, 0, 0, 0, 1, 0, -0.01, 0, 2], ref, frame, m)).toBeNull();
+  });
+
+  it("arrow bounds hold the rotated, pulsed, outlined shape", () => {
+    for (let k = 0; k < 16; k++) {
+      const a: GuideArrow = { x: 100, y: 200, angle: (k * Math.PI) / 8, target: null, source: "hint" };
+      const b = guideArrowBounds(a);
+      // 모양 꼭짓점을 회전·최대 맥동(크기 1.06, 밀기 0)으로
+      for (const [sx, sy] of [
+        [0, 0],
+        [-28, 24],
+        [-64, 10],
+        [-64, -10],
+        [-28, -24],
+      ]) {
+        const x = a.x + Math.cos(a.angle) * sx * 1.06 - Math.sin(a.angle) * sy * 1.06;
+        const y = a.y + Math.sin(a.angle) * sx * 1.06 + Math.cos(a.angle) * sy * 1.06;
+        expect(x - 6).toBeGreaterThanOrEqual(b.x);
+        expect(x + 6).toBeLessThanOrEqual(b.x + b.width);
+        expect(y - 6).toBeGreaterThanOrEqual(b.y);
+        expect(y + 6).toBeLessThanOrEqual(b.y + b.height);
+      }
+    }
   });
 });

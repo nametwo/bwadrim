@@ -321,16 +321,75 @@ export const DEFAULT_ORB_PARAMS: OrbParams = {
   cellSize: 24,
 };
 
+/**
+ * 한 스케일 피라미드의 단계별·임계값별 "전체 화면" FAST 코너(+Harris 점수) 캐시.
+ * 같은 영상에서 영역만 바꿔 여러 번 뽑을 때(기준 ROI 넓히기) FAST·점수 계산을 한 번만 한다.
+ * 피라미드 내용이 바뀌면 reset()할 것.
+ */
+export class OrbCornerCache {
+  private lists = new Map<number, { list: CornerList; x0: number; y0: number; x1: number; y1: number }>();
+
+  reset(): void {
+    this.lists.clear();
+  }
+
+  /**
+   * l단계·임계값 thr의 코너 (Harris 점수). 캐시가 영역 [x0, x1) × [y0, y1)을 덮으면 그대로(호출측이 거른다),
+   * 아니면 그 영역만 새로 검출해 캐시를 바꾼다 — 작은 ROI에 전체 화면 검출을 하지 않도록.
+   */
+  get(sp: ScalePyramid, l: number, thr: number, x0: number, y0: number, x1: number, y1: number): CornerList {
+    const key = l * 256 + (thr & 255);
+    const e = this.lists.get(key);
+    if (e && e.x0 <= x0 && e.y0 <= y0 && e.x1 >= x1 && e.y1 >= y1) return e.list;
+    const img = sp.levels[l];
+    const list = e ? e.list : new CornerList(1024);
+    detectFast(img, thr, ORB_BORDER, list, { x0, y0, x1, y1 });
+    scoreCorners(img, list, "harris", 3);
+    this.lists.set(key, { list, x0, y0, x1, y1 });
+    return list;
+  }
+}
+
+/** src 중 영역 [x0, x1) × [y0, y1) 안의 코너만 dst로 (순서 유지) */
+function filterCorners(src: CornerList, dst: CornerList, x0: number, y0: number, x1: number, y1: number): number {
+  dst.reserve(src.n);
+  let n = 0;
+  for (let i = 0; i < src.n; i++) {
+    const x = src.x[i];
+    const y = src.y[i];
+    if (x < x0 || y < y0 || x >= x1 || y >= y1) continue;
+    dst.x[n] = x;
+    dst.y[n] = y;
+    dst.score[n] = src.score[i];
+    n++;
+  }
+  dst.n = n;
+  return n;
+}
+
 /** ORB 추출기. 내부 버퍼를 재사용하므로 인스턴스를 오래 들고 쓸 것 */
 export class OrbExtractor {
   private raw = new CornerList(4096);
   private sel = new CornerList(1024);
+  /** 단계별 적응 FAST 임계값 (adaptive 호출에서만 읽고 고친다) */
+  private thr: number[] = [];
 
   /**
    * region(0단계 좌표)이 있으면 키포인트를 그 안에서만 뽑는다.
    * 결과는 out 끝에 추가된다(append). 추가된 개수를 돌려준다.
+   *
+   * adaptive: 연속 프레임용. 단계마다 지난번에 알맞았던 FAST 임계값으로 한 번만 훑고(모자라면 다음엔 낮추고
+   * 넘치면 올림), 목표의 절반도 안 될 때만 최저 임계값으로 다시 훑는다 → 두 번 훑는 일이 드물다.
+   * 결과가 이전 호출에 따라 달라지므로 기준(ref) 추출에는 쓰지 않는다.
    */
-  extract(sp: ScalePyramid, p: OrbParams, out: OrbFeatures, region?: Rect | null): number {
+  extract(
+    sp: ScalePyramid,
+    p: OrbParams,
+    out: OrbFeatures,
+    region?: Rect | null,
+    adaptive = false,
+    cache: OrbCornerCache | null = null,
+  ): number {
     const nl = Math.min(p.nLevels, sp.count);
     if (nl <= 0) return 0;
     let wsum = 0;
@@ -355,12 +414,25 @@ export class OrbExtractor {
         reg.y1 = Math.min(reg.y1, Math.ceil((region.y + region.height) / sy));
       }
       if (reg.x1 - reg.x0 < 2 || reg.y1 - reg.y0 < 2) continue;
-      let nRaw = detectFast(img, p.fastThreshold, ORB_BORDER, this.raw, reg);
-      if (nRaw < want && p.minFastThreshold < p.fastThreshold) {
-        nRaw = detectFast(img, p.minFastThreshold, ORB_BORDER, this.raw, reg);
+      const t0 = adaptive ? (this.thr[l] ?? p.fastThreshold) : p.fastThreshold;
+      const x0 = Math.max(ORB_BORDER, Math.floor(reg.x0));
+      const y0 = Math.max(ORB_BORDER, Math.floor(reg.y0));
+      const x1 = Math.min(img.width - ORB_BORDER, Math.ceil(reg.x1));
+      const y1 = Math.min(img.height - ORB_BORDER, Math.ceil(reg.y1));
+      let nRaw = cache
+        ? filterCorners(cache.get(sp, l, t0, x0, y0, x1, y1), this.raw, x0, y0, x1, y1)
+        : detectFast(img, t0, ORB_BORDER, this.raw, reg);
+      if (adaptive) {
+        if (nRaw < want) this.thr[l] = Math.max(p.minFastThreshold, t0 - 3);
+        else if (nRaw > 3 * want) this.thr[l] = Math.min(p.fastThreshold, t0 + 2);
+      }
+      if (nRaw < (adaptive ? want / 2 : want) && p.minFastThreshold < t0) {
+        nRaw = cache
+          ? filterCorners(cache.get(sp, l, p.minFastThreshold, x0, y0, x1, y1), this.raw, x0, y0, x1, y1)
+          : detectFast(img, p.minFastThreshold, ORB_BORDER, this.raw, reg);
       }
       if (nRaw === 0) continue;
-      scoreCorners(img, this.raw, "harris", 3);
+      if (!cache) scoreCorners(img, this.raw, "harris", 3);
       const cs = Math.max(8, p.cellSize);
       const ncells =
         Math.ceil((reg.x1 - reg.x0) / cs) * Math.ceil((reg.y1 - reg.y0) / cs);

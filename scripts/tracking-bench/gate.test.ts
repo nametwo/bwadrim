@@ -47,7 +47,7 @@ describe.skipIf(!HAS_TRACKER)("tracking quality gate (README 품질 목표)", ()
       const seq = seqs[0];
       const cached = readFrameCache(seq);
       const tr = factory.create(seq);
-      tr.setReference(seq.ref, seq.roi, seq.initialH);
+      tr.setReference(seq.ref, seq.roi, seq.initialH, seq.pinRef);
       for (let k = 0; k < Math.min(10, seq.times.length); k++) {
         tr.process(cached ? cached.frame(k) : seq.renderFrame(k), seq.times[k] * 1000);
       }

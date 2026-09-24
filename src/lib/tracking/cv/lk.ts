@@ -12,6 +12,8 @@ export interface LKParams {
   maxIters: number;
   /** 수렴 판정 (단계 픽셀) */
   epsilon: number;
+  /** 거친 단계(1 이상)의 수렴 판정 — 다음 단계가 다시 다듬으므로 느슨해도 된다 (없으면 epsilon) */
+  coarseEpsilon?: number;
   /** 0단계 최소 고유값 ((그레이/px)², 창 평균). 무늬 없는 창 거부 */
   minEig: number;
   /** 사용할 최대 피라미드 단계 수 */
@@ -385,6 +387,8 @@ export class PyrLK {
     const d = this.d;
     const npx = (2 * r + 1) * (2 * r + 1);
     const eps2 = p.epsilon * p.epsilon;
+    const ce = p.coarseEpsilon ?? p.epsilon;
+    const ceps2 = ce * ce;
     const top = 1 / (1 << (L - 1));
     d[0] = (gx - x0) * top;
     d[1] = (gy - y0) * top;
@@ -406,7 +410,7 @@ export class PyrLK {
         const thr = l === 0 ? p.minEig : p.minEig * 0.1;
         ok = minEig >= thr && det > 1e-9;
       }
-      if (ok) ok = iterateLevel(J.data, w, h, x, y, r, T, GX, GY, acc, p.maxIters, eps2, d, this.Jw);
+      if (ok) ok = iterateLevel(J.data, w, h, x, y, r, T, GX, GY, acc, p.maxIters, l === 0 ? eps2 : ceps2, d, this.Jw);
       if (l === 0) {
         if (!ok) return -1;
         let res = 0;

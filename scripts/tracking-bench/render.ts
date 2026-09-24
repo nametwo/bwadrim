@@ -25,6 +25,9 @@ import {
   TARGET_AFFINE,
   invertOrThrow,
 } from "./camera";
+import { type IspSpec, ispTone } from "./isp";
+import { type LensMap, type LensSpec, distort, lensFor, lensMap } from "./lens";
+import { type ReliefHit, type ReliefMap, reliefShadow, traceRelief } from "./relief";
 import { Rng, gaussianTable, hashString } from "./rng";
 import type { MipTexture, Texture } from "./textures";
 
@@ -97,6 +100,32 @@ export interface SceneSetup {
   focusSigma?: (t: number) => number;
   /** 조명 깜빡임 (교류 60Hz → 120Hz 밝기 변화, 롤링 셔터로 가로 띠가 흐른다) */
   flicker?: { hz: number; depth: number };
+  // ── 실감(realism) — 하나라도 있으면 realRows 경로로 그린다 (기존 시나리오 경로는 그대로) ──
+  /** 렌즈 왜곡 (센서 픽셀 ← 핀홀). 정규화는 초점 호흡 없는 기준 초점거리 */
+  lens?: LensSpec;
+  /** 입체 부조 (대상 텍스처 위 높이 지도) */
+  relief?: ReliefMap;
+  /** 면광원 정반사 (형광등·창이 광택 표면에 비침) */
+  area?: AreaLight;
+  /** ISP 톤 곡선 (톤 LUT에 합쳐짐) */
+  ispTone?: IspSpec["tone"];
+}
+
+/** 대상 평면과 평행한 사각형 광원 (z = −dist). 광택 표면의 거울 반사로 보인다 */
+export interface AreaLight {
+  /** 광원 중심 (월드 X,Y, 평면 단위) */
+  x: number;
+  y: number;
+  /** 대상 평면 앞 거리 (평면 단위) */
+  dist: number;
+  /** 크기 (평면 단위), 회전(도) */
+  w: number;
+  h: number;
+  angle: number;
+  /** 수직 입사 때 가산 세기 (선형광). 비스듬하면 프레넬로 커진다 */
+  strength: number;
+  /** 가장자리 흐림 (평면 단위, 광원 평면에서) — 표면 거칠기 */
+  blur: number;
 }
 
 export interface CameraFrame {
@@ -111,6 +140,60 @@ interface PoseSample {
   tInvTarget: Mat3;
   tInvBg: Mat3;
   tInvHand: Mat3 | null;
+  /** 실감(부조) 경로만: 카메라 중심, 핀홀 픽셀 → 월드 광선 방향 (Rᵀ·K⁻¹) */
+  C?: Vec3;
+  ray?: Mat3;
+}
+
+/** realRows에 넘기는 프레임·서브프레임 상태 */
+interface RealCtx {
+  W: number;
+  H: number;
+  N: number;
+  nch: number;
+  ts: number;
+  ro: number;
+  m: number;
+  dt: number;
+  tMin: number;
+  table: PoseSample[];
+  accum: Float32Array;
+  vig: Float32Array;
+  surf: Uint8Array;
+  lodBias: number;
+  lm: LensMap | null;
+  /** 노출 중심 시각의 카메라 중심 (부조 없을 때 정반사용) */
+  cam: Vec3;
+  dropK: number;
+  dropX: number;
+  dropY: number;
+  dropSoft: number;
+  glossOn: boolean;
+  spx: number;
+  spy: number;
+  g2: number;
+  gStr: number;
+  blob: ShadowBlob | null;
+  hand: {
+    hp: HandPose;
+    hx0: number;
+    hx1: number;
+    hy0: number;
+    hy1: number;
+    pxMm: number;
+    hc: number;
+    hs: number;
+    shOffX: number;
+    shOffY: number;
+    shOffBgX: number;
+    shOffBgY: number;
+    shSoft: number;
+    upm: number;
+    hShadow: number;
+    hpx: number;
+    hpy: number;
+    hcol: readonly number[];
+  } | null;
 }
 
 const TONE_N = 16384;
@@ -342,7 +425,11 @@ export class CameraRenderer {
         prev?.tInvHand ?? undefined,
       );
     }
-    return { tInvTarget, tInvBg, tInvHand };
+    if (!s.relief) return { tInvTarget, tInvBg, tInvHand };
+    const R = pose.R;
+    const Kinv: Mat3 = [1 / K.f, 0, -K.cx / K.f, 0, 1 / K.f, -K.cy / K.f, 0, 0, 1];
+    const ray = mul3([R[0], R[3], R[6], R[1], R[4], R[7], R[2], R[5], R[8]], Kinv);
+    return { tInvTarget, tInvBg, tInvHand, C: [pose.C[0], pose.C[1], pose.C[2]], ray };
   }
 
   private vignette(w: number, h: number): Float32Array {
@@ -367,11 +454,13 @@ export class CameraRenderer {
   }
 
   private toneLut(p: PhotoParams): Uint8Array {
-    const key = `${p.contrast.toFixed(4)}|${p.brightness.toFixed(4)}`;
+    const it = this.scene.ispTone;
+    const key = `${p.contrast.toFixed(4)}|${p.brightness.toFixed(4)}${it ? `|${JSON.stringify(it)}` : ""}`;
     if (key === this.toneKey) return this.tone;
     for (let i = 0; i <= TONE_N; i++) {
       const s = i / TONE_N;
-      const e = s <= 0.0031308 ? 12.92 * s : 1.055 * Math.pow(s, 1 / 2.4) - 0.055;
+      let e = s <= 0.0031308 ? 12.92 * s : 1.055 * Math.pow(s, 1 / 2.4) - 0.055;
+      if (it) e = ispTone(e, it);
       let o = 0.5 + p.contrast * (e - 0.5) + p.brightness;
       o = o < 0 ? 0 : o > 1 ? 1 : o;
       this.tone[i] = Math.round(o * 255);
@@ -501,6 +590,8 @@ export class CameraRenderer {
     const table: PoseSample[] = [];
     for (let i = 0; i < m; i++) table.push(this.sample(tMin + i * dt, K, i > 0 ? table[i - 1] : null));
     const hasHand = table.every((p) => p.tInvHand !== null);
+    const real = !!(s.lens || s.relief || s.area);
+    const lm = s.lens ? lensMap(lensFor(s.lens, W, H), W, H) : null;
 
     const tgt = s.target;
     const bg = s.bg;
@@ -627,6 +718,16 @@ export class CameraRenderer {
       const hpx = hp ? hp.x : 0;
       const hpy = hp ? hp.y : 0;
       const blob = s.shadow ? s.shadow(ts) : null;
+
+      if (real) {
+        const pad = lm ? Math.ceil(lm.maxShift) + 2 : 0;
+        this.realRows({
+          W, H, N, nch, ts, ro, m, dt, tMin, table, accum, vig, surf, lodBias, lm, cam: pose.C,
+          dropK, dropX, dropY, dropSoft, glossOn, spx, spy, g2, gStr, blob,
+          hand: hp ? { hp, hx0: Math.max(0, hx0 - pad), hx1: Math.min(W - 1, hx1 + pad), hy0: Math.max(0, hy0 - pad), hy1: Math.min(H - 1, hy1 + pad), pxMm, hc, hs, shOffX, shOffY, shOffBgX, shOffBgY, shSoft, upm, hShadow, hpx, hpy, hcol } : null,
+        });
+        continue;
+      }
 
       for (let y = 0; y < H; y++) {
         // 이 행의 시각 (롤링 셔터) → 자세 표 보간
@@ -804,7 +905,10 @@ export class CameraRenderer {
     if (nSub > 1) {
       const inv = 1 / nSub;
       for (let i = 0; i < accum.length; i++) accum[i] *= inv;
-    } else if (!exact && e > 0 && motion > 0.75) this.motionBlur(t, K, e);
+    } else if (!exact && e > 0 && motion > 0.75) {
+      if (lm) this.motionBlurLens(t, K, e, lm);
+      else this.motionBlur(t, K, e);
+    }
 
     // 렌즈 번짐 [1 2 1]/4 (선형광, σ≈0.71) + 초점 흐림
     const fs = s.focusSigma ? s.focusSigma(t) : 0;
@@ -950,6 +1054,365 @@ export class CameraRenderer {
             sum += top + (bot - top) * fy;
           }
           dst[base + y * W + x] = sum / n;
+        }
+      }
+    }
+  }
+
+  /**
+   * 실감 경로의 행 패스 (기하 → 샘플 → 합성). 기존 경로와 같은 일을 하되
+   * (1) 센서 픽셀 → 핀홀 좌표를 렌즈 표로 (2) 대상은 부조가 있으면 광선 추적(윗면·옆벽·그늘)
+   * (3) 면광원 정반사를 더한다. 야코비안(텍스처 발자국)에는 렌즈 야코비안을 곱한다.
+   */
+  private realRows(c: RealCtx): void {
+    const s = this.scene;
+    const { W, H, N, nch, ts, ro, m, dt, tMin, table, accum, vig, surf, lodBias, lm } = c;
+    const tgt = s.target;
+    const bg = s.bg;
+    const Tw = tgt.width;
+    const Th = tgt.height;
+    const Bw = bg.width;
+    const Bh = bg.height;
+    const bgA = s.bgPlane.affine;
+    const R = s.relief ?? null;
+    const area = s.area ?? null;
+    const lightDir = s.lightDir;
+    const tList = this.tList;
+    const bList = this.bList;
+    const rowVal = this.rowVal;
+    const rowLight = this.rowLight;
+    const rowGlare = this.rowGlare;
+    const rowAlpha = this.rowAlpha;
+    const rowShade = this.rowShade;
+    const tInv = new Float64Array(9);
+    const bInv = new Float64Array(9);
+    const hInv = new Float64Array(9);
+    const ray = new Float64Array(9);
+    const C = new Float64Array(3);
+    const hit: ReliefHit = { u: 0, v: 0, z: 0, wall: false };
+    const hd = c.hand;
+    const hcol = hd ? hd.hcol : [0, 0, 0];
+    const ca = area ? Math.cos((area.angle * Math.PI) / 180) : 1;
+    const sa = area ? Math.sin((area.angle * Math.PI) / 180) : 0;
+    const lxy = Math.hypot(lightDir[0], lightDir[1]);
+    for (let y = 0; y < H; y++) {
+      const tr = ts + ((y + 0.5) / H - 0.5) * ro;
+      let fi = m > 1 ? (tr - tMin) / dt : 0;
+      if (fi < 0) fi = 0;
+      if (fi > m - 1) fi = m - 1;
+      const i0 = m > 1 ? Math.min(m - 2, fi | 0) : 0;
+      const f = m > 1 ? fi - i0 : 0;
+      const A = table[i0];
+      const B = table[m > 1 ? i0 + 1 : 0];
+      for (let k = 0; k < 9; k++) {
+        tInv[k] = A.tInvTarget[k] + (B.tInvTarget[k] - A.tInvTarget[k]) * f;
+        bInv[k] = A.tInvBg[k] + (B.tInvBg[k] - A.tInvBg[k]) * f;
+      }
+      if (R) {
+        for (let k = 0; k < 9; k++) ray[k] = A.ray![k] + (B.ray![k] - A.ray![k]) * f;
+        for (let k = 0; k < 3; k++) C[k] = A.C![k] + (B.C![k] - A.C![k]) * f;
+      } else {
+        C[0] = c.cam[0];
+        C[1] = c.cam[1];
+        C[2] = c.cam[2];
+      }
+      const handRow = hd !== null && y >= hd.hy0 && y <= hd.hy1;
+      if (handRow) {
+        const ha = A.tInvHand!;
+        const hb = B.tInvHand!;
+        for (let k = 0; k < 9; k++) hInv[k] = ha[k] + (hb[k] - ha[k]) * f;
+      }
+      const row = y * W;
+      tList.n = 0;
+      bList.n = 0;
+      for (let x = 0; x < W; x++) {
+        const i = row + x;
+        // 센서 → 핀홀
+        let qx = x + 0.5;
+        let qy = y + 0.5;
+        let ja = 1;
+        let jb = 0;
+        let jc = 0;
+        let jd = 1;
+        if (lm) {
+          qx = lm.qx[i];
+          qy = lm.qy[i];
+          ja = lm.ja[i];
+          jb = lm.jb[i];
+          jc = lm.jc[i];
+          jd = lm.jd[i];
+        }
+        let wx = 0;
+        let wy = 0;
+        let onTarget = false;
+        let glare = 0;
+        let light = 1;
+        let zs = 0;
+        // 대상: 핀홀 q에서 평면 z의 텍스처 좌표·야코비안 (du/dq) → 센서 야코비안 = du/dq · dq/ds
+        let u = 0;
+        let v = 0;
+        let dux = 0;
+        let dvx = 0;
+        let duy = 0;
+        let dvy = 0;
+        if (R) {
+          const rx = ray[0] * qx + ray[1] * qy + ray[2];
+          const ry = ray[3] * qx + ray[4] * qy + ray[5];
+          const rz = ray[6] * qx + ray[7] * qy + ray[8];
+          if (traceRelief(R, C[0], C[1], C[2], rx, ry, rz, hit)) {
+            onTarget = true;
+            u = hit.u;
+            v = hit.v;
+            zs = hit.z;
+            // uv = C + (z − Cz)/rz · (rx, ry) 의 q 미분
+            const kz = (zs - C[2]) / rz;
+            const ax = rx / rz;
+            const ay = ry / rz;
+            const du0 = kz * (ray[0] - ax * ray[6]);
+            const du1 = kz * (ray[1] - ax * ray[7]);
+            const dv0 = kz * (ray[3] - ay * ray[6]);
+            const dv1 = kz * (ray[4] - ay * ray[7]);
+            dux = du0 * ja + du1 * jc;
+            duy = du0 * jb + du1 * jd;
+            dvx = dv0 * ja + dv1 * jc;
+            dvy = dv0 * jb + dv1 * jd;
+            if (hit.wall) {
+              const kl = Math.hypot(ax, ay) || 1;
+              const lam = (ax * lightDir[0] + ay * lightDir[1]) / kl;
+              light *= Math.min(1, 0.4 + (0.6 * Math.max(0, lam)) / Math.max(0.3, lightDir[2]));
+            } else if (lxy > 1e-6) {
+              const sh = reliefShadow(R, u, v, -zs, lightDir[0], lightDir[1], lightDir[2]);
+              if (sh > 0) light *= 1 - 0.45 * sh;
+            }
+          }
+        } else {
+          const hw = tInv[6] * qx + tInv[7] * qy + tInv[8];
+          if (hw > 1e-12) {
+            const iw = 1 / hw;
+            u = (tInv[0] * qx + tInv[1] * qy + tInv[2]) * iw;
+            v = (tInv[3] * qx + tInv[4] * qy + tInv[5]) * iw;
+            if (u >= 0 && u < Tw && v >= 0 && v < Th) {
+              onTarget = true;
+              const du0 = (tInv[0] - u * tInv[6]) * iw;
+              const dv0 = (tInv[3] - v * tInv[6]) * iw;
+              const du1 = (tInv[1] - u * tInv[7]) * iw;
+              const dv1 = (tInv[4] - v * tInv[7]) * iw;
+              dux = du0 * ja + du1 * jc;
+              duy = du0 * jb + du1 * jd;
+              dvx = dv0 * ja + dv1 * jc;
+              dvy = dv0 * jb + dv1 * jd;
+            }
+          }
+        }
+        if (onTarget) {
+          wx = u;
+          wy = v;
+          pushAniso(tList, x, u, v, dux, dvx, duy, dvy, lodBias, 0, 0);
+          if (c.glossOn) {
+            const gx = u - c.spx;
+            const gy = v - c.spy;
+            const d2 = (gx * gx + gy * gy) * c.g2;
+            if (d2 < 12) glare = c.gStr * Math.exp(-d2);
+          }
+          if (area) {
+            // 거울 반사: 표면점 P에서 반사 광선이 광원 평면(z=−dist)에 닿는 점 Q
+            const zL = -area.dist;
+            const den = C[2] - zs;
+            if (den < -1e-9) {
+              const k = (zL - zs) / den;
+              const qxL = u + k * (u - C[0]) - area.x;
+              const qyL = v + k * (v - C[1]) - area.y;
+              const lx = ca * qxL + sa * qyL;
+              const ly = -sa * qxL + ca * qyL;
+              const b = area.blur;
+              const ex = (Math.abs(lx) - area.w / 2) / b;
+              const ey = (Math.abs(ly) - area.h / 2) / b;
+              if (ex < 1 && ey < 1) {
+                const fx = ex <= -1 ? 1 : 0.5 - 0.75 * ex + 0.25 * ex * ex * ex;
+                const fy = ey <= -1 ? 1 : 0.5 - 0.75 * ey + 0.25 * ey * ey * ey;
+                // 프레넬 (슐릭, F0 = 0.04) — 비스듬할수록 강해진다
+                const dxc = u - C[0];
+                const dyc = v - C[1];
+                const cosT = -den / Math.sqrt(dxc * dxc + dyc * dyc + den * den);
+                const om = 1 - cosT;
+                const fr = (0.04 + 0.96 * om * om * om * om * om) / 0.04;
+                glare += area.strength * fx * fy * fr;
+              }
+            }
+          }
+        } else {
+          const bw = bInv[6] * qx + bInv[7] * qy + bInv[8];
+          const iw = bw > 1e-12 ? 1 / bw : 1e12;
+          const bu = (bInv[0] * qx + bInv[1] * qy + bInv[2]) * iw;
+          const bv = (bInv[3] * qx + bInv[4] * qy + bInv[5]) * iw;
+          const du0 = (bInv[0] - bu * bInv[6]) * iw;
+          const dv0 = (bInv[3] - bv * bInv[6]) * iw;
+          const du1 = (bInv[1] - bu * bInv[7]) * iw;
+          const dv1 = (bInv[4] - bv * bInv[7]) * iw;
+          pushAniso(bList, x, bu, bv, du0 * ja + du1 * jc, dv0 * ja + dv1 * jc, du0 * jb + du1 * jd, dv0 * jb + dv1 * jd, lodBias, Bw, Bh);
+          wx = bgA[0] * bu + bgA[1] * bv + bgA[2];
+          wy = bgA[3] * bu + bgA[4] * bv + bgA[5];
+          if (c.dropK > 0) {
+            const px2 = wx - c.dropX;
+            const py2 = wy - c.dropY;
+            const ddx = px2 < 0 ? -px2 : px2 > Tw ? px2 - Tw : 0;
+            const ddy = py2 < 0 ? -py2 : py2 > Th ? py2 - Th : 0;
+            const dd = Math.sqrt(ddx * ddx + ddy * ddy) / c.dropSoft;
+            if (dd < 3) light *= 1 - 0.5 * Math.exp(-dd * dd);
+          }
+        }
+        const blob = c.blob;
+        if (blob) {
+          const ex = (wx - blob.x) / blob.rx;
+          const ey = (wy - blob.y) / blob.ry;
+          const d = (Math.sqrt(ex * ex + ey * ey) - 1) * Math.min(blob.rx, blob.ry);
+          const tt = (d + blob.soft) / (2 * blob.soft);
+          const sm = tt <= 0 ? 0 : tt >= 1 ? 1 : tt * tt * (3 - 2 * tt);
+          light *= 1 - blob.depth * (1 - sm);
+        }
+        let alpha = 0;
+        let shade = 0;
+        if (hd) {
+          const qx2 = (wx + (onTarget ? hd.shOffX : hd.shOffBgX) - hd.hpx) / hd.upm;
+          const qy2 = (wy + (onTarget ? hd.shOffY : hd.shOffBgY) - hd.hpy) / hd.upm;
+          const lx = hd.hc * qx2 + hd.hs * qy2;
+          const ly = -hd.hs * qx2 + hd.hc * qy2;
+          const ss = hd.shSoft;
+          if (lx > HAND_BOUNDS.x0 - ss && lx < HAND_BOUNDS.x1 + ss && ly > HAND_BOUNDS.y0 - ss && ly < HAND_BOUNDS.y1 + ss) {
+            const d = handSdf(lx, ly);
+            const tt = (d + ss) / (2 * ss);
+            const sm = tt <= 0 ? 0 : tt >= 1 ? 1 : tt * tt * (3 - 2 * tt);
+            light *= 1 - hd.hShadow * (1 - sm);
+          }
+          if (handRow && x >= hd.hx0 && x <= hd.hx1) {
+            const w3 = hInv[6] * qx + hInv[7] * qy + hInv[8];
+            if (w3 > 1e-12) {
+              const lx3 = (hInv[0] * qx + hInv[1] * qy + hInv[2]) / w3;
+              const ly3 = (hInv[3] * qx + hInv[4] * qy + hInv[5]) / w3;
+              const d = handSdf(lx3, ly3);
+              alpha = 0.5 - d / hd.pxMm;
+              if (alpha > 0) {
+                if (alpha > 1) alpha = 1;
+                const rim = -d / 16;
+                shade = 0.6 + 0.4 * (rim >= 1 ? 1 : rim <= 0 ? 0 : rim * (2 - rim));
+                shade *= 1 + 0.05 * Math.sin(lx3 * 0.45) * Math.sin(ly3 * 0.33 + 1.3);
+                if (nailSdf(lx3, ly3) < 0) shade *= 1.12;
+              } else alpha = 0;
+            }
+          }
+        }
+        rowLight[x] = light;
+        rowGlare[x] = glare;
+        rowAlpha[x] = alpha;
+        rowShade[x] = shade;
+        surf[i] = alpha > 0.5 ? 2 : onTarget ? 0 : 1;
+      }
+      rowVal.fill(0, 0, W * nch);
+      for (let ch = 0; ch < nch; ch++) {
+        if (tList.n) sampleList(tgt.channels[ch], tList, rowVal, nch, ch);
+        if (bList.n) sampleList(bg.channels[ch], bList, rowVal, nch, ch);
+      }
+      for (let x = 0; x < W; x++) {
+        const vg = vig[row + x];
+        const light = rowLight[x];
+        const glare = rowGlare[x];
+        const alpha = rowAlpha[x];
+        for (let ch = 0; ch < nch; ch++) {
+          let val = (rowVal[x * nch + ch] + glare) * light;
+          if (alpha > 0) val = val * (1 - alpha) + hcol[ch] * rowShade[x] * alpha;
+          accum[ch * N + row + x] += val * vg;
+        }
+      }
+    }
+  }
+
+  /** motionBlur의 렌즈 판: 픽셀 → 핀홀(표) → 표면 호모그래피 → 왜곡 → 센서에서 선 적분 */
+  private motionBlurLens(t: number, K: Intrinsics, e: number, lm: LensMap): void {
+    const s = this.scene;
+    const W = K.width;
+    const H = K.height;
+    const N = W * H;
+    const nch = this.nch;
+    const L = lensFor(s.lens!, W, H);
+    const pc = s.poseAt(t);
+    const p0 = s.poseAt(t - e / 2);
+    const p1 = s.poseAt(t + e / 2);
+    const M = new Float64Array(3 * 18);
+    const put = (k: number, z: number, Ac: readonly number[], A0: readonly number[], A1: readonly number[]) => {
+      const Hc = planeToImage(K, pc, z, Ac);
+      const m0 = mul3(Hc, invertOrThrow(planeToImage(K, p0, z, A0)));
+      const m1 = mul3(Hc, invertOrThrow(planeToImage(K, p1, z, A1)));
+      for (let i = 0; i < 9; i++) {
+        M[k * 18 + i] = m0[i];
+        M[k * 18 + 9 + i] = m1[i];
+      }
+    };
+    put(0, 0, TARGET_AFFINE, TARGET_AFFINE, TARGET_AFFINE);
+    put(1, s.bgPlane.z, s.bgPlane.affine, s.bgPlane.affine, s.bgPlane.affine);
+    const hand = s.hand;
+    const hc = hand?.at(t);
+    const h0 = hand?.at(t - e / 2);
+    const h1 = hand?.at(t + e / 2);
+    if (hand && hc && h0 && h1) {
+      const z = -hand.heightUnits;
+      put(2, z, handAffine(hc, hand.unitsPerMm), handAffine(h0, hand.unitsPerMm), handAffine(h1, hand.unitsPerMm));
+    } else {
+      for (let i = 0; i < 18; i++) M[36 + i] = i % 4 === 0 ? 1 : 0;
+    }
+    if (this.blurSrc.length !== this.accum.length) this.blurSrc = new Float32Array(this.accum.length);
+    const src = this.blurSrc;
+    src.set(this.accum);
+    const dst = this.accum;
+    const surf = this.surf;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        const qx = lm.qx[i];
+        const qy = lm.qy[i];
+        const o = surf[i] * 18;
+        let w = M[o + 6] * qx + M[o + 7] * qy + M[o + 8];
+        if (!(w > 1e-9)) continue;
+        const a = distort(L, (M[o] * qx + M[o + 1] * qy + M[o + 2]) / w, (M[o + 3] * qx + M[o + 4] * qy + M[o + 5]) / w);
+        w = M[o + 15] * qx + M[o + 16] * qy + M[o + 17];
+        if (!(w > 1e-9)) continue;
+        const b = distort(L, (M[o + 9] * qx + M[o + 10] * qy + M[o + 11]) / w, (M[o + 12] * qx + M[o + 13] * qy + M[o + 14]) / w);
+        const ax = a.x - 0.5;
+        const ay = a.y - 0.5;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        let n = Math.ceil(Math.sqrt(dx * dx + dy * dy) / 0.7);
+        if (n <= 1) continue;
+        if (n > MAX_BLUR_TAPS) n = MAX_BLUR_TAPS;
+        for (let ch = 0; ch < nch; ch++) {
+          const base = ch * N;
+          let sum = 0;
+          for (let j = 0; j < n; j++) {
+            const k = (j + 0.5) / n;
+            const px = ax + dx * k;
+            const py = ay + dy * k;
+            let x0 = Math.floor(px);
+            let y0 = Math.floor(py);
+            const fx = px - x0;
+            const fy = py - y0;
+            let x1 = x0 + 1;
+            let y1 = y0 + 1;
+            if (x0 < 0) x0 = 0;
+            else if (x0 >= W) x0 = W - 1;
+            if (x1 < 0) x1 = 0;
+            else if (x1 >= W) x1 = W - 1;
+            if (y0 < 0) y0 = 0;
+            else if (y0 >= H) y0 = H - 1;
+            if (y1 < 0) y1 = 0;
+            else if (y1 >= H) y1 = H - 1;
+            const r0 = base + y0 * W;
+            const r1 = base + y1 * W;
+            const a0 = src[r0 + x0];
+            const b0 = src[r1 + x0];
+            const top = a0 + (src[r0 + x1] - a0) * fx;
+            const bot = b0 + (src[r1 + x1] - b0) * fx;
+            sum += top + (bot - top) * fy;
+          }
+          dst[base + i] = sum / n;
         }
       }
     }

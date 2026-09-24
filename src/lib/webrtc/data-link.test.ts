@@ -216,3 +216,73 @@ describe("fromRTCDataChannel", () => {
     warn.mockRestore();
   });
 });
+
+describe("fromRTCDataChannel — ordering & latency (v2 review)", () => {
+  it("after a Blob, later messages (string, ArrayBuffer, typed view) keep order and the chain resets to sync", async () => {
+    const dc = new FakeChannel();
+    dc.readyState = "open";
+    const link = fromRTCDataChannel(dc);
+    const got: unknown[] = [];
+    link.onMessage((d) => got.push(typeof d === "string" ? d : Array.from(new Uint8Array(d))));
+    dc.deliver(new Blob([new Uint8Array([1])]));
+    dc.deliver("s");
+    dc.deliver(new Uint8Array([2]).buffer);
+    dc.deliver(new Uint8Array([9, 3]).subarray(1));
+    expect(got).toEqual([]); // 모두 Blob 뒤로
+    await new Promise((r) => setTimeout(r, 20));
+    expect(got).toEqual([[1], "s", [2], [3]]);
+    // 체인이 비었으면 다시 동기 전달
+    dc.deliver("sync");
+    expect(got.at(-1)).toBe("sync");
+  });
+
+  it("messages from a replaced channel's pending Blob are dropped", async () => {
+    const a = new FakeChannel();
+    a.readyState = "open";
+    const link = fromRTCDataChannel(a);
+    const got: unknown[] = [];
+    link.onMessage((d) => got.push(d));
+    a.deliver(new Blob([new Uint8Array([1])]));
+    const b = new FakeChannel();
+    b.readyState = "open";
+    link.attach(b);
+    b.deliver("new");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(got).toEqual(["new"]);
+  });
+
+  it("a queued message goes out at once when the channel buffer already has room (no poll wait)", () => {
+    vi.useFakeTimers();
+    const dc = new FakeChannel();
+    dc.readyState = "open";
+    const link = fromRTCDataChannel(dc, { highWaterMark: 100, pollMs: 1000 });
+    link.send(new ArrayBuffer(60));
+    link.send(new ArrayBuffer(60)); // 큐
+    expect(dc.sent.length).toBe(1);
+    dc.bufferedAmount = 0; // 이벤트 없이 비워짐
+    link.send("next"); // 큐가 있으니 뒤로 → 곧바로 둘 다
+    expect(dc.sent.length).toBe(3);
+    expect(dc.sent[2]).toBe("next");
+    vi.useRealTimers();
+  });
+});
+
+describe("fromRTCDataChannel — errors", () => {
+  it("a deliberate close ('User-Initiated Abort') closes quietly; other errors warn", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const dc = new FakeChannel();
+    dc.readyState = "open";
+    const link = fromRTCDataChannel(dc);
+    dc.readyState = "closing";
+    dc.dispatchEvent(Object.assign(new Event("error"), { error: new Error("User-Initiated Abort, reason=Close called") }));
+    expect(link.isOpen()).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+    const dc2 = new FakeChannel();
+    dc2.readyState = "open";
+    const l2 = fromRTCDataChannel(dc2);
+    dc2.dispatchEvent(Object.assign(new Event("error"), { error: new Error("SCTP failure") }));
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(l2.isOpen()).toBe(true); // 아직 열려 있으면 유지
+    warn.mockRestore();
+  });
+});

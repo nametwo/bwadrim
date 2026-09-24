@@ -41,7 +41,9 @@ export function decodeMarker(y: Uint8Array | Uint8ClampedArray, w: number, h: nu
   return v;
 }
 
-function rgbToYuv420(planes: Uint8Array[], w: number, h: number): Buffer {
+/** RGB 평면 3개(또는 휘도 1개) → YUV 4:2:0 (BT.601 제한 범위) */
+export function rgbToYuv420(planes: Uint8Array[], w: number, h: number): Buffer {
+  if (planes.length === 1) planes = [planes[0], planes[0], planes[0]];
   const [R, G, B] = planes;
   const ySize = w * h;
   const cw = w >> 1;

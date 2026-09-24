@@ -1,4 +1,4 @@
-import type { Annotation, Mat3, Point, TrackState } from "./types";
+import type { Annotation, Mat3, Point, Rect, TrackState, TrackUpdate } from "./types";
 import { mul3 } from "./geometry";
 
 // 영상 위 주석 렌더링: object-fit 매핑(frame 픽셀 ↔ 요소 CSS 픽셀) + H로 원근 변환.
@@ -337,6 +337,382 @@ function drawPin(ctx: OverlayContext, G: Mat3, p: Point, aspect: number, wMin: n
   ctx.arc(cx, cy, dot, 0, 2 * Math.PI);
   ctx.fillStyle = RED;
   ctx.fill();
+}
+
+// ───────────────────────── 주석 기준점 ─────────────────────────
+
+/**
+ * 주석 하나의 기준점 (ref px). 핀 = 위치, 선 = 길이 가중 무게중심(점 간격이 고르지 않아도 모양의 중심).
+ * norm → ref px 규약은 렌더링과 같다 (ref px = norm × 크기). 좌표가 이상하면 null.
+ */
+export function annotationAnchorPx(a: Annotation, refWidth: number, refHeight: number): Point | null {
+  if (a.kind === "pin") {
+    const x = a.p.x * refWidth;
+    const y = a.p.y * refHeight;
+    return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+  }
+  const pts = a.points;
+  if (!pts || pts.length === 0) return null;
+  let sx = 0;
+  let sy = 0;
+  let sl = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const ax = pts[i - 1].x * refWidth;
+    const ay = pts[i - 1].y * refHeight;
+    const bx = pts[i].x * refWidth;
+    const by = pts[i].y * refHeight;
+    const l = Math.hypot(bx - ax, by - ay);
+    sx += l * (ax + bx) * 0.5;
+    sy += l * (ay + by) * 0.5;
+    sl += l;
+  }
+  let x: number;
+  let y: number;
+  if (sl > 1e-9) {
+    x = sx / sl;
+    y = sy / sl;
+  } else {
+    // 길이 0 (한 점에 겹친 선) → 점 평균
+    x = 0;
+    y = 0;
+    for (const p of pts) {
+      x += p.x * refWidth;
+      y += p.y * refHeight;
+    }
+    x /= pts.length;
+    y /= pts.length;
+  }
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
+
+/**
+ * 앵커의 대표 기준점 (ref px) = 첫 주석(앵커를 만든 주석)의 기준점.
+ * 추적기 setReference의 anchor, 화면 밖 화살표의 목표에 쓴다. 같은 앵커의 이후 주석은 첫 주석의 ROI 안에서
+ * 추가된 것이므로 첫 주석이 대표로 충분하다 (여러 주석의 전체 중심을 쓰면 주석이 늘 때마다 기준이 바뀐다).
+ */
+export function primaryAnchorPx(annotations: readonly Annotation[], refWidth: number, refHeight: number): Point | null {
+  for (const a of annotations) {
+    const p = annotationAnchorPx(a, refWidth, refHeight);
+    if (p) return p;
+  }
+  return null;
+}
+
+// ───────────────────────── 화면 밖 안내 화살표 ─────────────────────────
+//
+// 핀이 화면에 안 보이면 가장자리에 큰 화살표를 띄워 "이쪽으로 폰을 돌리세요"를 말 없이 알린다.
+// - 보이는 영역은 CSS 공간에서 판단한다: 요소 사각형 ∩ 영상이 그려진 사각형.
+//   cover(고객 화면)는 프레임 가장자리가 잘려 나가므로 프레임 안이어도 안 보일 수 있다 → 추적 중(H)이어도 화살표.
+// - 프레임 밖이면 추적기의 hint(state=lost, reason=offscreen)로 방향을 잡는다. hint로는 주석을 그리지 않는다.
+// - 카메라 뒤·무한원점(w ≤ 0)이어도 방향은 정의된다: d = (X − w·cx, Y − w·cy) (카메라 좌표의 옆 방향과 같다).
+// - 깜빡임 방지 히스테리시스: 보이던 핀은 영역 밖으로 나가야 화살표, 화살표는 핀이 12px 이상 안쪽으로 들어와야 사라진다.
+
+/** 화살표 끝을 둘 안쪽 사각형의 여백 (보이는 영역 가장자리에서, CSS px) */
+export const ARROW_INSET_CSS = 28;
+/** 화살표가 떠 있을 때 핀이 이만큼 안쪽으로 들어와야 사라진다 (CSS px) */
+export const ARROW_HIDE_MARGIN_CSS = 12;
+/** 화살표 전체 길이 (CSS px, 맥동 전) */
+export const ARROW_LENGTH_CSS = 64;
+const ARROW_PULSE_MS = 1200;
+const ARROW_NUDGE_CSS = 8;
+/** 무한원점으로 볼 CSS 좌표 크기 */
+const FAR_CSS = 1e6;
+
+export interface Insets {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+export interface GuideArrow {
+  /** 화살표 끝(뾰족한 곳) — 요소 기준 CSS px. 보이는 영역을 inset만큼 줄인 사각형 안으로 클램프 */
+  x: number;
+  y: number;
+  /** 가리키는 방향 (라디안, 화면 좌표: 0 = 오른쪽, π/2 = 아래) */
+  angle: number;
+  /** 목표(주석 기준점)의 CSS 좌표. 카메라 뒤·무한원점이면 null */
+  target: Point | null;
+  /** track = 추적 중(H)이지만 보이는 영역 밖(cover 크롭 등) / hint = 프레임 밖(추적기 추정) */
+  source: "track" | "hint";
+}
+
+/** 화살표 판단에 필요한 갱신 필드 */
+export type GuideUpdate = Pick<TrackUpdate, "state" | "H" | "hint" | "reason" | "refSize" | "frameSize">;
+
+export interface GuideOptions {
+  /** 보이는 영역 가장자리에서 화살표 끝까지의 여백. 숫자 또는 변별 (예: 하단 버튼 영역 피하기) */
+  inset?: number | Partial<Insets>;
+  /** 직전에 화살표를 띄우고 있었는지 (히스테리시스) */
+  showing?: boolean;
+}
+
+/** 영상이 실제로 보이는 영역 (요소 기준 CSS px) = 요소 ∩ 영상 사각형. cover면 요소 전체, contain이면 영상 사각형 */
+export function visibleRect(m: DisplayMapping): Rect {
+  const x0 = Math.max(0, m.x);
+  const y0 = Math.max(0, m.y);
+  const x1 = Math.min(m.elementWidth, m.x + m.width);
+  const y1 = Math.min(m.elementHeight, m.y + m.height);
+  return { x: x0, y: y0, width: Math.max(0, x1 - x0), height: Math.max(0, y1 - y0) };
+}
+
+function resolveInsets(inset: GuideOptions["inset"]): Insets {
+  if (typeof inset === "number") return { top: inset, right: inset, bottom: inset, left: inset };
+  const d = ARROW_INSET_CSS;
+  return { top: inset?.top ?? d, right: inset?.right ?? d, bottom: inset?.bottom ?? d, left: inset?.left ?? d };
+}
+
+/**
+ * 화면 밖 안내 화살표 계산 (순수 함수). 필요 없으면 null.
+ *  - state tracking/weak + H: 기준점이 보이는 영역 밖일 때 (히스테리시스 적용)
+ *  - state lost + reason offscreen + hint: 항상 (추적기가 화면 밖이라고 판단)
+ *  - 그 밖(searching, 다른 이유의 lost): null — 모르는 방향을 가리키지 않는다
+ * anchorRef: 주석 기준점 (ref px, primaryAnchorPx).
+ */
+export function computeGuideArrow(
+  u: GuideUpdate,
+  anchorRef: Point,
+  m: DisplayMapping,
+  opts: GuideOptions = {},
+): GuideArrow | null {
+  let M: Mat3 | null = null;
+  let source: GuideArrow["source"];
+  if ((u.state === "tracking" || u.state === "weak") && u.H) {
+    M = u.H;
+    source = "track";
+  } else if (u.state === "lost" && u.reason === "offscreen" && u.hint) {
+    M = u.hint;
+    source = "hint";
+  } else {
+    return null;
+  }
+  const fw = u.frameSize.width;
+  const fh = u.frameSize.height;
+  if (!(fw > 0) || !(fh > 0) || !Number.isFinite(anchorRef.x) || !Number.isFinite(anchorRef.y)) return null;
+  for (let i = 0; i < 9; i++) if (!Number.isFinite(M[i])) return null;
+
+  // 부호 고정: ref 중심이 카메라 앞(w > 0)이 되게 (H는 스케일·부호가 임의일 수 있다)
+  const rcx = u.refSize.width / 2;
+  const rcy = u.refSize.height / 2;
+  const wc = M[6] * rcx + M[7] * rcy + M[8];
+  const sgn = wc < 0 ? -1 : 1;
+  const X = sgn * (M[0] * anchorRef.x + M[1] * anchorRef.y + M[2]);
+  const Y = sgn * (M[3] * anchorRef.x + M[4] * anchorRef.y + M[5]);
+  const W = sgn * (M[6] * anchorRef.x + M[7] * anchorRef.y + M[8]);
+
+  const V = visibleRect(m);
+  if (!(V.width > 0) || !(V.height > 0)) return null;
+  const sx = m.width / fw;
+  const sy = m.height / fh;
+
+  let target: Point | null = null;
+  if (W > 0) {
+    const px = X / W;
+    const py = Y / W;
+    if (Number.isFinite(px) && Number.isFinite(py)) {
+      const t = frameToCss(m, { x: px, y: py }, u.frameSize);
+      if (Math.abs(t.x) < FAR_CSS && Math.abs(t.y) < FAR_CSS) target = t;
+    }
+  }
+
+  if (source === "track" && target) {
+    const margin = opts.showing ? ARROW_HIDE_MARGIN_CSS : 0;
+    const inside =
+      target.x >= V.x + margin &&
+      target.x <= V.x + V.width - margin &&
+      target.y >= V.y + margin &&
+      target.y <= V.y + V.height - margin;
+    if (inside) return null;
+  }
+
+  // 방향: 목표가 유한하면 (보이는 영역 중심 → 목표), 아니면 동차 좌표의 옆 방향
+  const vcx = V.x + V.width / 2;
+  const vcy = V.y + V.height / 2;
+  let aim: Point;
+  if (target) {
+    aim = target;
+  } else {
+    const fcx = (fw - 1) / 2;
+    const fcy = (fh - 1) / 2;
+    const dx = (X - W * fcx) * sx;
+    const dy = (Y - W * fcy) * sy;
+    const len = Math.hypot(dx, dy);
+    if (!(len > 0) || !Number.isFinite(len)) return null;
+    aim = { x: vcx + (dx / len) * FAR_CSS, y: vcy + (dy / len) * FAR_CSS };
+  }
+
+  // 화살표 끝 = 목표를 안쪽 사각형으로 클램프 (사각형이 너무 작으면 중심으로 모인다)
+  const ins = resolveInsets(opts.inset);
+  const left = V.x + Math.min(ins.left, V.width / 2);
+  const right = V.x + V.width - Math.min(ins.right, V.width / 2);
+  const top = V.y + Math.min(ins.top, V.height / 2);
+  const bottom = V.y + V.height - Math.min(ins.bottom, V.height / 2);
+  const x = Math.min(Math.max(aim.x, Math.min(left, right)), Math.max(left, right));
+  const y = Math.min(Math.max(aim.y, Math.min(top, bottom)), Math.max(top, bottom));
+  let dx = aim.x - x;
+  let dy = aim.y - y;
+  if (Math.hypot(dx, dy) < 1) {
+    // 목표가 안쪽 사각형 안(가장자리 여백 띠) — 영역 중심에서 목표 쪽으로
+    dx = aim.x - vcx;
+    dy = aim.y - vcy;
+    if (Math.hypot(dx, dy) < 1e-9) {
+      dx = 0;
+      dy = 1;
+    }
+  }
+  return { x, y, angle: Math.atan2(dy, dx), target, source };
+}
+
+/**
+ * renderAnnotations가 그릴 수 있는 영역 (요소 기준 CSS px, 여유 포함). 부분 지우기용 — 넉넉하게 잡는다.
+ * 핀: 최대 반지름 80 × 맥동 1.45 + 테두리. 선: 점들의 외접 사각형 + 선 두께. 카메라 뒤로 가는 점이 있으면 null(전체).
+ */
+export function annotationBounds(
+  annotations: readonly Annotation[],
+  H: Mat3,
+  refSize: SizeLike,
+  frameSize: SizeLike,
+  m: DisplayMapping,
+): Rect | null {
+  const G = normToCssMatrix(H, refSize, frameSize, m);
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  const add = (p: Point, pad: number): boolean => {
+    const w = G[6] * p.x + G[7] * p.y + G[8];
+    if (!(w > 1e-9)) return false;
+    const x = (G[0] * p.x + G[1] * p.y + G[2]) / w;
+    const y = (G[3] * p.x + G[4] * p.y + G[5]) / w;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    x0 = Math.min(x0, x - pad);
+    y0 = Math.min(y0, y - pad);
+    x1 = Math.max(x1, x + pad);
+    y1 = Math.max(y1, y + pad);
+    return true;
+  };
+  const pinPad = PIN_MAX_CSS_RADIUS * 1.45 + 8;
+  for (const a of annotations) {
+    if (a.kind === "pin") {
+      if (!add(a.p, pinPad)) return null;
+    } else {
+      for (const p of a.points) if (!add(p, 8)) return null;
+    }
+  }
+  if (!(x1 >= x0)) return { x: 0, y: 0, width: 0, height: 0 };
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+
+/** renderGuideArrow가 그릴 수 있는 영역 (CSS px, 회전·맥동·테두리 포함) */
+export function guideArrowBounds(a: GuideArrow): Rect {
+  const r = ARROW_LENGTH_CSS * 1.06 + ARROW_NUDGE_CSS + 12;
+  return { x: a.x - r, y: a.y - r, width: 2 * r, height: 2 * r };
+}
+
+/** 화살표를 잠깐 놓쳤을 때(hint가 한두 프레임 빠짐 등) 유지하는 시간 (ms) */
+export const ARROW_HOLD_MS = 300;
+
+/**
+ * 프레임마다 화살표 상태를 이어 가는 도우미 (히스테리시스 + 짧은 공백 메우기).
+ * 세션(스냅샷의 arrow 플래그)과 AnchorOverlay(그리기)가 같은 규칙을 쓰도록 한 곳에 둔다.
+ * - 추적 중이고 기준점이 보이면 즉시 해제 (보이는 핀 옆에 화살표를 남기지 않는다)
+ * - 자세를 모르게 되면(hint 없음·searching) holdMs 동안만 마지막 화살표 유지, 그 뒤 해제
+ */
+export class GuideArrowState {
+  private last: GuideArrow | null = null;
+  private lastAt = Number.NEGATIVE_INFINITY;
+
+  constructor(private readonly holdMs = ARROW_HOLD_MS) {}
+
+  showing(): boolean {
+    return this.last !== null;
+  }
+
+  current(): GuideArrow | null {
+    return this.last;
+  }
+
+  reset(): void {
+    this.last = null;
+    this.lastAt = Number.NEGATIVE_INFINITY;
+  }
+
+  next(
+    u: GuideUpdate | null,
+    anchorRef: Point | null,
+    m: DisplayMapping | null,
+    nowMs: number,
+    opts: Omit<GuideOptions, "showing"> = {},
+  ): GuideArrow | null {
+    let a: GuideArrow | null = null;
+    let visible = false;
+    if (u && anchorRef && m) {
+      a = computeGuideArrow(u, anchorRef, m, { ...opts, showing: this.last !== null });
+      visible = !a && (u.state === "tracking" || u.state === "weak") && !!u.H;
+    }
+    if (a) {
+      this.last = a;
+      this.lastAt = nowMs;
+      return a;
+    }
+    if (!visible && this.last && nowMs - this.lastAt < this.holdMs) return this.last;
+    this.last = null;
+    return null;
+  }
+}
+
+/** 화살표 그리기용 컨텍스트 부분 */
+export type ArrowContext = OverlayContext & Pick<CanvasRenderingContext2D, "translate" | "rotate" | "scale">;
+
+// 끝이 원점, +x를 향하는 화살표 (길이 64: 머리 28, 머리 폭 48, 몸통 폭 20)
+const ARROW_SHAPE: readonly (readonly [number, number])[] = [
+  [0, 0],
+  [-28, 24],
+  [-28, 10],
+  [-64, 10],
+  [-64, -10],
+  [-28, -10],
+  [-28, -24],
+];
+
+/**
+ * 화살표 그리기: 어두운 테두리(밝은 배경 대비) + 흰 테두리 + 빨간 채움. 목표 쪽으로 살짝 밀었다 돌아오는 맥동.
+ * ctx는 CSS 픽셀 좌표계 (renderAnnotations와 같음).
+ */
+export function renderGuideArrow(ctx: ArrowContext, a: GuideArrow, opts: RenderOptions = {}): void {
+  const opacity = opts.opacity ?? 1;
+  if (!(opacity > 0) || !Number.isFinite(a.x) || !Number.isFinite(a.y) || !Number.isFinite(a.angle)) return;
+  const t = opts.timeMs ?? 0;
+  const phase = (((t % ARROW_PULSE_MS) + ARROW_PULSE_MS) % ARROW_PULSE_MS) / ARROW_PULSE_MS;
+  // 0 → 1 → 0 부드럽게 (코사인)
+  const k = 0.5 - 0.5 * Math.cos(2 * Math.PI * phase);
+  const nudge = ARROW_NUDGE_CSS * k;
+  const scale = 1 + 0.06 * k;
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, opacity);
+  ctx.translate(a.x, a.y);
+  ctx.rotate(a.angle);
+  // 끝이 클램프 위치를 넘지 않게: 뒤에서 앞으로 밀었다가 제자리
+  ctx.translate(nudge - ARROW_NUDGE_CSS, 0);
+  ctx.scale(scale, scale);
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  for (let i = 0; i < ARROW_SHAPE.length; i++) {
+    const [x, y] = ARROW_SHAPE[i];
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = "rgba(0,0,0,0.45)";
+  ctx.lineWidth = 11;
+  ctx.stroke();
+  ctx.strokeStyle = WHITE;
+  ctx.lineWidth = 6;
+  ctx.stroke();
+  ctx.fillStyle = RED;
+  ctx.fill();
+  ctx.restore();
 }
 
 // ───────────────────────── DOM 편의 함수 (호출 시점에만 DOM 접근) ─────────────────────────

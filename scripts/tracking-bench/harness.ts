@@ -1,11 +1,11 @@
 // 시나리오 하나를 추적기에 돌려 프레임별 기록·지표를 만든다. 점검용 PNG 덤프도 여기서.
 import path from "node:path";
-import type { GrayImage, Mat3, Point, ReferenceInfo, TrackResult, TrackState } from "../../src/lib/tracking/types";
+import type { GrayImage, LostReason, Mat3, Point, ReferenceInfo, TrackResult, TrackState } from "../../src/lib/tracking/types";
 import { applyH, rectCorners, warpRect } from "../../src/lib/tracking/geometry";
 import { compressFrame, readFrameCache, sequenceFingerprint, writeFrameCache } from "./framecache";
-import { type FrameRecord, type ScenarioMetrics, classifyFrame, scenarioMetrics } from "./metrics";
+import { type FrameRecord, type ScenarioMetrics, arrowErrorDeg, classifyFrame, scenarioMetrics } from "./metrics";
 import { Canvas, type RGB } from "./png";
-import type { Scenario } from "./scenarios";
+import { type Scenario, suiteOf } from "./scenarios";
 import { type Sequence, buildSequence } from "./sequence";
 import type { TrackerFactory } from "./trackers";
 
@@ -36,6 +36,7 @@ export interface ScenarioRun {
 }
 
 const STATES: TrackState[] = ["searching", "tracking", "weak", "lost"];
+const REASONS: LostReason[] = ["offscreen", "unverified", "untrackable", "invalid_frame"];
 
 function validH(H: unknown): H is Mat3 {
   return Array.isArray(H) && H.length === 9 && H.every((v) => typeof v === "number" && Number.isFinite(v));
@@ -69,7 +70,10 @@ export function runSequence(seq: Sequence, factory: TrackerFactory, opts: RunOpt
 
   const tracker = factory.create(seq);
   const r0 = performance.now();
-  const info = tracker.setReference(seq.ref, seq.roi, seq.initialH);
+  // anchor = 핀 (ref 픽셀) — 런타임도 핀 위치를 넘긴다
+  // 빈 프레임 모드(영상을 안 보는 기준선)는 기준 이미지도 렌더하지 않는다 (코덱 캡처가 없어도 돈다)
+  const ref = blank ? getFrame(0) : seq.ref;
+  const info = tracker.setReference(ref, seq.roi, seq.initialH, seq.pinRef);
   const refMs = performance.now() - r0;
   const trackable = info?.trackable !== false;
 
@@ -79,7 +83,7 @@ export function runSequence(seq: Sequence, factory: TrackerFactory, opts: RunOpt
   const dumpEvery = opts.dumpEvery ?? 10;
   let dumped = 0;
   const dumpDir = opts.framesDir ? path.join(opts.framesDir, sc.id.replace(/[^a-zA-Z0-9_-]+/g, "_")) : null;
-  if (dumpDir) dumpRef(seq, path.join(dumpDir, "ref.png"));
+  if (dumpDir && !blank) dumpRef(seq, path.join(dumpDir, "ref.png"));
 
   for (let k = 0; k < seq.times.length; k++) {
     const gt = seq.gt[k];
@@ -99,13 +103,19 @@ export function runSequence(seq: Sequence, factory: TrackerFactory, opts: RunOpt
       }
     } else {
       // trackable=false면 런타임은 추적을 돌리지 않고 정지 화면 방식으로 폴백한다
-      res = { state: "lost", H: null, confidence: 0, inliers: 0, tracked: 0, redetected: false, timings: { total: 0 } };
+      res = { state: "lost", H: null, hint: null, reason: "untrackable", confidence: 0, inliers: 0, tracked: 0, redetected: false, timings: { total: 0 } };
     }
     const state: TrackState = STATES.includes(res?.state) ? res.state : "lost";
     const displayed = state === "tracking" || state === "weak";
     // 표시 중인데 H가 이상하면(NaN 등) 추정 핀 없음 → 오차 무한대 → 틀린 표시
     const estPin = displayed && validH(res.H) ? applyH(res.H, seq.pinRef) : null;
     const c = classifyFrame(gt, displayed, estPin);
+    // 화면 밖 안내: 표시 안 함 + reason=offscreen + 유효한 hint → 화살표가 가리키는 점 = hint·핀
+    const reason = REASONS.includes(res?.reason as LostReason) ? (res.reason as LostReason) : null;
+    const hint = !displayed && reason === "offscreen" && validH(res.hint);
+    const hintPin = hint ? applyH(res.hint as Mat3, seq.pinRef) : null;
+    const hintErrDeg =
+      hint && gt.pin && !gt.inFrame ? arrowErrorDeg({ x: (gt.width - 1) / 2, y: (gt.height - 1) / 2 }, hintPin, gt.pin) : null;
     const rec: FrameRecord = {
       k,
       tMs,
@@ -126,11 +136,15 @@ export function runSequence(seq: Sequence, factory: TrackerFactory, opts: RunOpt
       inliers: res.inliers ?? 0,
       tracked: res.tracked ?? 0,
       confidence: res.confidence ?? 0,
+      reason,
+      hint,
+      hintPin,
+      hintErrDeg,
     };
     records.push(rec);
     if (dumpDir && (k % dumpEvery === 0 || (rec.wrong && dumped < 60))) {
       if (rec.wrong) dumped++;
-      dumpFrame(seq, k, img, rec, displayed && validH(res.H) ? res.H : null, path.join(dumpDir, `f${String(k).padStart(4, "0")}${rec.wrong ? "_WRONG" : ""}.png`));
+      dumpFrame(seq, k, img, rec, displayed && validH(res.H) ? res.H : hint ? (res.hint as Mat3) : null, path.join(dumpDir, `f${String(k).padStart(4, "0")}${rec.wrong ? "_WRONG" : ""}.png`));
     }
   }
   if (!blank && !cache && opts.writeCache !== false && opts.useCache !== false) writeFrameCache(seq, rendered, fp);
@@ -140,6 +154,7 @@ export function runSequence(seq: Sequence, factory: TrackerFactory, opts: RunOpt
     {
       id: sc.id,
       category: sc.category,
+      suite: suiteOf(sc),
       side: sc.side,
       title: sc.title,
       trackable,
@@ -161,6 +176,7 @@ export function runSequence(seq: Sequence, factory: TrackerFactory, opts: RunOpt
 
 const S = 2; // 확대 배율
 const up = (p: Point): Point => ({ x: (p.x + 0.5) * S - 0.5, y: (p.y + 0.5) * S - 0.5 });
+const HINT_COLOR: RGB = [0, 220, 220];
 const STATE_COLOR: Record<TrackState, RGB> = {
   tracking: [255, 59, 48],
   weak: [255, 170, 0],
@@ -183,12 +199,24 @@ export function dumpFrame(seq: Sequence, k: number, img: GrayImage, rec: FrameRe
   if (gq) c.poly(gq.map(up), [255, 220, 0], 1);
   if (H) {
     const eq = warpRect(H, seq.roi);
-    if (eq) c.poly(eq.map(up), STATE_COLOR[rec.state], 1);
+    if (eq) c.poly(eq.map(up), rec.displayed ? STATE_COLOR[rec.state] : HINT_COLOR, 1);
   }
   if (gt.pin) c.cross(up(gt.pin), 6, gt.occluded ? [0, 160, 255] : [0, 230, 0], 2);
   if (rec.estPin && rec.displayed) c.circle(up(rec.estPin), 7, STATE_COLOR[rec.state], 2);
+  // 화면 밖 안내: 중심 → hint 핀 방향 화살표(청록), 정답 방향(초록 짧은 선)
+  if (rec.hint && rec.hintPin) {
+    const ctr = { x: (img.width - 1) / 2, y: (img.height - 1) / 2 };
+    const dir = (p: Point, len: number) => {
+      const d = Math.hypot(p.x - ctr.x, p.y - ctr.y) || 1;
+      return up({ x: ctr.x + ((p.x - ctr.x) / d) * len, y: ctr.y + ((p.y - ctr.y) / d) * len });
+    };
+    c.line(up(ctr), dir(rec.hintPin, 60), HINT_COLOR, 2);
+    if (gt.pin) c.line(up(ctr), dir(gt.pin, 30), [0, 230, 0], 1);
+  }
   const err = rec.err === null ? "-" : Number.isFinite(rec.err) ? rec.err.toFixed(1) : "INF";
-  c.text(4, 4, `#${k} T=${(rec.tMs / 1000).toFixed(2)} ${rec.state.toUpperCase()} ERR=${err}`, [255, 255, 255], 1, [0, 0, 0]);
+  const why = rec.reason ? ` ${rec.reason.toUpperCase()}` : "";
+  const arrow = rec.hintErrDeg !== null ? ` HINT=${rec.hintErrDeg.toFixed(0)}DEG` : "";
+  c.text(4, 4, `#${k} T=${(rec.tMs / 1000).toFixed(2)} ${rec.state.toUpperCase()} ERR=${err}${why}${arrow}`, [255, 255, 255], 1, [0, 0, 0]);
   c.text(
     4,
     14,

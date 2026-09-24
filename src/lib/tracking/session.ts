@@ -3,6 +3,7 @@ import type {
   AnchorDescriptor,
   Annotation,
   GrayImage,
+  LostReason,
   Mat3,
   Point,
   Rect,
@@ -28,9 +29,19 @@ import {
   quantizeNorm,
   quantizePoint,
   type ReceivedAnchor,
+  type StatusMessage,
 } from "./protocol";
-import { cssToFrame, insideFrame, mappingForVideo, type ObjectFit } from "./overlay";
-import type { Size } from "./frame-source";
+import {
+  GuideArrowState,
+  annotationAnchorPx,
+  computeDisplayMapping,
+  cssToFrame,
+  insideFrame,
+  mappingForVideo,
+  primaryAnchorPx,
+  type ObjectFit,
+} from "./overlay";
+import type { AcquisitionMode, FrameSourceStats, Size } from "./frame-source";
 
 // 엔지니어·고객 쪽 앵커 세션. React useSyncExternalStore에 바로 쓸 수 있는 subscribe/getSnapshot 제공.
 //
@@ -42,6 +53,11 @@ import type { Size } from "./frame-source";
 // 고객: 받은 JPEG를 기준 그레이로 풀어 initialH 없이(탐색) 추적. 상태가 바뀌면 status로 알리고,
 //       searching/lost가 0.8초 이상이면 카드(기준 이미지)를 띄운다.
 // 둘 다 아무것도 저장하지 않는다 (메모리만). destroy()가 Worker·루프·객체 URL·리스너를 모두 정리.
+//
+// 주석 기준점(추적기 setReference의 anchor, 화면 밖 화살표의 목표) = 앵커의 첫 주석: 핀이면 핀 위치,
+// 선이면 선의 길이 가중 중심 (overlay.primaryAnchorPx). 같은 앵커에 나중에 붙은 주석은 기준점을 바꾸지 않는다.
+// 화면 밖 화살표: 스냅샷 arrow가 true면 AnchorOverlay가 가장자리 화살표를 그리고 있다 (같은 규칙·같은 입력,
+// 세션의 fit이 AnchorOverlay의 fit과 같아야 한다). UI는 이때 "화살표 쪽으로 비춰주세요" 같은 안내를 띄우면 된다.
 
 /**
  * 탭/드래그 구분: 누른 곳에서 CSS 10px 이상 움직이면 드래그(선), 아니면 핀.
@@ -68,11 +84,13 @@ export interface TrackerLike {
   clearAnchor(): void;
   frameSize(): Size | null;
   destroy(): void;
+  /** 프레임 획득 통계 (획득 방식·메인 스레드 비용) — 진단 화면용 */
+  stats?(): FrameSourceStats | null;
 }
 
 export type CreateTracker = (
   video: HTMLVideoElement,
-  opts: { fps: number; onUpdate: (u: TrackUpdate) => void },
+  opts: { fps: number; onUpdate: (u: TrackUpdate) => void; acquisition?: readonly AcquisitionMode[] },
 ) => TrackerLike;
 
 export interface Clock {
@@ -88,7 +106,7 @@ const defaultClock: Clock = {
 };
 
 const defaultCreateTracker: CreateTracker = (video, opts) =>
-  new AnchorTracker(video, { fps: opts.fps, onUpdate: opts.onUpdate });
+  new AnchorTracker(video, { fps: opts.fps, onUpdate: opts.onUpdate, acquisition: opts.acquisition });
 
 /** 짧은 무작위 id (앵커·주석). 보안 용도 아님 */
 export function randomId(prefix: string): string {
@@ -219,6 +237,25 @@ function sameSize(a: Size, b: Size): boolean {
   return a.width === b.width && a.height === b.height;
 }
 
+/** <video> 레이아웃으로 화살표 판단. 레이아웃을 모르면(측정 전·테스트) 프레임 전체가 보인다고 본다 */
+function nextArrow(
+  state: GuideArrowState,
+  video: HTMLVideoElement,
+  fit: ObjectFit,
+  u: TrackUpdate | null,
+  anchorRef: Point | null,
+  now: number,
+): boolean {
+  let m = null;
+  try {
+    m = mappingForVideo(video, fit);
+  } catch {
+    m = null;
+  }
+  if (!m && u) m = computeDisplayMapping(u.frameSize.width, u.frameSize.height, u.frameSize.width, u.frameSize.height, "fill");
+  return state.next(u, anchorRef, m, now) !== null;
+}
+
 /** 다른 작업 크기의 frame 픽셀로 (회전 직후 등, 픽셀 중심 규약) */
 function rescale(p: Point, from: Size, to: Size): Point {
   if (sameSize(from, to)) return p;
@@ -241,6 +278,14 @@ export interface EngineerSnapshot {
   trackable: boolean | null;
   /** setFrozen(true) 중인지 */
   frozen: boolean;
+  /** 엔지니어 자기 화면에 화면 밖 안내 화살표가 떠 있음 (AnchorOverlay와 같은 규칙) */
+  arrow: boolean;
+  /** 고객 화면에 화살표가 떠 있음 = 고객에게 핀이 안 보이고 화살표로 안내 중 (고객이 알려온 것) */
+  customerArrow: boolean;
+  /** 고객 쪽 놓친 이유 (customerState가 lost/searching일 때, 알려온 경우만) */
+  customerReason: LostReason | null;
+  /** 기준 설정 결과의 이유 (ReferenceInfo.reason: low_texture·pin_blank·ambiguous) */
+  referenceReason: ReferenceInfo["reason"] | null;
 }
 
 export interface PointerSample {
@@ -258,6 +303,10 @@ export interface EngineerSessionOptions {
   link: DataLink;
   /** 추적 fps 상한 (기본 30) */
   fps?: number;
+  /** <video>의 object-fit (화살표 판단용, AnchorOverlay의 fit과 같게). 기본 contain */
+  fit?: ObjectFit;
+  /** 프레임 획득 방식 선호 순서 (기본 자동: videoframe-worker → videoframe → canvas). 실험·진단용 */
+  acquisition?: readonly AcquisitionMode[];
   deps?: {
     createTracker?: CreateTracker;
     capture?: (video: HTMLVideoElement) => CapturedReference | null;
@@ -271,8 +320,10 @@ interface EngAnchor {
   jpeg: Promise<Blob>;
   jpegSize: Size;
   refSize: Size;
-  /** 요청 ROI (ref px) — 같은 앵커 판정과 추적기 핀 대리값 */
+  /** 요청 ROI (ref px) — 같은 앵커 판정 */
   roiPx: Rect;
+  /** 주석 기준점 (ref px) — 추적기 anchor·화살표 목표. 첫 주석이 확정되기 전에는 누른 곳 */
+  anchorPx: Point | null;
   annotations: Annotation[];
   info: ReferenceInfo | null;
   /** 주석이 하나라도 확정됨 (= 고객에게 보낼 대상) */
@@ -294,7 +345,10 @@ interface Gesture {
   refPts: Point[];
   prev: EngAnchor | null;
   prevCustomerState: TrackState | null;
+  prevCustomerArrow: boolean;
+  prevCustomerReason: LostReason | null;
   prevTrackable: boolean | null;
+  prevReferenceReason: ReferenceInfo["reason"] | null;
 }
 
 /** 빈 스냅샷 (useSyncExternalStore의 getServerSnapshot·세션 생성 전 기본값으로) */
@@ -304,6 +358,10 @@ export const EMPTY_ENGINEER_SNAPSHOT: EngineerSnapshot = Object.freeze({
   customerState: null,
   trackable: null,
   frozen: false,
+  arrow: false,
+  customerArrow: false,
+  customerReason: null,
+  referenceReason: null,
 });
 
 export class EngineerAnchorSession {
@@ -311,8 +369,10 @@ export class EngineerAnchorSession {
   private readonly link: DataLink;
   private readonly tracker: TrackerLike;
   private readonly clock: Clock;
+  private readonly fit: ObjectFit;
   private readonly capture: (video: HTMLVideoElement) => CapturedReference | null;
   private readonly store = new Store<EngineerSnapshot>(EMPTY_ENGINEER_SNAPSHOT);
+  private readonly arrowState = new GuideArrowState();
   private readonly receiver: ProtocolReceiver;
   private readonly offs: (() => void)[] = [];
 
@@ -322,7 +382,11 @@ export class EngineerAnchorSession {
   private lastGood: TrackUpdate | null = null;
   private lastGoodInv: Mat3 | null = null;
   private customerState: TrackState | null = null;
+  private customerArrow = false;
+  private customerReason: LostReason | null = null;
   private trackable: boolean | null = null;
+  private referenceReason: ReferenceInfo["reason"] | null = null;
+  private arrow = false;
   private frozen = false;
   private gesture: Gesture | null = null;
   private draft: Annotation | null = null;
@@ -339,19 +403,25 @@ export class EngineerAnchorSession {
   constructor(opts: EngineerSessionOptions) {
     this.video = opts.video;
     this.link = opts.link;
+    this.fit = opts.fit ?? "contain";
     this.clock = opts.deps?.clock ?? defaultClock;
     this.capture = opts.deps?.capture ?? ((v) => captureReference(v));
     this.tracker = (opts.deps?.createTracker ?? defaultCreateTracker)(opts.video, {
       fps: opts.fps ?? 30,
       onUpdate: (u) => this.onTrackerUpdate(u),
+      acquisition: opts.acquisition,
     });
     this.receiver = new ProtocolReceiver(
       {
-        onStatus: (anchorId, state) => {
+        onStatus: (anchorId, state, extra) => {
           const a = this.anchor;
           if (!a || a.id !== anchorId || !a.committed) return;
-          if (this.customerState === state) return;
+          const arrow = !!extra?.arrow;
+          const reason = state === "lost" || state === "searching" ? (extra?.reason ?? null) : null;
+          if (this.customerState === state && this.customerArrow === arrow && this.customerReason === reason) return;
           this.customerState = state;
+          this.customerArrow = arrow;
+          this.customerReason = reason;
           this.emit();
         },
       },
@@ -381,8 +451,11 @@ export class EngineerAnchorSession {
     this.anchor = null;
     this.update = null;
     this.setLastGood(null);
-    this.customerState = null;
+    this.resetCustomer();
     this.trackable = null;
+    this.referenceReason = null;
+    this.arrowState.reset();
+    this.arrow = false;
     this.viewDirty = true;
     this.trackToken++;
     this.cancelResend();
@@ -394,6 +467,11 @@ export class EngineerAnchorSession {
   /** 추적 갱신 최신값 (rAF 렌더 루프에서 React 재렌더 없이 읽기용) */
   latestUpdate(): TrackUpdate | null {
     return this.update;
+  }
+
+  /** 프레임 획득 통계 (획득 방식, 메인 스레드 ms, 내려간 기록) — 진단 화면용. 추적 전이면 null일 수 있다 */
+  trackerStats(): FrameSourceStats | null {
+    return this.tracker.stats?.() ?? null;
   }
 
   /**
@@ -425,9 +503,10 @@ export class EngineerAnchorSession {
 
   /**
    * 요소(보통 영상을 감싼 컨테이너)에 포인터 리스너를 단다. touch-action: none 설정 포함.
-   * fit은 <video>의 object-fit. 반환값을 부르면 떼어낸다.
+   * fit은 <video>의 object-fit. 반환값을 부르면 떼어낸다 (destroy()도 떼어낸다, 여러 번 불러도 안전).
    */
   attachPointerInput(el: HTMLElement, fit: ObjectFit = "contain"): () => void {
+    if (this.destroyed) return () => {};
     const video = this.video;
     const sample = (ev: PointerEvent, pointerId = ev.pointerId): PointerSample | null => {
       const fs = this.tracker.frameSize();
@@ -478,15 +557,22 @@ export class EngineerAnchorSession {
     el.addEventListener("pointerup", up);
     el.addEventListener("pointercancel", cancel);
     el.addEventListener("lostpointercapture", cancel);
-    return () => {
+    let attached = true;
+    const detach = () => {
+      if (!attached) return;
+      attached = false;
       el.removeEventListener("pointerdown", down);
       el.removeEventListener("pointermove", move);
       el.removeEventListener("pointerup", up);
       el.removeEventListener("pointercancel", cancel);
       el.removeEventListener("lostpointercapture", cancel);
       el.style.touchAction = prevTouch;
-      this.cancelGesture();
+      const i = this.offs.indexOf(detach);
+      if (i >= 0) this.offs.splice(i, 1);
+      if (!this.destroyed) this.cancelGesture();
     };
+    this.offs.push(detach);
+    return detach;
   }
 
   destroy(): void {
@@ -494,7 +580,7 @@ export class EngineerAnchorSession {
     this.dropGesture(false);
     this.destroyed = true;
     this.cancelResend();
-    for (const off of this.offs) off();
+    for (const off of [...this.offs]) off();
     this.offs.length = 0;
     this.tracker.destroy();
     this.anchor = null;
@@ -534,7 +620,10 @@ export class EngineerAnchorSession {
       refPts: [],
       prev: this.anchor,
       prevCustomerState: this.customerState,
+      prevCustomerArrow: this.customerArrow,
+      prevCustomerReason: this.customerReason,
       prevTrackable: this.trackable,
+      prevReferenceReason: this.referenceReason,
     };
 
     if (mode === "same") {
@@ -552,6 +641,7 @@ export class EngineerAnchorSession {
         jpegSize: cap.jpegSize,
         refSize,
         roiPx: roiFromTap(p, refSize.width, refSize.height),
+        anchorPx: { x: p.x, y: p.y },
         annotations: [],
         info: null,
         committed: false,
@@ -616,8 +706,10 @@ export class EngineerAnchorSession {
     }
 
     if (g.mode === "new") {
+      // 기준점은 보낼 주석(양자화된 norm)에서 계산 → 고객 쪽과 같은 값
+      a.anchorPx = annotationAnchorPx(ann, ref.width, ref.height) ?? a.anchorPx;
       if (ann.kind === "stroke" && strokeRef) {
-        // ROI를 선 전체로 다시 잡는다 (추적기 핀 대리값 = 선의 중심)
+        // ROI를 선 전체로 다시 잡고, 기준점 = 선의 길이 가중 중심으로 추적을 다시 시작
         a.roiPx = roiFromStroke(strokeRef, ref.width, ref.height);
         const lg = this.lastGood;
         const H0 = lg && lg.anchorId === a.id && lg.H ? lg.H : IDENTITY;
@@ -667,14 +759,20 @@ export class EngineerAnchorSession {
     this.setLastGood(null);
     this.viewDirty = true;
     this.customerState = g.prevCustomerState;
+    this.customerArrow = g.prevCustomerArrow;
+    this.customerReason = g.prevCustomerReason;
     this.trackable = g.prevTrackable;
+    this.referenceReason = g.prevReferenceReason;
+    this.arrowState.reset();
+    this.arrow = false;
     const token = ++this.trackToken;
     if (prev) {
       // 자세를 모르므로 탐색 모드로 다시 찾는다
-      void this.tracker.setAnchor({ id: prev.id, ref: prev.gray, roi: prev.roiPx }).then((info) => {
+      void this.tracker.setAnchor({ id: prev.id, ref: prev.gray, roi: prev.roiPx, anchor: prev.anchorPx }).then((info) => {
         if (this.destroyed || this.anchor !== prev || token !== this.trackToken || !info) return;
         prev.info = info;
         this.trackable = info.trackable;
+        this.referenceReason = info.reason ?? null;
         this.emit();
       });
     } else {
@@ -738,13 +836,17 @@ export class EngineerAnchorSession {
   private activate(a: EngAnchor, H0: Mat3) {
     this.cancelResend();
     this.anchor = a;
-    this.customerState = null;
+    this.resetCustomer();
     this.trackable = null;
+    this.referenceReason = null;
+    this.arrowState.reset();
+    this.arrow = false;
     this.viewDirty = true;
     const synthetic: TrackUpdate = {
       anchorId: a.id,
       state: "tracking",
       H: H0.slice(),
+      hint: null,
       confidence: 1,
       refSize: { ...a.refSize },
       frameSize: { ...a.refSize },
@@ -757,10 +859,11 @@ export class EngineerAnchorSession {
 
   private startTracking(a: EngAnchor, H0: Mat3) {
     const token = ++this.trackToken;
-    void this.tracker.setAnchor({ id: a.id, ref: a.gray, roi: a.roiPx, initialH: H0 }).then((info) => {
+    void this.tracker.setAnchor({ id: a.id, ref: a.gray, roi: a.roiPx, initialH: H0, anchor: a.anchorPx }).then((info) => {
       if (this.destroyed || this.anchor !== a || token !== this.trackToken) return;
       a.info = info;
       this.trackable = info ? info.trackable : false;
+      this.referenceReason = info?.reason ?? null;
       this.emit();
     });
   }
@@ -771,7 +874,14 @@ export class EngineerAnchorSession {
     if (!a || u.anchorId !== a.id) return;
     this.update = u;
     if (u.H) this.setLastGood(u);
+    this.arrow = nextArrow(this.arrowState, this.video, this.fit, u, a.anchorPx, this.clock.now());
     this.emit();
+  }
+
+  private resetCustomer() {
+    this.customerState = null;
+    this.customerArrow = false;
+    this.customerReason = null;
   }
 
   private descriptorOf(a: EngAnchor): AnchorDescriptor {
@@ -859,8 +969,8 @@ export class EngineerAnchorSession {
     const a = this.anchor;
     if (!open) {
       if (a) a.sent = false;
-      if (this.customerState !== null) {
-        this.customerState = null;
+      if (this.customerState !== null || this.customerArrow || this.customerReason !== null) {
+        this.resetCustomer();
         this.emit();
       }
       return;
@@ -885,13 +995,18 @@ export class EngineerAnchorSession {
       }
     }
     const update = a && this.update && this.update.anchorId === a.id ? this.update : null;
+    const arrow = !!a && !!update && this.arrow;
     const prev = this.store.get();
     if (
       prev.anchor === this.anchorView &&
       prev.update === update &&
       prev.customerState === this.customerState &&
       prev.trackable === this.trackable &&
-      prev.frozen === this.frozen
+      prev.frozen === this.frozen &&
+      prev.arrow === arrow &&
+      prev.customerArrow === this.customerArrow &&
+      prev.customerReason === this.customerReason &&
+      prev.referenceReason === this.referenceReason
     ) {
       return;
     }
@@ -901,6 +1016,10 @@ export class EngineerAnchorSession {
       customerState: this.customerState,
       trackable: this.trackable,
       frozen: this.frozen,
+      arrow,
+      customerArrow: this.customerArrow,
+      customerReason: this.customerReason,
+      referenceReason: this.referenceReason,
     });
   }
 }
@@ -912,8 +1031,16 @@ export interface CustomerSnapshot {
   update: TrackUpdate | null;
   /** 기준 JPEG 객체 URL (카드 이미지). 앵커가 바뀌거나 지워지면 폐기된다 */
   cardUrl: string | null;
-  /** searching/lost가 0.8초 이상 이어짐 → 상단 카드 "기사님이 표시한 곳을 비춰주세요" */
+  /**
+   * searching/lost가 0.8초 이상 이어짐 → 상단 카드 "기사님이 표시한 곳을 비춰주세요".
+   * 화면 밖 화살표가 떠 있는 동안(arrow)은 카드 대신 화살표로 안내하므로 false.
+   */
   showCard: boolean;
+  /**
+   * 핀이 화면에 안 보여 가장자리 화살표가 떠 있음 (AnchorOverlay가 그리는 것과 같은 규칙).
+   * UI 안내 문구 예: "화살표 쪽으로 비춰주세요"
+   */
+  arrow: boolean;
 }
 
 export interface CustomerSessionOptions {
@@ -922,6 +1049,10 @@ export interface CustomerSessionOptions {
   /** 추적 fps 상한 (기본 20) */
   fps?: number;
   cardDelayMs?: number;
+  /** <video>의 object-fit (화살표 판단용, AnchorOverlay의 fit과 같게). 기본 cover (고객 화면) */
+  fit?: ObjectFit;
+  /** 프레임 획득 방식 선호 순서 (기본 자동: videoframe-worker → videoframe → canvas). 실험·진단용 */
+  acquisition?: readonly AcquisitionMode[];
   deps?: {
     createTracker?: CreateTracker;
     decode?: (blob: Blob, size: Size) => Promise<GrayImage>;
@@ -936,6 +1067,9 @@ interface CustAnchor {
   byteLength: number;
   url: string | null;
   state: TrackState;
+  reason: LostReason | null;
+  /** 주석 기준점 (ref px) — 첫 주석 */
+  anchorPx: Point | null;
 }
 
 /** 빈 스냅샷 (useSyncExternalStore의 getServerSnapshot·세션 생성 전 기본값으로) */
@@ -944,12 +1078,16 @@ export const EMPTY_CUSTOMER_SNAPSHOT: CustomerSnapshot = Object.freeze({
   update: null,
   cardUrl: null,
   showCard: false,
+  arrow: false,
 });
 
 export class CustomerAnchorSession {
+  private readonly video: HTMLVideoElement;
   private readonly link: DataLink;
   private readonly tracker: TrackerLike;
   private readonly clock: Clock;
+  private readonly fit: ObjectFit;
+  private readonly arrowState = new GuideArrowState();
   private readonly decode: (blob: Blob, size: Size) => Promise<GrayImage>;
   private readonly createUrl: (blob: Blob) => string | null;
   private readonly revokeUrl: (url: string) => void;
@@ -961,15 +1099,18 @@ export class CustomerAnchorSession {
   private current: CustAnchor | null = null;
   private update: TrackUpdate | null = null;
   private showCard = false;
+  private arrow = false;
   private cardTimer: unknown = null;
   private statusTimer: unknown = null;
   private lastStatusAt = Number.NEGATIVE_INFINITY;
-  private lastSent: { anchorId: string; state: TrackState } | null = null;
+  private lastSent: { anchorId: string; state: TrackState; reason: LostReason | null; arrow: boolean } | null = null;
   private gen = 0;
   private destroyed = false;
 
   constructor(opts: CustomerSessionOptions) {
+    this.video = opts.video;
     this.link = opts.link;
+    this.fit = opts.fit ?? "cover";
     this.clock = opts.deps?.clock ?? defaultClock;
     this.cardDelayMs = opts.cardDelayMs ?? CARD_DELAY_MS;
     this.decode = opts.deps?.decode ?? ((blob, size) => decodeReference(blob, size));
@@ -984,6 +1125,7 @@ export class CustomerAnchorSession {
     this.tracker = (opts.deps?.createTracker ?? defaultCreateTracker)(opts.video, {
       fps: opts.fps ?? 20,
       onUpdate: (u) => this.onTrackerUpdate(u),
+      acquisition: opts.acquisition,
     });
     this.receiver = new ProtocolReceiver(
       {
@@ -1012,6 +1154,11 @@ export class CustomerAnchorSession {
 
   latestUpdate(): TrackUpdate | null {
     return this.update;
+  }
+
+  /** 프레임 획득 통계 (획득 방식, 메인 스레드 ms, 내려간 기록) — 진단 화면용 */
+  trackerStats(): FrameSourceStats | null {
+    return this.tracker.stats?.() ?? null;
   }
 
   destroy(): void {
@@ -1043,6 +1190,7 @@ export class CustomerAnchorSession {
     if (cur && cur.descriptor.id === anchor.id && cur.byteLength === bytes.length) {
       // 재연결로 같은 앵커가 다시 옴 → 추적은 그대로, 주석만 맞춘다
       cur.descriptor = { ...cur.descriptor, annotations: anchor.annotations };
+      if (!cur.anchorPx) cur.anchorPx = primaryAnchorPx(anchor.annotations, anchor.refWidth, anchor.refHeight);
       this.emit();
       return;
     }
@@ -1055,9 +1203,13 @@ export class CustomerAnchorSession {
       byteLength: bytes.length,
       url: this.createUrl(blob),
       state: "searching",
+      reason: null,
+      anchorPx: primaryAnchorPx(anchor.annotations, anchor.refWidth, anchor.refHeight),
     };
     this.current = next;
     this.update = null;
+    this.arrowState.reset();
+    this.arrow = false;
     this.tracker.clearAnchor();
     // 새 앵커: 카드 타이머를 처음부터 (0.8초 탐색 후 카드)
     if (this.cardTimer !== null) this.clock.clearTimeout(this.cardTimer);
@@ -1072,7 +1224,7 @@ export class CustomerAnchorSession {
         if (gen !== this.gen || this.destroyed) return;
         const roi = rectNormToPx(anchor.roi, size.width, size.height);
         // initialH 없음 → searching에서 ORB 탐색으로 찾는다
-        return this.tracker.setAnchor({ id: anchor.id, ref: gray, roi }).then((info) => {
+        return this.tracker.setAnchor({ id: anchor.id, ref: gray, roi, anchor: next.anchorPx }).then((info) => {
           if (gen !== this.gen || this.destroyed) return;
           if (!info) this.onState(next, "lost");
         });
@@ -1089,6 +1241,7 @@ export class CustomerAnchorSession {
     if (cur.descriptor.annotations.some((a) => a.id === ann.id)) return;
     if (cur.descriptor.annotations.length >= PROTOCOL_LIMITS.maxAnnotations) return;
     cur.descriptor = { ...cur.descriptor, annotations: [...cur.descriptor.annotations, ann] };
+    if (!cur.anchorPx) cur.anchorPx = primaryAnchorPx(cur.descriptor.annotations, cur.descriptor.refWidth, cur.descriptor.refHeight);
     this.emit();
   }
 
@@ -1098,6 +1251,8 @@ export class CustomerAnchorSession {
     if (cur?.url) this.revokeUrl(cur.url);
     this.current = null;
     this.update = null;
+    this.arrowState.reset();
+    this.arrow = false;
     this.tracker.clearAnchor();
     this.clearTimers();
     this.showCard = false;
@@ -1109,18 +1264,28 @@ export class CustomerAnchorSession {
     const cur = this.current;
     if (!cur || u.anchorId !== cur.descriptor.id) return;
     this.update = u;
-    this.onState(cur, u.state);
+    const arrow = nextArrow(this.arrowState, this.video, this.fit, u, cur.anchorPx, this.clock.now());
+    const reason = u.state === "lost" || u.state === "searching" ? (u.reason ?? null) : null;
+    const changed = arrow !== this.arrow || reason !== cur.reason;
+    this.arrow = arrow;
+    cur.reason = reason;
+    this.onState(cur, u.state, changed);
     this.emit();
+  }
+
+  /** 카드가 필요한 상태: 못 찾았고(searching/lost) 화살표로 안내하고 있지도 않음 */
+  private needsCard(cur: CustAnchor): boolean {
+    return (cur.state === "searching" || cur.state === "lost") && !this.arrow;
   }
 
   private onState(cur: CustAnchor, state: TrackState, force = false) {
     if (!force && cur.state === state) return;
     cur.state = state;
-    if (state === "searching" || state === "lost") {
+    if (this.needsCard(cur)) {
       if (!this.showCard && this.cardTimer === null) {
         this.cardTimer = this.clock.setTimeout(() => {
           this.cardTimer = null;
-          if (this.current === cur && (cur.state === "searching" || cur.state === "lost")) {
+          if (this.current === cur && this.needsCard(cur)) {
             this.showCard = true;
             this.emit();
           }
@@ -1142,7 +1307,10 @@ export class CustomerAnchorSession {
     const cur = this.current;
     if (!cur || this.destroyed) return;
     const id = cur.descriptor.id;
-    if (!force && this.lastSent && this.lastSent.anchorId === id && this.lastSent.state === cur.state) return;
+    const arrow = this.arrow;
+    const reason = cur.reason;
+    const ls = this.lastSent;
+    if (!force && ls && ls.anchorId === id && ls.state === cur.state && ls.reason === reason && ls.arrow === arrow) return;
     const wait = this.lastStatusAt + STATUS_MIN_INTERVAL_MS - this.clock.now();
     if (!force && wait > 0) {
       if (this.statusTimer === null) {
@@ -1154,8 +1322,11 @@ export class CustomerAnchorSession {
       return;
     }
     if (!this.link.isOpen()) return;
-    if (this.link.send(encodeMessage({ t: "status", anchorId: id, state: cur.state }))) {
-      this.lastSent = { anchorId: id, state: cur.state };
+    const msg: StatusMessage = { t: "status", anchorId: id, state: cur.state };
+    if (reason) msg.reason = reason;
+    if (arrow) msg.arrow = true;
+    if (this.link.send(encodeMessage(msg))) {
+      this.lastSent = { anchorId: id, state: cur.state, reason, arrow };
       this.lastStatusAt = this.clock.now();
     }
   }
@@ -1174,8 +1345,17 @@ export class CustomerAnchorSession {
     const update = cur && this.update && this.update.anchorId === cur.descriptor.id ? this.update : null;
     const cardUrl = cur ? cur.url : null;
     const showCard = !!cur && this.showCard;
+    const arrow = !!cur && !!update && this.arrow;
     const prev = this.store.get();
-    if (prev.anchor === anchor && prev.update === update && prev.cardUrl === cardUrl && prev.showCard === showCard) return;
-    this.store.set({ anchor, update, cardUrl, showCard });
+    if (
+      prev.anchor === anchor &&
+      prev.update === update &&
+      prev.cardUrl === cardUrl &&
+      prev.showCard === showCard &&
+      prev.arrow === arrow
+    ) {
+      return;
+    }
+    this.store.set({ anchor, update, cardUrl, showCard, arrow });
   }
 }

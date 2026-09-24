@@ -33,7 +33,10 @@ export type TrackerName = "planar" | "oracle" | "null" | "shifted";
 
 const noTimings = { total: 0 };
 
-/** 정답 H를 그대로 돌려주는 추적기 → 지표가 완벽해야 한다 (하네스 검증) */
+/**
+ * 정답 H를 그대로 돌려주는 추적기 → 지표가 완벽해야 한다 (하네스 검증).
+ * 핀이 화면 밖(카메라 앞)이면 lost + reason=offscreen + hint=정답 H → 화면 밖 안내 방향 오차 0.
+ */
 class OracleTracker implements BenchTracker {
   private gt: FrameGT | null = null;
   private roi: Rect | null = null;
@@ -56,15 +59,16 @@ class OracleTracker implements BenchTracker {
   }
   process(): TrackResult {
     const gt = this.gt;
-    if (!gt || !gt.pin || !gt.inFrame) {
-      return { state: "lost", H: null, confidence: 0, inliers: 0, tracked: 0, redetected: false, timings: noTimings };
+    if (!gt || !gt.pin) {
+      return { state: "lost", H: null, hint: null, reason: "unverified", confidence: 0, inliers: 0, tracked: 0, redetected: false, timings: noTimings };
     }
-    // 핀이 정확히 맞도록 (롤링 셔터 보정분만큼) 평행이동을 더한 정답 H
-    const p = applyH(gt.H, this.pinRef)!;
-    const dx = gt.pin.x - p.x + this.shiftPx;
-    const dy = gt.pin.y - p.y;
-    const H: Mat3 = mul3([1, 0, dx, 0, 1, dy, 0, 0, 1], gt.H);
-    return { state: "tracking", H, confidence: 1, inliers: 999, tracked: 999, redetected: false, timings: noTimings };
+    // 핀이 정확히 맞도록 (롤링 셔터·렌즈 왜곡·입체 시차 보정분만큼) 평행이동을 더한 정답 H
+    const p = applyH(gt.H, this.pinRef);
+    const H: Mat3 | null = p ? mul3([1, 0, gt.pin.x - p.x + this.shiftPx, 0, 1, gt.pin.y - p.y, 0, 0, 1], gt.H) : null;
+    if (!gt.inFrame) {
+      return { state: "lost", H: null, hint: H, reason: "offscreen", confidence: 0, inliers: 0, tracked: 0, redetected: false, timings: noTimings };
+    }
+    return { state: "tracking", H, hint: null, confidence: 1, inliers: 999, tracked: 999, redetected: false, timings: noTimings };
   }
 }
 
@@ -86,6 +90,8 @@ class NullTracker implements BenchTracker {
     return {
       state: this.customer ? "searching" : "lost",
       H: null,
+      hint: null,
+      reason: "unverified",
       confidence: 0,
       inliers: 0,
       tracked: 0,

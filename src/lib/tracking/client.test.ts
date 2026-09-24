@@ -2,14 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AnchorTracker, type FrameSourceLike, type WorkerLike } from "./client";
 import { TrackerWorkerHost, type WorkerRequest } from "./tracker.worker";
 import type { FrameSourceOptions } from "./frame-source";
-import type { GrayImage, Mat3, PlanarTrackerApi, Rect, ReferenceInfo, TrackResult, TrackUpdate } from "./types";
+import type { GrayImage, Mat3, PlanarTrackerApi, Point, Rect, ReferenceInfo, TrackResult, TrackUpdate } from "./types";
 
 class FakeTracker implements PlanarTrackerApi {
   static throwNext = false;
+  /** 있으면 process()가 이 결과를 돌려준다 */
+  static next: Partial<TrackResult> | null = null;
   initialH: Mat3 | undefined;
+  anchor: Point | undefined;
   hasRef = false;
-  setReference(_ref: GrayImage, roi: Rect, initialH?: Mat3): ReferenceInfo {
+  setReference(_ref: GrayImage, roi: Rect, initialH?: Mat3, anchor?: Point): ReferenceInfo {
     this.initialH = initialH;
+    this.anchor = anchor;
     this.hasRef = true;
     return { roi, features: 50, trackable: true };
   }
@@ -27,18 +31,30 @@ class FakeTracker implements PlanarTrackerApi {
     return {
       state: "tracking",
       H: [2, 0, 0, 0, 2, 0, 0, 0, 1],
+      hint: null,
       confidence: 0.8,
       inliers: 20,
       tracked: 25,
       redetected: false,
       timings: { total: frame.width / 10 },
+      ...FakeTracker.next,
     };
   }
 }
 
 /** 가짜 Worker: 메시지를 큐에 쌓고 flush() 때 진짜 TrackerWorkerHost로 처리해 응답을 비동기처럼 전달 */
 class FakeWorker implements WorkerLike {
-  onmessage: ((e: MessageEvent) => void) | null = null;
+  /** false면 스크립트 로드 실패 흉내 (ready를 안 보냄) */
+  static autoReady = true;
+  private handler: ((e: MessageEvent) => void) | null = null;
+  get onmessage() {
+    return this.handler;
+  }
+  set onmessage(cb: ((e: MessageEvent) => void) | null) {
+    this.handler = cb;
+    // 진짜 Worker는 모듈을 다 읽으면 ready를 보낸다
+    if (cb && FakeWorker.autoReady) cb({ data: { type: "ready" } } as MessageEvent);
+  }
   onerror: ((e: Event) => void) | null = null;
   onmessageerror: ((e: MessageEvent) => void) | null = null;
   inbox: { msg: WorkerRequest; transfer?: Transferable[] }[] = [];
@@ -129,6 +145,8 @@ describe("AnchorTracker", () => {
   afterEach(() => {
     warn.mockRestore();
     FakeTracker.throwNext = false;
+    FakeTracker.next = null;
+    FakeWorker.autoReady = true;
   });
 
   it("lazily creates the worker, sets the reference and starts the loop", async () => {
@@ -164,6 +182,7 @@ describe("AnchorTracker", () => {
       anchorId: "a1",
       state: "tracking",
       H: [2, 0, 0, 0, 2, 0, 0, 0, 1],
+      hint: null,
       confidence: 0.8,
       refSize: { width: 320, height: 240 },
       frameSize: { width: 320, height: 240 },
@@ -279,5 +298,88 @@ describe("AnchorTracker", () => {
     const t = setup();
     expect(t.tracker.captureGray()?.width).toBe(4);
     expect(t.tracker.frameSize()).toEqual({ width: 320, height: 240 });
+  });
+
+  it("v2: anchor point reaches the tracker (also after a worker restart)", async () => {
+    const t = setup();
+    const anchor = { x: 150.5, y: 90.25 };
+    const p = t.tracker.setAnchor({ id: "a1", ref: ref(), roi, initialH: I, anchor });
+    anchor.x = -1; // 호출측이 바꿔도 영향 없음 (복사)
+    t.workers[0].flush();
+    await p;
+    expect(t.workers[0].trackers[0].anchor).toEqual({ x: 150.5, y: 90.25 });
+    t.workers[0].crash();
+    t.workers[1].flush();
+    expect(t.workers[1].trackers[0].anchor).toEqual({ x: 150.5, y: 90.25 });
+    expect(t.workers[1].trackers[0].initialH).toBeUndefined();
+    // 잘못된 점은 보내지 않는다 (추적기가 ROI 중심을 쓴다)
+    t.tracker.setAnchor({ id: "a2", ref: ref(), roi, anchor: { x: Number.NaN, y: 1 } });
+    t.workers[1].flush();
+    expect(t.workers[1].trackers[0].anchor).toBeUndefined();
+  });
+
+  it("v2: hint and reason reach TrackUpdate only when H is not shown", () => {
+    const t = setup();
+    t.tracker.setAnchor({ id: "a1", ref: ref(), roi, initialH: I });
+    t.workers[0].flush();
+    const hint: Mat3 = [1, 0, 500, 0, 1, 0, 0, 0, 1];
+    FakeTracker.next = { state: "lost", H: null, hint, reason: "offscreen" };
+    t.source().emit();
+    t.workers[0].flush();
+    expect(t.updates.at(-1)).toMatchObject({ state: "lost", H: null, hint, reason: "offscreen" });
+    FakeTracker.next = { state: "weak", hint, reason: "offscreen" };
+    t.source().emit();
+    t.workers[0].flush();
+    expect(t.updates.at(-1)).toMatchObject({ state: "weak", H: [2, 0, 0, 0, 2, 0, 0, 0, 1], hint: null });
+    expect("reason" in t.updates.at(-1)!).toBe(false); // H가 보이면 이유 없음
+    FakeTracker.next = { state: "searching", H: null, reason: "untrackable" };
+    t.source().emit();
+    t.workers[0].flush();
+    expect(t.updates.at(-1)).toMatchObject({ state: "searching", hint: null, reason: "untrackable" });
+  });
+
+  it("a worker script that never loads is not retried forever (3 load failures → no more workers)", async () => {
+    FakeWorker.autoReady = false;
+    const t = setup();
+    const p = t.tracker.setAnchor({ id: "a1", ref: ref(), roi });
+    t.workers[0].crash();
+    t.workers[1].crash();
+    t.workers[2].crash();
+    await expect(p).resolves.toBeNull();
+    expect(t.workers.length).toBe(3);
+    expect(t.updates.at(-1)?.state).toBe("lost");
+    // 다음 앵커도 Worker를 새로 만들지 않고 바로 실패
+    await expect(t.tracker.setAnchor({ id: "a2", ref: ref(), roi })).resolves.toBeNull();
+    expect(t.workers.length).toBe(3);
+  });
+
+  it("VideoFrame packets go to the worker by transfer; acquisition errors demote instead of restarting the tracker", () => {
+    const t = setup();
+    const demoted: string[] = [];
+    const src = t.source() as FakeSource & { demote?: (m: string, r: string) => void };
+    src.demote = (m) => demoted.push(m);
+    t.tracker.setAnchor({ id: "a1", ref: ref(), roi, initialH: I });
+    t.workers[0].flush();
+    const vf = { closed: false, close() { this.closed = true; } };
+    src.opts.onPacket!({ kind: "videoframe", frame: vf as never, width: 320, height: 240 }, 5);
+    const post = t.workers[0].inbox.at(-1)!;
+    expect(post.msg).toMatchObject({ type: "videoFrame", gen: expect.any(Number), width: 320, height: 240, ts: 5 });
+    expect(post.transfer).toEqual([vf]);
+    // Worker가 형식 문제로 못 읽었다고 알림 → 두 VideoFrame 방식 끄기, 추적기 재시작 없음
+    t.workers[0].inbox.pop();
+    t.workers[0].onmessage!({
+      data: { type: "result", gen: 1, result: null, frame: { width: 320, height: 240, data: new Uint8Array(0) }, processMs: 1, acquireError: "NV21?", unsupported: true },
+    } as MessageEvent);
+    expect(demoted).toEqual(["videoframe-worker", "videoframe"]);
+    expect(t.source().released.at(-1)?.buf).toBeNull();
+    expect(t.workers[0].inbox.some((m) => m.msg.type === "setReference")).toBe(false);
+    // 전송 자체가 실패하면(구형 브라우저) 프레임을 닫고 메인 읽기로
+    t.workers[0].postMessage = () => {
+      throw new DOMException("could not clone", "DataCloneError");
+    };
+    const vf2 = { closed: false, close() { this.closed = true; } };
+    src.opts.onPacket!({ kind: "videoframe", frame: vf2 as never, width: 320, height: 240 }, 6);
+    expect(vf2.closed).toBe(true);
+    expect(demoted.at(-1)).toBe("videoframe-worker");
   });
 });

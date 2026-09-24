@@ -1,5 +1,5 @@
 import type { LinkData } from "@/lib/webrtc/data-link";
-import type { AnchorDescriptor, Annotation, Point, Rect, TrackState } from "./types";
+import type { AnchorDescriptor, Annotation, LostReason, Point, Rect, TrackState } from "./types";
 
 // DataChannel('draw') 추적 프로토콜 (README "DataChannel 프로토콜").
 //
@@ -7,7 +7,8 @@ import type { AnchorDescriptor, Annotation, Point, Rect, TrackState } from "./ty
 //                  직후 바이너리 조각 ⌈N/16000⌉개 (각 조각 = 8바이트 헤더 + 최대 16000바이트)
 //   엔지니어→고객  {"t":"ann","anchorId":id,"ann":Annotation}
 //   엔지니어→고객  {"t":"clear"}
-//   고객→엔지니어  {"t":"status","anchorId":id,"state":TrackState}
+//   고객→엔지니어  {"t":"status","anchorId":id,"state":TrackState,"reason"?:LostReason,"arrow"?:true}
+//                  reason·arrow는 v2 추가 필드 (옛 수신측은 무시한다). arrow = 고객 화면에 "화면 밖" 화살표가 떠 있음
 //
 // 바이너리 조각 헤더 (8바이트, big-endian):
 //   [0] 0xBD 매직  [1] 버전(1)  [2..3] 전송 태그 = anchor.id의 16비트 해시
@@ -49,6 +50,7 @@ export const ANCHOR_HEADER_BUDGET = 48 * 1024;
 export const TRANSFER_TIMEOUT_MS = 15000;
 
 export const TRACK_STATES: readonly TrackState[] = ["searching", "tracking", "weak", "lost"];
+export const LOST_REASONS: readonly LostReason[] = ["offscreen", "unverified", "untrackable", "invalid_frame"];
 
 export interface ImageMeta {
   bytes: number;
@@ -77,6 +79,10 @@ export interface StatusMessage {
   t: "status";
   anchorId: string;
   state: TrackState;
+  /** v2: lost/searching의 이유 (TrackUpdate.reason) */
+  reason?: LostReason;
+  /** v2: 고객 화면에 화면 밖 안내 화살표가 떠 있음 (핀이 보이는 영역 밖) */
+  arrow?: true;
 }
 
 export type ProtocolMessage = AnchorMessage | AnnMessage | ClearMessage | StatusMessage;
@@ -107,6 +113,10 @@ export function isValidId(v: unknown): v is string {
 
 export function isTrackState(v: unknown): v is TrackState {
   return typeof v === "string" && (TRACK_STATES as readonly string[]).includes(v);
+}
+
+export function isLostReason(v: unknown): v is LostReason {
+  return typeof v === "string" && (LOST_REASONS as readonly string[]).includes(v);
 }
 
 export function validatePoint(v: unknown): Point | null {
@@ -209,9 +219,14 @@ export function validateMessage(v: unknown): ProtocolMessage | null {
     }
     case "clear":
       return { t: "clear" };
-    case "status":
+    case "status": {
       if (!isValidId(v.anchorId) || !isTrackState(v.state)) return null;
-      return { t: "status", anchorId: v.anchorId, state: v.state };
+      const out: StatusMessage = { t: "status", anchorId: v.anchorId, state: v.state };
+      // 선택 필드는 틀려도 메시지 전체를 버리지 않고 그 필드만 뺀다 (옛·새 버전 혼용)
+      if (isLostReason(v.reason)) out.reason = v.reason;
+      if (v.arrow === true) out.arrow = true;
+      return out;
+    }
     default:
       return null;
   }
@@ -395,7 +410,8 @@ export interface ReceiverHandlers {
   /** 현재 앵커에 주석 추가 (중복·한도 검사 후) */
   onAnn?(anchorId: string, ann: Annotation): void;
   onClear?(): void;
-  onStatus?(anchorId: string, state: TrackState): void;
+  /** extra: v2 선택 필드 (reason·arrow). 옛 송신측이면 빈 객체 */
+  onStatus?(anchorId: string, state: TrackState, extra: { reason?: LostReason; arrow?: boolean }): void;
   /** 버린 메시지·전송 (디버그용) */
   onDrop?(reason: string): void;
 }
@@ -490,7 +506,9 @@ export class ProtocolReceiver {
       return;
     }
     if (this.opts.role === "engineer") {
-      if (msg.t === "status") this.handlers.onStatus?.(msg.anchorId, msg.state);
+      if (msg.t === "status") {
+        this.handlers.onStatus?.(msg.anchorId, msg.state, { reason: msg.reason, arrow: msg.arrow === true });
+      }
       else this.drop(`unexpected-${msg.t}`);
       return;
     }

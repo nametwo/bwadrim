@@ -13,14 +13,18 @@ import {
   categoryName,
   categoryTable,
   formatTable,
+  hintTable,
   scenarioTable,
+  suiteLabel,
 } from "./metrics";
+import { scenarioById, selectScenarios } from "./catalog";
+import { ensureCodecCaptures } from "./codec";
 import { readFrameCache } from "./framecache";
 import { defaultJobs, prerender } from "./prerender";
-import { SCENARIOS, type Scenario, findScenarios } from "./scenarios";
+import { type Scenario, type Suite, suiteOf } from "./scenarios";
 import { buildSequence, pipelineOptions } from "./sequence";
 import { type TrackerName, getTracker, trackerExists } from "./trackers";
-import { ALL_TEXTURE_IDS, BENCH_DIR, ensureTextures } from "./textures";
+import { BENCH_DIR, ensureTextures, texturesFor } from "./textures";
 import { Y4M_DEFAULTS, exportY4m } from "./y4m";
 
 const OUT_DIR = path.join(BENCH_DIR, "out");
@@ -31,7 +35,10 @@ const HELP = `합성 추적 벤치마크 (scripts/tracking-bench)
 
 옵션
   --tracker=planar|oracle|null|shifted   추적기 (기본 planar). oracle=정답, null=항상 못 찾음, shifted=정답+10px
-  --scenario=<부분문자열[,…]|범주>       시나리오 거르기 (예: --scenario=acquire, --scenario=router,reentry)
+  --scenario=<부분문자열[,…]|범주|묶음>  시나리오 거르기 (예: --scenario=acquire, --scenario=router,reentry, --scenario=realism)
+  --suite=base|realism|holdout|all[,…]   묶음 (기본 base,realism). realism = base의 실감 변형(렌즈·입체·ISP·실제 코덱)
+  --holdout                              홀드아웃만 (과적합 확인용 — 추적기 튜닝에 쓰지 말 것). --suite=holdout과 같다
+  --no-codec                             실제 코덱(WebRTC) 시나리오 빼기 (Chromium 캡처 없이)
   --json[=<파일>]                        결과 JSON (기본 out/latest.json, 추적기가 planar가 아니면 out/latest-<추적기>.json)
   --compare=<파일>                       이전 JSON과 비교해 차이 출력
   --frames-dir=<폴더>                    점검용 PNG (정답 핀=초록 십자, 추적 핀=빨강 원, ROI 사각형, 틀린 표시는 보라 테두리)
@@ -61,10 +68,11 @@ function parseArgs(argv: string[]): Record<string, string | true> {
 }
 
 function listScenarios(list: Scenario[]): void {
-  const rows = [["id", "범주", "쪽", "길이", "대상", "핀", "스트림", "설명"]];
+  const rows = [["id", "묶음", "범주", "쪽", "길이", "대상", "핀", "스트림", "설명"]];
   for (const s of list) {
     rows.push([
       s.id,
+      suiteOf(s),
       s.category,
       s.side === "engineer" ? "엔지니어" : "고객",
       `${s.duration}s`,
@@ -78,6 +86,39 @@ function listScenarios(list: Scenario[]): void {
   console.log(`\n${list.length}개 시나리오`);
 }
 
+const REASON_CODE: Record<string, string> = { offscreen: "O", unverified: "U", untrackable: "X", invalid_frame: "I" };
+
+/** realism 변형과 원본을 나란히 (둘 다 이번 실행에 있을 때) */
+function variantTable(runs: ScenarioRun[]): string {
+  const byId = new Map(runs.map((r) => [r.scenario.id, r]));
+  const rows = [["변형", "원본 추적률", "→ 실감", "원본 오차중앙", "→ 실감", "원본 틀림", "→ 실감", "탐색/재검출 원본→실감"]];
+  const pct = (v: number | null) => (v === null ? "-" : `${(v * 100).toFixed(1)}%`);
+  const px = (v: number | null) => (v === null ? "-" : Number.isFinite(v) ? v.toFixed(2) : "inf");
+  const acq = (r: ScenarioRun) =>
+    r.metrics.acquireFrames !== undefined
+      ? r.metrics.acquireFrames === null
+        ? "못찾음"
+        : `${r.metrics.acquireFrames}f`
+      : r.metrics.reentries.length
+        ? `${r.metrics.reentries.filter((e) => e.latency !== null && e.latency < 10).length}/${r.metrics.reentries.length}`
+        : "-";
+  for (const r of runs) {
+    const b = r.scenario.variantOf ? byId.get(r.scenario.variantOf) : undefined;
+    if (!b) continue;
+    rows.push([
+      r.scenario.id,
+      pct(b.metrics.tracked),
+      pct(r.metrics.tracked),
+      px(b.metrics.err.median),
+      px(r.metrics.err.median),
+      pct(b.metrics.wrong),
+      pct(r.metrics.wrong),
+      `${acq(b)} → ${acq(r)}`,
+    ]);
+  }
+  return rows.length > 1 ? formatTable(rows, [1, 2, 3, 4, 5, 6]) : "";
+}
+
 function compactTrace(run: ScenarioRun) {
   const code: Record<string, string> = { tracking: "T", weak: "W", lost: "L", searching: "S" };
   return {
@@ -89,6 +130,10 @@ function compactTrace(run: ScenarioRun) {
     visible: run.records.map((r) => (r.visible ? "1" : r.inFrame ? "o" : "0")).join(""),
     wrong: run.records.map((r) => (r.wrong ? "1" : "0")).join(""),
     inliers: run.records.map((r) => r.inliers),
+    /** TrackResult.reason: O=offscreen U=unverified X=untrackable I=invalid_frame, -=없음 */
+    reason: run.records.map((r) => (r.reason ? REASON_CODE[r.reason] : "-")).join(""),
+    /** 화면 밖 안내 방향 오차(도) — 핀이 화면 밖이고 hint가 있을 때만, 나머지 null. hint만 있고 핀이 화면 안이면 -1 */
+    hintErr: run.records.map((r) => (r.hintErrDeg !== null ? Math.round(r.hintErrDeg * 10) / 10 : r.hint ? -1 : null)),
   };
 }
 
@@ -99,7 +144,10 @@ interface BenchJson {
   env: { node: string; cpu: string; platform: string };
   categories: CategoryMetrics[];
   perf: ReturnType<typeof aggregate>["perf"];
+  suites: Suite[];
   scenarios: (ScenarioMetrics & {
+    variantOf: string | null;
+    codec: unknown;
     refMs: number;
     roi: unknown;
     stageMs: Record<string, number>;
@@ -119,9 +167,9 @@ function printCompare(prevFile: string, cur: BenchJson): void {
     a === null || a === undefined || b === null || b === undefined ? "-" : `${b - a >= 0 ? "+" : ""}${((b - a) * scale).toFixed(digits)}`;
   const rows = [["범주/시나리오", "추적률 Δ%p", "오차중앙 Δpx", "틀림 Δ%p"]];
   for (const c of cur.categories) {
-    const p = prev.categories.find((x) => x.category === c.category);
+    const p = prev.categories.find((x) => x.category === c.category && (x.suite ?? "base") === c.suite);
     if (!p) continue;
-    rows.push([categoryName(c.category), d(p.tracked, c.tracked), d(p.err.median, c.err.median, 1, 2), d(p.wrong, c.wrong, 100, 2)]);
+    rows.push([`${suiteLabel(c.suite)}${categoryName(c.category)}`, d(p.tracked, c.tracked), d(p.err.median, c.err.median, 1, 2), d(p.wrong, c.wrong, 100, 2)]);
   }
   for (const s of cur.scenarios) {
     const p = prev.scenarios.find((x) => x.id === s.id);
@@ -149,7 +197,18 @@ async function main(): Promise<number> {
   pipelineOptions.exactJpeg = !!args["exact-jpeg"];
   pipelineOptions.exactBlur = !!args["exact-blur"];
   const filter = typeof args.scenario === "string" ? args.scenario : undefined;
-  const scenarios = findScenarios(filter);
+  let suites: Suite[] = ["base", "realism"];
+  if (args.holdout) suites = ["holdout"];
+  if (typeof args.suite === "string") {
+    suites = args.suite.split(",").flatMap((x) => (x === "all" ? (["base", "realism", "holdout"] as Suite[]) : [x as Suite]));
+    const bad = suites.filter((x) => !["base", "realism", "holdout"].includes(x));
+    if (bad.length) {
+      console.error(`알 수 없는 묶음: ${bad.join(",")}`);
+      return 2;
+    }
+  }
+  let scenarios = selectScenarios(filter, suites);
+  if (args["no-codec"]) scenarios = scenarios.filter((s) => !s.realism?.codec);
   if (args.list) {
     listScenarios(scenarios);
     return 0;
@@ -159,13 +218,13 @@ async function main(): Promise<number> {
     return 2;
   }
 
-  await ensureTextures(ALL_TEXTURE_IDS, { log });
+  await ensureTextures(texturesFor(args.y4m ? [...scenarios, ...selectScenarios(undefined)] : scenarios), { log });
 
   // y4m 내보내기
   if (args.y4m) {
     const ids = typeof args.y4m === "string" ? args.y4m.split(",").map((id) => ({ id, seconds: undefined as number | undefined })) : Y4M_DEFAULTS;
     for (const { id, seconds } of ids) {
-      const sc = SCENARIOS.find((s) => s.id === id);
+      const sc = scenarioById(id);
       if (!sc) {
         console.error(`y4m: 시나리오 없음 ${id}`);
         return 2;
@@ -185,12 +244,18 @@ async function main(): Promise<number> {
   }
 
   const trackerName = (typeof args.tracker === "string" ? args.tracker : "planar") as TrackerName;
+  if (suites.includes("holdout")) log("※ 홀드아웃: 과적합 확인용입니다. 이 결과로 추적기를 튜닝하지 마세요.");
   const framesDir = typeof args["frames-dir"] === "string" ? path.resolve(args["frames-dir"]) : undefined;
   // 기준선(oracle/null/shifted)은 영상을 보지 않는다 → 렌더 생략 (--render 또는 --frames-dir면 렌더)
   const baseline = trackerName !== "planar";
   const blankFrames = baseline && !args.render && !framesDir && !args["render-only"] && !args.prerender;
   const useCache = !args["no-cache"];
   const jobs = typeof args.jobs === "string" ? Math.max(1, parseInt(args.jobs, 10) || 1) : defaultJobs();
+  // 실제 코덱 시나리오: 캡처(렌더 + Chromium 루프백)가 캐시에 없으면 먼저 뜬다 — 처리 프레임·기준 시각이 캡처 결과로 정해진다
+  if (!blankFrames) {
+    const n = await ensureCodecCaptures(scenarios, { jobs, log });
+    if (n) log(`코덱 캡처 ${n}개 완료`);
+  }
   const seqs = scenarios.map((sc) => buildSequence(sc));
   if (useCache && !blankFrames) await prerender(seqs, { jobs, log });
   if (args["render-only"] || args.prerender) return 0;
@@ -215,7 +280,7 @@ async function main(): Promise<number> {
   {
     const seq = seqs[0];
     const tr = factory.create(seq);
-    tr.setReference(seq.ref, seq.roi, seq.initialH);
+    tr.setReference(seq.ref, seq.roi, seq.initialH, seq.pinRef);
     const n = blankFrames ? 0 : Math.min(15, seq.times.length);
     const cached = useCache ? readFrameCache(seq) : null;
     for (let k = 0; k < n; k++) {
@@ -243,6 +308,11 @@ async function main(): Promise<number> {
   console.log("");
   console.log(categoryTable(agg.categories));
   console.log("  * = README 표 밖 (벤치 자체 목표: 틀린 표시 ≤1%, 드리프트는 이동 기준)");
+  const ht = hintTable(agg.categories);
+  if (ht) {
+    console.log("\n화면 밖 안내 (TrackResult.hint, 목표 없음 — 참고): 핀이 화면 밖일 때 hint 제공률과 화살표 방향 오차(프레임 중심 기준)");
+    console.log(ht);
+  }
   const p = agg.perf;
   const f = (v: number | null) => (v === null ? "-" : v.toFixed(2));
   console.log(
@@ -255,7 +325,36 @@ async function main(): Promise<number> {
       `드리프트 (${drift.scenario.id}): 처음 10초 오차 중앙값 ${f(drift.metrics.drift.firstMedian)}px → 마지막 10초 ${f(drift.metrics.drift.lastMedian)}px`,
     );
   }
-  console.log(`\n종합: ${agg.pass ? "PASS" : "FAIL"} (${factory.name}${filter ? `, --scenario=${filter}` : ""})`);
+  const variants = variantTable(runs);
+  if (variants) {
+    console.log("\n실감 변형 ↔ 원본 (같은 궤적·핀; 원본이 이번 실행에 있을 때만)");
+    console.log(variants);
+  }
+  const codecRuns = runs.filter((r) => r.seq.codec);
+  if (codecRuns.length) {
+    const rows = [["코덱 시나리오", "코덱", "인코더", "kbps", "QP 평균", "디코드 해상도", "원본", "디코드", "받음", "품질 제한"]];
+    for (const r of codecRuns) {
+      const st = r.seq.codec!.stats;
+      rows.push([
+        r.scenario.id,
+        st.codec,
+        st.encoder,
+        String(st.kbps),
+        st.qpMean === null ? "-" : st.qpMean.toFixed(1),
+        st.resolutions.join(","),
+        String(st.sourceFrames),
+        st.framesDecoded === undefined ? "-" : String(st.framesDecoded),
+        String(st.capturedFrames),
+        st.qualityLimitation,
+      ]);
+    }
+    console.log("\n실제 WebRTC 코덱 캡처 (Chromium 루프백, 캐시된 결과) — 원본(앞 구간 포함)·디코드(인코더가 버린 프레임 제외)·받음(rVFC로 읽은 프레임)");
+    console.log(formatTable(rows, [3, 4, 6, 7, 8]));
+  }
+  const suitePass = (x: Suite) => agg.categories.filter((c) => c.suite === x).every((c) => c.pass);
+  const present = [...new Set(agg.categories.map((c) => c.suite))];
+  const perSuite = present.length > 1 ? ` — ${present.map((x) => `${x} ${suitePass(x) ? "PASS" : "FAIL"}`).join(", ")}` : "";
+  console.log(`\n종합: ${agg.pass ? "PASS" : "FAIL"}${perSuite} (${factory.name}${filter ? `, --scenario=${filter}` : ""}, 묶음 ${suites.join("+")})`);
   if (framesDir) console.log(`프레임 덤프: ${framesDir}`);
 
   const json: BenchJson = {
@@ -265,8 +364,11 @@ async function main(): Promise<number> {
     env: { node: process.version, cpu: os.cpus()[0]?.model ?? "?", platform: `${os.platform()} ${os.arch()}` },
     categories: agg.categories,
     perf: agg.perf,
+    suites,
     scenarios: runs.map((r) => ({
       ...r.metrics,
+      variantOf: r.scenario.variantOf ?? null,
+      codec: r.seq.codec?.stats ?? null,
       refMs: Math.round(r.refMs * 100) / 100,
       roi: r.info?.roi ?? null,
       stageMs: r.stageMs,
@@ -277,7 +379,7 @@ async function main(): Promise<number> {
     const file =
       typeof args.json === "string"
         ? path.resolve(args.json)
-        : path.join(OUT_DIR, factory.name === "planar" ? "latest.json" : `latest-${factory.name}.json`);
+        : path.join(OUT_DIR, `${factory.name === "planar" ? "latest" : `latest-${factory.name}`}${suites.includes("holdout") ? "-holdout" : ""}.json`);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(json, (_k, v) => (v === Infinity ? "Infinity" : v), 1));
     console.log(`JSON: ${path.relative(process.cwd(), file)}`);

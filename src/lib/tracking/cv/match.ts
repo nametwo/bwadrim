@@ -200,6 +200,8 @@ function best2Kernel(
  * 각 쿼리 특징에 대해, 자기 위치 반경 exclR[q] 밖의 트레인 특징 중 최소 해밍 거리.
  * 기준 프레임 안 "쌍둥이"(반복 패턴의 복제본) 찾기용. out[q] = 최소 거리 (없으면 0xffff),
  * outIdx가 있으면 그 트레인 인덱스 (없으면 −1).
+ * bound: 이 거리 이상은 관심 없음 — 앞 3단어(96비트) 부분합이 이미 min(현재 최소, bound) 이상이면
+ * 나머지를 건너뛴다 (무관한 쌍 대부분이 여기서 끝난다). 최소가 bound 이상이면 0xffff.
  */
 export function minDistanceOutside(
   qDesc: Int32Array,
@@ -213,6 +215,7 @@ export function minDistanceOutside(
   nt: number,
   out: Uint16Array,
   outIdx: Int32Array | null = null,
+  bound = 0xffff,
 ): void {
   for (let qi = 0; qi < nq; qi++) {
     const qo = qi * 8;
@@ -229,10 +232,9 @@ export function minDistanceOutside(
     const r2 = exclR[qi] * exclR[qi];
     let best = 0xffff;
     let bi = -1;
+    let lim = bound;
     for (let j = 0, o = 0; j < nt; j++, o += 8) {
-      const dx = tx[j] - px;
-      const dy = ty[j] - py;
-      if (dx * dx + dy * dy < r2) continue;
+      // 디스크립터 앞부분으로 먼저 거른다 (대부분 여기서 끝) → 위치 검사는 후보만
       let x = a0 ^ tDesc[o];
       x -= (x >>> 1) & 0x55555555;
       x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
@@ -245,6 +247,10 @@ export function minDistanceOutside(
       x -= (x >>> 1) & 0x55555555;
       x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
       acc += (x + (x >>> 4)) & 0x0f0f0f0f;
+      if (Math.imul(acc, 0x01010101) >>> 24 >= lim) continue;
+      const dx = tx[j] - px;
+      const dy = ty[j] - py;
+      if (dx * dx + dy * dy < r2) continue;
       x = a3 ^ tDesc[o + 3];
       x -= (x >>> 1) & 0x55555555;
       x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
@@ -266,9 +272,10 @@ export function minDistanceOutside(
       x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
       acc += (x + (x >>> 4)) & 0x0f0f0f0f;
       const d = Math.imul(acc, 0x01010101) >>> 24;
-      if (d < best) {
+      if (d < best && d < lim) {
         best = d;
         bi = j;
+        lim = d;
       }
     }
     out[qi] = best;

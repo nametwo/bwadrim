@@ -2,6 +2,8 @@
 // 모든 궤적은 핀 기준 cm로 적는다 (dx,dy = 카메라가 바라보는 점의 핀 대비 위치, d = 거리).
 import type { Point } from "../../src/lib/tracking/types";
 import { type HandPose, type JitterSpec, type ViewFn, keyframes } from "./camera";
+import type { IspSpec } from "./isp";
+import type { LensSpec } from "./lens";
 import type { PhotoParams, ShadowBlob } from "./render";
 import { smootherstep } from "./rng";
 import type { BackgroundId, TargetId, TextureDef, TextureMeta } from "./textures";
@@ -9,6 +11,11 @@ import type { BackgroundId, TargetId, TextureDef, TextureMeta } from "./textures
 /** README 품질 목표 범주 (+ 벤치 자체 범주: stress, drift) */
 export type Category = "jitter" | "motion" | "repetitive" | "lowtex" | "reentry" | "acquire" | "stress" | "drift";
 export type Side = "engineer" | "customer";
+/**
+ * 시나리오 묶음. base = 기존 합성 영상 (게이트·비교 기준), realism = base의 실감 변형(렌즈 왜곡·입체·ISP·실제 코덱 등),
+ * holdout = 과적합 확인용 (기본 실행·게이트에서 빠짐, --holdout으로만)
+ */
+export type Suite = "base" | "realism" | "holdout";
 
 export interface SceneCtx {
   def: TextureDef;
@@ -70,10 +77,68 @@ export interface Scenario {
   /** false면 자동초점 흐림 없음 (기본: 거리 변화를 AF_LAG로 늦게 따라감) */
   autofocus?: boolean;
   seed?: number;
+  /** 과적합 확인용 홀드아웃 (기본 실행·게이트에서 빠진다) */
+  holdout?: boolean;
+  /** 실감 효과 (realism 묶음·홀드아웃). 없으면 기존 합성 파이프라인 그대로 */
+  realism?: RealismSpec;
+  /** 실감 변형의 원본 시나리오 id (비교 표) */
+  variantOf?: string;
+}
+
+/** 초점 헌팅 한 번: t초부터 dur초 동안 초점이 diopters(1/m)만큼 앞뒤로 흔들렸다 돌아옴 */
+export interface AfHunt {
+  t: number;
+  dur: number;
+  diopters: number;
+}
+
+/** 면광원 (형광등·창) — 대상 중심 기준 mm, dist = 대상 평면 앞 거리 */
+export interface AreaLightSpec {
+  x: number;
+  y: number;
+  dist: number;
+  w: number;
+  h: number;
+  angle?: number;
+  /** 수직 입사 때 가산 세기 (선형광, 흰색 = 1) */
+  strength: number;
+  /** 표면 거칠기에 따른 가장자리 흐림 (mm, 광원 평면에서) */
+  blurMm: number;
+}
+
+/** 실제 WebRTC 코덱 왕복 (Playwright Chromium 루프백) */
+export interface CodecSpec {
+  codec: "VP8" | "VP9" | "AV1";
+  /** 최대 비트레이트 (kbps) */
+  kbps: number;
+  /** 인코더 해상도 축소 배율 (scaleResolutionDownBy, 기본 1) */
+  scaleDown?: number;
+  /** 기본 maintain-resolution (해상도 고정, 대신 프레임을 버림) */
+  degradation?: "maintain-resolution" | "maintain-framerate" | "balanced";
+}
+
+/** 실감 효과 묶음 — 각 항목은 선택. 기본값(REALISM_DEFAULT)은 폰 메인 카메라 + 흔한 실내 조명 */
+export interface RealismSpec {
+  /** 렌즈 왜곡 (Brown–Conrady) */
+  lens?: LensSpec;
+  /** 입체 부조 (텍스처별 relief.ts). 숫자면 높이 배율 */
+  relief?: boolean | number;
+  /** ISP: 톤 곡선·TNR·샤프닝 */
+  isp?: IspSpec;
+  /** 초점 호흡(초점 거리에 따라 화각 ±1~2%) + 초점 헌팅 */
+  af?: { breathing?: boolean; hunts?: AfHunt[] };
+  /** 광택 표면에 비친 면광원 */
+  area?: AreaLightSpec;
+  /** 엔지니어 쪽 영상(고객 쪽이면 기준 이미지)을 실제 WebRTC 코덱으로 */
+  codec?: CodecSpec;
+}
+
+export function suiteOf(sc: Scenario): Suite {
+  return sc.holdout ? "holdout" : sc.realism ? "realism" : "base";
 }
 
 /** 궤적 키 (핀 기준 cm, 도) */
-interface K {
+export interface K {
   t: number;
   dx?: number;
   dy?: number;
@@ -84,7 +149,7 @@ interface K {
   ease?: "smooth" | "linear";
 }
 
-function path(keys: K[]): (ctx: SceneCtx) => ViewFn {
+export function path(keys: K[]): (ctx: SceneCtx) => ViewFn {
   return (ctx) => {
     let last: Required<Omit<K, "t" | "ease">> = { dx: 0, dy: 0, d: 30, yaw: 0, pitch: 0, roll: 0 };
     return keyframes(
@@ -105,22 +170,22 @@ function path(keys: K[]): (ctx: SceneCtx) => ViewFn {
 }
 
 /** 고정 시점 */
-function still(k: Omit<K, "t">): (ctx: SceneCtx) => ViewFn {
+export function still(k: Omit<K, "t">): (ctx: SceneCtx) => ViewFn {
   return path([{ t: 0, ...k }]);
 }
 
-const J_STILL: JitterSpec = { rotDeg: 0.05, transMm: 0.25, tremor: 0.25 };
-const J_MILD: JitterSpec = { rotDeg: 0.3, transMm: 1.5 };
-const J_STRONG: JitterSpec = { rotDeg: 1.0, transMm: 4, tremor: 0.55, tremorHz: [3.5, 9] };
-const J_SHAKE: JitterSpec = { rotDeg: 2.2, transMm: 7, driftHz: [2.5, 6], tremor: 0.3 };
+export const J_STILL: JitterSpec = { rotDeg: 0.05, transMm: 0.25, tremor: 0.25 };
+export const J_MILD: JitterSpec = { rotDeg: 0.3, transMm: 1.5 };
+export const J_STRONG: JitterSpec = { rotDeg: 1.0, transMm: 4, tremor: 0.55, tremorHz: [3.5, 9] };
+export const J_SHAKE: JitterSpec = { rotDeg: 2.2, transMm: 7, driftHz: [2.5, 6], tremor: 0.3 };
 
 /** 부드러운 계단: t0~t1 사이에 a→b */
-function ramp(t: number, t0: number, t1: number, a: number, b: number): number {
+export function ramp(t: number, t0: number, t1: number, a: number, b: number): number {
   return a + (b - a) * smootherstep((t - t0) / (t1 - t0));
 }
 
 /** 손 경로: 키 (핀 기준 cm) 보간, 화면 밖이면 null */
-function handPath(keys: { t: number; dx: number; dy: number; angle: number }[]): (ctx: SceneCtx) => (t: number) => HandPose | null {
+export function handPath(keys: { t: number; dx: number; dy: number; angle: number }[]): (ctx: SceneCtx) => (t: number) => HandPose | null {
   return (ctx) => (t) => {
     if (t < keys[0].t || t > keys[keys.length - 1].t) return null;
     let i = 0;
@@ -134,7 +199,7 @@ function handPath(keys: { t: number; dx: number; dy: number; angle: number }[]):
 }
 
 // 화면 밖 → 복귀 궤적 (핀 기준 cm): 멀리 갔다가 돌아오기 n번
-function awayAndBack(base: Omit<K, "t">, legs: { t: number; away: [number, number]; hold: number; move: number }[]): K[] {
+export function awayAndBack(base: Omit<K, "t">, legs: { t: number; away: [number, number]; hold: number; move: number }[]): K[] {
   const keys: K[] = [{ t: 0, ...base }];
   for (const l of legs) {
     keys.push({ t: l.t, dx: base.dx, dy: base.dy });

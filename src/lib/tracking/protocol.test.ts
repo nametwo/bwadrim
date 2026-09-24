@@ -18,6 +18,7 @@ import {
   validateAnnotation,
   validateMessage,
   type ReceivedAnchor,
+  isLostReason,
 } from "./protocol";
 
 // 결정적 난수 (fuzz 재현용)
@@ -464,5 +465,37 @@ describe("fuzz", () => {
     }
     expect(got.anchors.length).toBe(1);
     expect(got.anchors[0].bytes).toEqual(img);
+  });
+});
+
+describe("status v2 extras (reason, arrow)", () => {
+  it("parses optional reason/arrow, drops only invalid extras, stays compatible with v1 senders", () => {
+    expect(parseMessage('{"t":"status","anchorId":"a","state":"lost","reason":"offscreen","arrow":true}')).toEqual({
+      t: "status",
+      anchorId: "a",
+      state: "lost",
+      reason: "offscreen",
+      arrow: true,
+    });
+    // 틀린 선택 필드는 그 필드만 뺀다
+    expect(parseMessage('{"t":"status","anchorId":"a","state":"lost","reason":"nope","arrow":"yes"}')).toEqual({
+      t: "status",
+      anchorId: "a",
+      state: "lost",
+    });
+    expect(parseMessage('{"t":"status","anchorId":"a","state":"tracking"}')).toEqual({ t: "status", anchorId: "a", state: "tracking" });
+    expect(isLostReason("unverified")).toBe(true);
+    expect(isLostReason("x")).toBe(false);
+  });
+
+  it("engineer receiver passes the extras to onStatus", () => {
+    const seen: unknown[] = [];
+    const r = new ProtocolReceiver({ onStatus: (id, st, extra) => seen.push([id, st, extra]) }, { role: "engineer" });
+    r.receive(encodeMessage({ t: "status", anchorId: "a", state: "lost", reason: "offscreen", arrow: true }));
+    r.receive(encodeMessage({ t: "status", anchorId: "a", state: "tracking" }));
+    expect(seen).toEqual([
+      ["a", "lost", { reason: "offscreen", arrow: true }],
+      ["a", "tracking", { reason: undefined, arrow: false }],
+    ]);
   });
 });

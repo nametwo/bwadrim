@@ -13,7 +13,7 @@ import type { AnchorSpec } from "./client";
 import type { CapturedReference } from "./capture";
 import { roiFromStroke, roiFromTap } from "./capture";
 import { parseMessage } from "./protocol";
-import type { GrayImage, Mat3, ReferenceInfo, TrackState, TrackUpdate } from "./types";
+import type { GrayImage, LostReason, Mat3, ReferenceInfo, TrackState, TrackUpdate } from "./types";
 import { applyH } from "./geometry";
 
 // ───────────────────────── 가짜 부품 ─────────────────────────
@@ -48,16 +48,25 @@ class FakeTracker implements TrackerLike {
   destroy() {
     this.destroyed = true;
   }
-  emit(anchorId: string, state: TrackState, H: Mat3 | null, frameSize = this.size) {
-    this.onUpdate({
+  emit(
+    anchorId: string,
+    state: TrackState,
+    H: Mat3 | null,
+    frameSize = this.size,
+    extra: { hint?: Mat3 | null; reason?: LostReason } = {},
+  ) {
+    const u: TrackUpdate = {
       anchorId,
       state,
       H,
+      hint: extra.hint ?? null,
       confidence: state === "tracking" ? 0.9 : 0.3,
       refSize: { width: 320, height: 240 },
       frameSize,
       processMs: 4,
-    });
+    };
+    if (extra.reason) u.reason = extra.reason;
+    this.onUpdate(u);
   }
 }
 
@@ -180,7 +189,7 @@ function makeJpeg(w: number, h: number): Blob {
 const JPEG_640 = makeJpeg(640, 480);
 const gray = (w = 320, h = 240): GrayImage => ({ width: w, height: h, data: new Uint8Array(w * h).fill(9) });
 
-function setup(opts: { open?: boolean } = {}) {
+function setup(opts: { open?: boolean; video?: Record<string, number> } = {}) {
   const pair = linkPair(opts.open ?? true);
   const clock = new FakeClock();
   const trackers: FakeTracker[] = [];
@@ -198,7 +207,7 @@ function setup(opts: { open?: boolean } = {}) {
   const decodes: { size: { width: number; height: number } }[] = [];
   let failDecode = false;
   const urls = { created: [] as string[], revoked: [] as string[] };
-  const video = {} as HTMLVideoElement;
+  const video = (opts.video ?? {}) as unknown as HTMLVideoElement;
   const eng = new EngineerAnchorSession({ video, link: pair.e, deps: { createTracker, capture, clock } });
   const cust = new CustomerAnchorSession({
     video,
@@ -586,7 +595,7 @@ describe("engineer ↔ customer sessions", () => {
     s.eng.clear();
     s.pair.flush();
     expect(s.eng.getSnapshot()).toMatchObject({ anchor: null, update: null, customerState: null, trackable: null });
-    expect(s.cust.getSnapshot()).toEqual({ anchor: null, update: null, cardUrl: null, showCard: false });
+    expect(s.cust.getSnapshot()).toEqual({ anchor: null, update: null, cardUrl: null, showCard: false, arrow: false });
     expect(s.urls.revoked).toEqual(["blob:0"]);
     expect(s.et.cleared).toBeGreaterThan(0);
     expect(s.ct.cleared).toBeGreaterThan(0);
@@ -762,6 +771,138 @@ describe("engineer ↔ customer sessions", () => {
     const back = applyH([0.5, 0, 0, 0, 0.5, 0, 0, 0, 1], { x: pin.p.x * 320, y: pin.p.y * 240 })!;
     expect(back.x).toBeCloseTo(((170 + 0.5) * 160) / 320 - 0.5, 1);
   });
+  // ───────────────────────── v2: 기준점·화면 밖 화살표 ─────────────────────────
+
+  it("v2: the anchor point (pin position / stroke centroid) goes to both trackers", async () => {
+    const s = setup();
+    s.tap(100, 80);
+    expect(s.et.calls[0].anchor).toEqual({ x: 100, y: 80 });
+    await s.settle();
+    // 고객: 받은 주석(양자화된 norm)에서 같은 점
+    expect(s.ct.calls[0].anchor!.x).toBeCloseTo(100, 1);
+    expect(s.ct.calls[0].anchor!.y).toBeCloseTo(80, 1);
+
+    // 선: L자 (가로 100px + 세로 50px) → 길이 가중 중심
+    s.eng.handlePointer("down", s.sample(200, 40));
+    for (let x = 200; x >= 100; x -= 5) s.eng.handlePointer("move", s.sample(x, 40));
+    for (let y = 40; y <= 90; y += 5) s.eng.handlePointer("move", s.sample(100, y));
+    s.eng.handlePointer("up", s.sample(100, 90));
+    const last = s.et.calls.at(-1)!;
+    // 가로변 중심 (150,40) 가중 100, 세로변 중심 (100,65) 가중 50
+    expect(last.anchor!.x).toBeCloseTo((150 * 100 + 100 * 50) / 150, 0);
+    expect(last.anchor!.y).toBeCloseTo((40 * 100 + 65 * 50) / 150, 0);
+    await s.settle();
+    const cAnchor = s.ct.calls.at(-1)!.anchor!;
+    expect(cAnchor.x).toBeCloseTo(last.anchor!.x, 6);
+    expect(cAnchor.y).toBeCloseTo(last.anchor!.y, 6);
+
+    // 같은 앵커에 추가한 주석은 기준점을 바꾸지 않는다 (추적기를 다시 설정하지 않음)
+    const id = s.eng.getSnapshot().anchor!.id;
+    s.et.emit(id, "tracking", [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+    const n = s.et.calls.length;
+    s.tap(120, 60);
+    expect(s.eng.getSnapshot().anchor!.annotations.length).toBe(2);
+    expect(s.et.calls.length).toBe(n);
+  });
+
+  it("v2: offscreen hint → customer arrow instead of card; status carries reason+arrow; hold then card", async () => {
+    const s = setup();
+    s.tap(100, 80);
+    await s.settle();
+    const id = s.cust.getSnapshot().anchor!.id;
+    s.ct.emit(id, "tracking", [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+    await s.settle();
+    expect(s.cust.getSnapshot().arrow).toBe(false);
+    // 앵커가 오른쪽 밖으로: hint로 x + 400
+    const hint: Mat3 = [1, 0, 400, 0, 1, 0, 0, 0, 1];
+    s.ct.emit(id, "lost", null, undefined, { hint, reason: "offscreen" });
+    await s.settle();
+    const cs = s.cust.getSnapshot();
+    expect(cs).toMatchObject({ arrow: true, showCard: false });
+    expect(cs.update?.hint).toEqual(hint);
+    s.clock.advance(2000);
+    s.ct.emit(id, "lost", null, undefined, { hint, reason: "offscreen" });
+    await s.settle();
+    expect(s.cust.getSnapshot()).toMatchObject({ arrow: true, showCard: false }); // 화살표가 있으면 카드 없음
+    expect(s.eng.getSnapshot()).toMatchObject({ customerState: "lost", customerArrow: true, customerReason: "offscreen" });
+    const st = s.pair.c.texts().filter((m) => m?.t === "status").at(-1);
+    expect(st).toMatchObject({ t: "status", state: "lost", reason: "offscreen", arrow: true });
+
+    // hint가 잠깐 빠져도 300ms는 유지 (깜빡임 방지)
+    s.clock.advance(100);
+    s.ct.emit(id, "lost", null, undefined, { reason: "unverified" });
+    expect(s.cust.getSnapshot().arrow).toBe(true);
+    s.clock.advance(400);
+    s.ct.emit(id, "lost", null, undefined, { reason: "unverified" });
+    expect(s.cust.getSnapshot()).toMatchObject({ arrow: false, showCard: false });
+    s.clock.advance(850);
+    expect(s.cust.getSnapshot().showCard).toBe(true);
+    await s.settle();
+    s.clock.advance(200);
+    await s.settle();
+    expect(s.eng.getSnapshot()).toMatchObject({ customerState: "lost", customerArrow: false, customerReason: "unverified" });
+
+    // 다시 찾으면 화살표·카드 모두 해제, 이유 없음
+    s.ct.emit(id, "tracking", [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+    await s.settle();
+    s.clock.advance(200);
+    await s.settle();
+    expect(s.cust.getSnapshot()).toMatchObject({ arrow: false, showCard: false });
+    expect(s.eng.getSnapshot()).toMatchObject({ customerState: "tracking", customerArrow: false, customerReason: null });
+  });
+
+  it("v2: cover crop — pin inside the frame but outside the visible area shows the arrow while tracking", async () => {
+    // 4:3 영상을 세로 요소(240×480)에 cover → 좌우가 잘림 (영상 사각형 x ∈ [-200, 440])
+    const video = { videoWidth: 640, videoHeight: 480, clientWidth: 240, clientHeight: 480 };
+    const s = setup({ video });
+    s.tap(160, 120);
+    await s.settle();
+    const id = s.cust.getSnapshot().anchor!.id;
+    // 핀(160,120)을 왼쪽으로 150px → frame x = 10 (프레임 안) → css = -200 + 10.5·2 = -179 (안 보임)
+    s.ct.emit(id, "tracking", [1, 0, -150, 0, 1, 0, 0, 0, 1]);
+    expect(s.cust.getSnapshot()).toMatchObject({ arrow: true, showCard: false });
+    // 가운데로 → 보임 → 즉시 해제
+    s.ct.emit(id, "tracking", [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+    expect(s.cust.getSnapshot().arrow).toBe(false);
+    // 엔지니어(contain)는 같은 자세에서 프레임 전체가 보이므로 화살표 없음, hint면 있음
+    const eid = s.eng.getSnapshot().anchor!.id;
+    s.et.emit(eid, "tracking", [1, 0, -150, 0, 1, 0, 0, 0, 1]);
+    expect(s.eng.getSnapshot().arrow).toBe(false);
+    s.et.emit(eid, "lost", null, undefined, { hint: [1, 0, -400, 0, 1, 0, 0, 0, 1], reason: "offscreen" });
+    expect(s.eng.getSnapshot().arrow).toBe(true);
+  });
+
+  it("v2: reference reason is exposed to the engineer", async () => {
+    const s = setup();
+    s.et.setAnchor = function (this: FakeTracker, spec: AnchorSpec) {
+      this.calls.push(spec);
+      return Promise.resolve({ roi: spec.roi, features: 3, trackable: false, reason: "pin_blank" as const });
+    };
+    s.tap(100, 80);
+    await s.settle();
+    expect(s.eng.getSnapshot()).toMatchObject({ trackable: false, referenceReason: "pin_blank" });
+  });
+
+  it("attachPointerInput listeners are removed by destroy() (and the detach fn stays safe)", () => {
+    const s = setup();
+    const added = new Set<string>();
+    const el = {
+      style: { touchAction: "auto" },
+      addEventListener: (t: string) => added.add(t),
+      removeEventListener: (t: string) => added.delete(t),
+    } as unknown as HTMLElement;
+    const detach = s.eng.attachPointerInput(el);
+    expect(el.style.touchAction).toBe("none");
+    expect(added.size).toBe(5);
+    s.eng.destroy();
+    expect(added.size).toBe(0);
+    expect(el.style.touchAction).toBe("auto");
+    expect(() => detach()).not.toThrow();
+    // 파괴 뒤에는 달지 않는다
+    s.eng.attachPointerInput(el);
+    expect(added.size).toBe(0);
+  });
+
 });
 
 function quantize(v: number) {

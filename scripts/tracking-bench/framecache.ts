@@ -5,35 +5,19 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import type { GrayImage } from "../../src/lib/tracking/types";
+import { BASE_SOURCES, REALISM_SOURCES, probeRealism, probeScene, sourceHash } from "./codehash";
 import { hashString } from "./rng";
 import { type Sequence, pipelineOptions } from "./sequence";
 import { CACHE_DIR, TEXTURES, readTextureMeta, writeFileAtomic } from "./textures";
 
 export const FRAME_DIR = path.join(CACHE_DIR, "frames");
 
-/** 렌더 결과를 바꾸는 소스 파일들 */
-const RENDER_SOURCES = ["render.ts", "camera.ts", "sequence.ts", "imageops.ts", "textures.ts", "rng.ts"];
-let codeHash: string | null = null;
-function renderCodeHash(): string {
-  if (codeHash) return codeHash;
-  let s = "";
-  for (const f of RENDER_SOURCES) {
-    try {
-      s += fs.readFileSync(path.join(__dirname, f), "utf8");
-    } catch {
-      s += f;
-    }
-  }
-  codeHash = hashString(s).toString(16);
-  return codeHash;
-}
-
-/** 시퀀스 지문: 처리 시각마다 자세·광원·손·그림자·스트림 크기 + 기준 설정 + 텍스처·코드 해시 */
+/** 시퀀스 지문: 처리 시각마다 자세·광원·손·그림자·스트림 크기 + 기준 설정 + 텍스처·코드 해시 (+ 실감 설정) */
 export function sequenceFingerprint(seq: Sequence): string {
   const sc = seq.scenario;
   const sn = seq.scene;
   const parts: (string | number)[] = [
-    renderCodeHash(),
+    sourceHash(BASE_SOURCES),
     sc.id,
     sc.side,
     sc.target,
@@ -50,22 +34,12 @@ export function sequenceFingerprint(seq: Sequence): string {
   ];
   const bgId = sc.background ?? TEXTURES[sc.target].background ?? "wall";
   parts.push(readTextureMeta(bgId)?.hash ?? "?");
-  const r6 = (v: number) => Math.round(v * 1e6) / 1e6;
-  const e = sn.exposureMs / 1000;
-  const ro = sn.readoutMs / 1000;
+  if (sc.realism) {
+    parts.push(sourceHash(REALISM_SOURCES), JSON.stringify(sc.realism), seq.codec?.contentHash ?? "-", seq.codecKey, seq.pinZ);
+  }
   const probe = (t: number) => {
-    for (const tau of [t, t - e / 2 - ro / 2, t + e / 2 + ro / 2]) {
-      const p = sn.poseAt(tau);
-      parts.push(...p.R.map(r6), ...p.C.map(r6));
-      const hp = sn.hand?.at(tau);
-      if (hp) parts.push(r6(hp.x), r6(hp.y), r6(hp.angle));
-    }
-    const K = sn.streamAt(t);
-    const ph = sn.photoAt(t);
-    parts.push(K.width, K.height, r6(ph.scene), r6(ph.gain), r6(ph.contrast), r6(ph.brightness));
-    parts.push(r6(sn.ae?.(t) ?? 1), r6(sn.focusSigma?.(t) ?? 0), seq.qualityAt(t));
-    const b = sn.shadow?.(t);
-    if (b) parts.push(r6(b.x), r6(b.y), r6(b.rx), r6(b.ry), r6(b.depth), r6(b.soft));
+    probeScene(sn, t, parts, seq.qualityAt(t));
+    if (sc.realism) probeRealism(sn, t, parts);
   };
   probe(seq.refTime);
   for (const t of seq.times) probe(t);

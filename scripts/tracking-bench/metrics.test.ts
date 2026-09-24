@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   type FrameRecord,
   aggregate,
+  arrowErrorDeg,
   classifyFrame,
   findReentries,
+  hintMetrics,
   scenarioMetrics,
   stats,
 } from "./metrics";
@@ -29,6 +31,10 @@ function rec(p: Partial<FrameRecord> & { k: number }): FrameRecord {
     inliers: 0,
     tracked: 0,
     confidence: 0,
+    reason: null,
+    hint: false,
+    hintPin: null,
+    hintErrDeg: null,
     ...p,
   };
 }
@@ -161,5 +167,49 @@ describe("aggregate", () => {
     const b = aggregate([{ metrics: scenarioMetrics(meta("g"), good), records: good }]);
     expect(b.categories[0].pass).toBe(true);
     expect(b.perf.msTrack.median).toBe(1);
+  });
+});
+
+describe("hint (화면 밖 안내)", () => {
+  const c = { x: 100, y: 100 };
+  it("arrow error is the angle between directions from the frame centre", () => {
+    expect(arrowErrorDeg(c, { x: 300, y: 100 }, { x: 500, y: 100 })).toBeCloseTo(0, 10); // 같은 방향, 거리만 다름
+    expect(arrowErrorDeg(c, { x: 300, y: 100 }, { x: 100, y: 400 })).toBeCloseTo(90, 10);
+    expect(arrowErrorDeg(c, { x: -50, y: 100 }, { x: 300, y: 100 })).toBeCloseTo(180, 10);
+    expect(arrowErrorDeg(c, { x: 200, y: 200 }, { x: 200, y: 0 })).toBeCloseTo(90, 10); // −45° vs +45°
+    expect(arrowErrorDeg(c, { x: 0, y: 99 }, { x: 0, y: 101 })).toBeLessThan(2); // ±180° 경계
+    expect(arrowErrorDeg(c, null, { x: 300, y: 100 })).toBe(180); // hint가 카메라 뒤
+  });
+  it("availability counts off-screen (in front of camera) frames; false 'offscreen' while the pin is in frame is counted separately", () => {
+    const off = { inFrame: false, visible: false, offscreenBy: 40, gtPin: { x: -40, y: 100 } };
+    const recs = [
+      rec({ k: 0, ...off, reason: "offscreen", hint: true, hintPin: { x: -10, y: 100 }, hintErrDeg: 3 }),
+      rec({ k: 1, ...off, reason: "offscreen", hint: true, hintPin: { x: 200, y: 100 }, hintErrDeg: 170 }),
+      rec({ k: 2, ...off, reason: "unverified" }),
+      rec({ k: 3, ...off, reason: "offscreen" }), // reason만 있고 hint 없음 → 제공 아님
+      rec({ k: 4, inFrame: false, visible: false, offscreenBy: Infinity, gtPin: null }), // 카메라 뒤 → 분모 밖
+      rec({ k: 5, reason: "offscreen", hint: true }), // 화면 안인데 offscreen → 오안내
+      rec({ k: 6 }),
+    ];
+    const h = hintMetrics(recs);
+    expect(h.offscreenFrames).toBe(4);
+    expect(h.hintFrames).toBe(2);
+    expect(h.available).toBeCloseTo(0.5, 10);
+    expect(h.angle.median).toBeCloseTo(86.5, 10);
+    expect(h.wrongArrow).toBeCloseTo(0.5, 10);
+    expect(h.falseOffscreenFrames).toBe(1);
+    expect(h.inFrameFrames).toBe(2);
+    const m = scenarioMetrics({ id: "h", category: "reentry", side: "engineer", title: "", trackable: true, refFeatures: 1 }, recs);
+    expect(m.hint.hintFrames).toBe(2);
+    expect(m.suite).toBe("base");
+  });
+  it("aggregate keeps suites apart", () => {
+    const good = Array.from({ length: 10 }, (_, k) => frame(k, true, 1));
+    const meta = (id: string, suite: "base" | "realism") => ({ id, category: "jitter" as const, suite, side: "engineer" as const, title: "", trackable: true, refFeatures: 1 });
+    const a = aggregate([
+      { metrics: scenarioMetrics(meta("a", "base"), good), records: good },
+      { metrics: scenarioMetrics(meta("b", "realism"), good), records: good },
+    ]);
+    expect(a.categories.map((c) => `${c.suite}:${c.category}:${c.frames}`)).toEqual(["base:jitter:10", "realism:jitter:10"]);
   });
 });

@@ -125,11 +125,13 @@ export function planeToImage(K: Intrinsics, pose: Pose, z: number, A: readonly n
 /** 대상 평면(Z=0, 평면 단위 = 텍스처 픽셀) → 이미지 */
 export const TARGET_AFFINE: readonly number[] = [1, 0, 0, 0, 1, 0];
 
-/** 이미지 스트림 해상도 → 런타임 작업 해상도 (긴 변 320, 짧은 변 반올림) */
+/**
+ * 이미지 스트림 해상도 → 런타임 작업 해상도: 긴 변을 항상 320으로 (작으면 확대), 짧은 변 반올림.
+ * src/lib/tracking/frame-source.ts workingSize와 같은 식.
+ */
 export function workDims(w: number, h: number, longSide = WORK_LONG_SIDE): [number, number] {
-  const s = longSide / Math.max(w, h);
-  if (s >= 1) return [w, h];
-  return [Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s))];
+  if (w >= h) return [longSide, Math.max(1, Math.round((h * longSide) / w))];
+  return [Math.max(1, Math.round((w * longSide) / h)), longSide];
 }
 
 /**

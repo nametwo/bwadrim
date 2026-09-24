@@ -106,10 +106,23 @@ export function buildAlignTemplate(
   }
   if (nc === 0) return tpl;
 
-  // 격자 분산 선택 (8×8 셀, 셀당 상한)
+  // 격자 분산 선택 (8×8 셀, 셀당 상한). 크기 내림차순(동점이면 앞 인덱스) — 비교 함수 대신
+  // (float32 비트, 인덱스)를 Float64 키 하나로 묶어 네이티브 숫자 정렬 (fast.ts sortByScore와 같은 방식)
   const idx = new Uint32Array(nc);
-  for (let i = 0; i < nc; i++) idx[i] = i;
-  idx.sort((a, b) => cm[b] - cm[a] || a - b);
+  if (nc < 65536) {
+    const keys = new Float64Array(nc);
+    const f = new Float32Array(1);
+    const fb = new Int32Array(f.buffer);
+    for (let i = 0; i < nc; i++) {
+      f[0] = cm[i];
+      keys[i] = (0x7fffffff - fb[0]) * 65536 + i;
+    }
+    keys.sort();
+    for (let i = 0; i < nc; i++) idx[i] = keys[i] % 65536;
+  } else {
+    for (let i = 0; i < nc; i++) idx[i] = i;
+    idx.sort((a, b) => cm[b] - cm[a] || a - b);
+  }
   const G = 8;
   const cellCap = Math.max(4, Math.ceil((maxSamples / (G * G)) * 2));
   const cnt = new Uint16Array(G * G);
