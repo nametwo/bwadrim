@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 // 세션 쿠키 갱신 + 엔지니어 라우트 보호.
 // 고객 진입(/join/*)은 절대 여기서 막지 않는다 — 로그인 없음이 제품 원칙.
-const PROTECTED_PREFIXES = ["/dashboard", "/room"];
+const PROTECTED_PREFIXES = ["/dashboard", "/room", "/stats"];
 
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });

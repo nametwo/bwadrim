@@ -28,7 +28,7 @@
 ```
 src/proxy.ts                                     # 세션 갱신 + 엔지니어 라우트 보호 (Next 16: middleware → proxy)
 src/app/
-  (engineer)/login, /dashboard, /room/[id]      # 로그인 필요. 방 생성·종료는 서버 액션
+  (engineer)/login, /dashboard, /room/[id], /stats  # 로그인 필요. 방 생성·종료는 서버 액션. stats = 핵심 지표(DATA-06)
   join/[token]                                   # 고객 진입, 공개. 32자리 링크 토큰(ROOM-12)
   api/turn                                       # 링크 토큰 검증 후 Cloudflare TURN 단기 자격증명 발급
   api/events                                     # 고객(비로그인) 쪽 지표 이벤트 수집
@@ -39,6 +39,7 @@ src/lib/
   wake-lock.ts                                   # 통화 중 화면 꺼짐 방지
   in-app-browser.ts                              # 카톡 등 인앱 브라우저 감지·외부 브라우저로 열기
   events.ts                                      # 지표 이벤트 기록
+  metrics.ts                                     # 핵심 지표 계산 (통계 화면)
 src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기)
 supabase/schema.sql
 docs/requirements.md                             # 기능 요구사항 (기준 문서)

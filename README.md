@@ -70,6 +70,8 @@ Supabase 프로젝트 SQL Editor에서 `supabase/schema.sql` 실행.
 
 ## 봐야 할 지표
 
+대시보드 → '통계'에서 본다 (계산법: docs/requirements.md의 DATA-02, DATA-06).
+
 1. 원격 해결률 — 세션 종료 시 "출장 불필요" 체크 비율. 이게 영업 자료
 2. 링크 클릭 → 카메라 허용 도달률
 3. 연결 실패율, TURN(relay) 사용 비율 — 원가 계산 근거

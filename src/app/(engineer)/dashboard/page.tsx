@@ -44,14 +44,22 @@ export default async function DashboardPage() {
     <main className="mx-auto flex min-h-screen w-full max-w-sm flex-col gap-6 px-6 py-8">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">봐드림</h1>
-        <form action={logout}>
-          <button
-            type="submit"
-            className="rounded-lg px-3 py-2 text-sm text-gray-500"
+        <div className="flex items-center">
+          <Link
+            href="/stats"
+            className="rounded-lg px-3 py-2 text-sm text-gray-600"
           >
-            로그아웃
-          </button>
-        </form>
+            통계
+          </Link>
+          <form action={logout}>
+            <button
+              type="submit"
+              className="rounded-lg px-3 py-2 text-sm text-gray-500"
+            >
+              로그아웃
+            </button>
+          </form>
+        </div>
       </header>
 
       <form action={createRoom}>
