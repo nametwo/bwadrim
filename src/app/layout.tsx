@@ -11,6 +11,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1, // 고객 화면에서 실수로 확대되는 것 방지
   viewportFit: "cover",
+  colorScheme: "light", // 다크 모드 폰에서도 밝은 화면 (BUG-10)
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

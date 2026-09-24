@@ -3,6 +3,9 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  /* 밝은 화면으로 고정 (BUG-10). 버튼·글씨 색을 밝은 배경 기준으로 정했고,
+     고객(나이 든 사장님) 폰이 다크 모드여도 대비가 떨어지지 않게 한다 */
+  color-scheme: light;
 }
 
 @theme inline {
@@ -10,16 +13,12 @@
   --color-foreground: var(--foreground);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
+  /* 한글이 글자 중간에서 줄바꿈되지 않게 (어절 단위) */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
   font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Malgun Gothic", sans-serif;
 }
 

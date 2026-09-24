@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { logout } from "../login/actions";
 import { createRoom } from "./actions";
+import { NewRoomButton } from "./new-room-button";
 
 export const metadata: Metadata = {
   title: "대시보드 — 봐드림",
@@ -54,12 +55,7 @@ export default async function DashboardPage() {
       </header>
 
       <form action={createRoom}>
-        <button
-          type="submit"
-          className="h-16 w-full rounded-2xl bg-black text-xl font-semibold text-white active:opacity-80"
-        >
-          + 새 원격 A/S 시작
-        </button>
+        <NewRoomButton />
       </form>
 
       <section className="flex flex-col gap-2">
