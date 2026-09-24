@@ -51,21 +51,20 @@ export function CameraStart({
     streamRef.current = stream;
     postEvent("camera_granted");
 
-    const iceServers = await fetchIceServers(code);
+    const ice = await fetchIceServers(code);
     const session = new CallSession({
       roomId,
       role: "customer",
-      iceServers,
+      iceServers: ice.iceServers,
       localStream: stream,
       onState: (s) => {
         setCallState(s);
         if (s === "connected") {
-          postEvent("connected");
-          // relay(TURN) 경유 여부 — 원가 지표
+          // relay(TURN) 경유 여부 — 원가 지표. turn: TURN 자격증명을 받았는지
           setTimeout(async () => {
-            if (await sessionRef.current?.usedRelay()) {
-              postEvent("relay_used");
-            }
+            const relay = (await sessionRef.current?.usedRelay()) ?? false;
+            postEvent("connected", { relay, turn: !ice.turnError });
+            if (relay) postEvent("relay_used");
           }, 1000);
         }
         if (s === "ended" || s === "failed") {

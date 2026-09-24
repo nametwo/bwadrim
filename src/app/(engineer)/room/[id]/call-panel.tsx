@@ -15,6 +15,7 @@ export function CallPanel({ roomId, code }: { roomId: string; code: string }) {
   const [state, setState] = useState<PanelState>({ phase: "idle" });
   const [micOn, setMicOn] = useState(false);
   const [ending, setEnding] = useState(false);
+  const [turnError, setTurnError] = useState<string | null>(null);
   const sessionRef = useRef<CallSession | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -51,11 +52,12 @@ export function CallPanel({ roomId, code }: { roomId: string; code: string }) {
       setMicOn(false);
     }
 
-    const iceServers = await fetchIceServers(code);
+    const ice = await fetchIceServers(code);
+    setTurnError(ice.turnError);
     const session = new CallSession({
       roomId,
       role: "engineer",
-      iceServers,
+      iceServers: ice.iceServers,
       localStream: mic,
       onState: (call) => {
         setState((prev) => ({
@@ -136,9 +138,17 @@ export function CallPanel({ roomId, code }: { roomId: string; code: string }) {
 
   const { call, peerPresent } = state;
 
+  // TURN 없이 STUN만으로 동작 중 — 모바일망(5G/LTE)끼리는 연결이 실패할 수 있다
+  const turnWarning = turnError && (
+    <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+      ⚠ TURN 서버 없이 연결 중 — 모바일망끼리는 실패할 수 있어요 ({turnError})
+    </p>
+  );
+
   if (call === "connected" || (call === "connecting" && peerPresent)) {
     return (
       <section className="mt-2 flex flex-1 flex-col gap-3">
+        {turnWarning}
         <div className="relative flex-1 overflow-hidden rounded-2xl bg-black">
           <video
             ref={videoRef}
@@ -170,6 +180,7 @@ export function CallPanel({ roomId, code }: { roomId: string; code: string }) {
   if (call === "failed") {
     return (
       <section className="mt-auto flex flex-col items-center gap-3 py-6 text-center">
+        {turnWarning}
         <p className="text-lg font-semibold text-red-600">연결에 실패했어요</p>
         <p className="text-sm text-gray-500">
           고객님께 링크를 다시 열어달라고 말씀해 주세요.
@@ -187,6 +198,7 @@ export function CallPanel({ roomId, code }: { roomId: string; code: string }) {
   // waiting / connecting(고객 미접속)
   return (
     <section className="mt-auto flex flex-col items-center gap-2 py-6 text-center">
+      {turnWarning}
       <p className="text-lg font-semibold">
         {peerPresent ? "고객님 접속됨 — 연결 중…" : "고객님 접속 대기 중…"}
       </p>
