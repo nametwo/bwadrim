@@ -35,7 +35,7 @@ export default async function DashboardPage() {
 
   const { data: rooms } = await supabase
     .from("rooms")
-    .select("id, code, status, resolved_remotely, created_at, expires_at")
+    .select("id, status, resolved_remotely, created_at, expires_at")
     .order("created_at", { ascending: false })
     .limit(20);
 
@@ -77,10 +77,7 @@ export default async function DashboardPage() {
                   className="flex items-center justify-between py-4 active:bg-gray-50"
                 >
                   <div className="flex flex-col">
-                    <span className="font-mono text-lg font-semibold tracking-widest">
-                      {room.code}
-                    </span>
-                    <span className="text-sm text-gray-400">
+                    <span className="text-lg font-semibold">
                       {/* 서버(Vercel)는 UTC라서 시간대를 지정하지 않으면 9시간 이르게 보인다 */}
                       {new Date(room.created_at).toLocaleString("ko-KR", {
                         timeZone: "Asia/Seoul",
@@ -89,8 +86,10 @@ export default async function DashboardPage() {
                         hour: "2-digit",
                         minute: "2-digit",
                       })}
-                      {room.resolved_remotely && " · 원격 해결"}
                     </span>
+                    {room.resolved_remotely && (
+                      <span className="text-sm text-gray-400">원격 해결</span>
+                    )}
                   </div>
                   {(() => {
                     const status = displayStatus(room);

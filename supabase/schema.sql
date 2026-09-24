@@ -3,13 +3,13 @@
 
 create extension if not exists "pgcrypto";
 
--- 방(세션). 엔지니어만 생성. 고객은 code로 접근.
+-- 방(세션). 엔지니어만 생성. 고객은 join_token 링크로 접근.
 create table if not exists rooms (
   id          uuid primary key default gen_random_uuid(),
-  code        text unique not null,                 -- 화면 표시용 6자리 코드 (링크는 join_token)
+  code        text unique,                          -- 폐기(ROOM-02). 예전 세션의 6자리 코드. 새 세션은 비어 있음
   engineer_id uuid not null references auth.users(id) on delete cascade,
-  customer_name  text,
-  customer_phone text,
+  customer_name  text,                              -- 쓰지 않음: 고객 연락처는 저장하지 않는다(NFR-07)
+  customer_phone text,                              -- 쓰지 않음(NFR-07)
   status      text not null default 'waiting'       -- waiting | active | ended
               check (status in ('waiting','active','ended')),
   resolved_remotely boolean,                        -- 종료 시 엔지니어가 체크. 핵심 지표
@@ -20,8 +20,11 @@ create table if not exists rooms (
 
 create index if not exists rooms_engineer_idx on rooms(engineer_id, created_at desc);
 
--- 고객 링크(/join/{join_token})용 추측 불가능한 값 (32자리 16진수, 약 122비트).
--- 6자리 code는 화면 표시용으로만 쓴다. 기존 행에도 각각 새 값이 채워진다
+-- 예전 DB에서는 code가 필수였다. 이제 새 세션은 code 없이 만든다 (ROOM-02 폐기)
+alter table rooms alter column code drop not null;
+
+-- 고객 링크(/join/{join_token})용 추측 불가능한 값 (32자리 16진수, 약 122비트, ROOM-12).
+-- 기존 행에도 각각 새 값이 채워진다
 alter table rooms add column if not exists join_token text not null unique
   default replace(gen_random_uuid()::text, '-', '');
 
@@ -55,11 +58,8 @@ create policy "engineer reads own events" on events
     exists (select 1 from rooms r where r.id = events.room_id and r.engineer_id = auth.uid())
   );
 
--- 코드 생성 헬퍼 (혼동 쉬운 문자 제외, 6자리)
-create or replace function gen_room_code() returns text language sql as $$
-  select string_agg(substr('ABCDEFGHJKMNPQRSTUVWXYZ23456789', (random()*30)::int + 1, 1), '')
-  from generate_series(1, 6);
-$$;
+-- 예전 6자리 코드 생성 헬퍼 (ROOM-02 폐기로 삭제)
+drop function if exists gen_room_code();
 
 -- ─── 통화 시그널링 채널 권한 (Supabase Realtime 비공개 채널, BUG-09) ───
 -- 방마다 일방통행 채널 두 개:

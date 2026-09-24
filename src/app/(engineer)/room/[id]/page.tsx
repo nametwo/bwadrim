@@ -22,7 +22,7 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
   // RLS가 자기 방만 돌려준다
   const { data: room } = await supabase
     .from("rooms")
-    .select("id, code, join_token, status, created_at, expires_at")
+    .select("id, join_token, status, created_at, expires_at")
     .eq("id", id)
     .single();
 
@@ -65,19 +65,10 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
         <h1 className="text-xl font-bold">원격 A/S</h1>
       </header>
 
-      <section className="flex flex-col items-center gap-2 rounded-2xl bg-gray-50 py-8">
-        <p className="text-sm text-gray-500">접속 코드</p>
-        <p className="font-mono text-4xl font-bold tracking-[0.3em]">
-          {room.code}
-        </p>
-        <p className="mt-2 break-all px-6 text-center text-sm text-gray-400">
-          {joinUrl}
-        </p>
-      </section>
-
       <section className="flex flex-col gap-3">
-        <p className="text-sm font-medium text-gray-500">
-          고객님께 링크를 보내세요
+        <p className="text-lg font-semibold">고객님께 링크를 보내세요</p>
+        <p className="break-all rounded-xl bg-gray-50 px-4 py-3 text-sm text-gray-500">
+          {joinUrl}
         </p>
         <ShareButtons joinUrl={joinUrl} />
       </section>

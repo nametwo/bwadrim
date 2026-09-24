@@ -29,7 +29,7 @@
 src/proxy.ts                                     # 세션 갱신 + 엔지니어 라우트 보호 (Next 16: middleware → proxy)
 src/app/
   (engineer)/login, /dashboard, /room/[id]      # 로그인 필요. 방 생성·종료는 서버 액션
-  join/[token]                                   # 고객 진입, 공개. 32자리 링크 토큰(ROOM-12). 6자리 code는 표시용
+  join/[token]                                   # 고객 진입, 공개. 32자리 링크 토큰(ROOM-12)
   api/turn                                       # 링크 토큰 검증 후 Cloudflare TURN 단기 자격증명 발급
   api/events                                     # 고객(비로그인) 쪽 지표 이벤트 수집
 src/lib/
@@ -66,3 +66,4 @@ Supabase Realtime **비공개** broadcast 채널, 역할별 일방통행 두 개
 
 - PC 화면 공유, 원격 제어, 설치형은 1차 범위 아님
 - 브라우저 localStorage에 세션 정보 저장 금지 (고객 폰은 공용일 수 있음)
+- 고객 이름·전화번호·연락처 저장 금지 (NFR-07). 받는 사람 고르기는 문자 앱·카톡에 맡긴다
