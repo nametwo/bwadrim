@@ -7,6 +7,13 @@ import { keepScreenOn } from "@/lib/wake-lock";
 import { PointerMarker, usePointerMarker } from "@/components/pointer-marker";
 import { FreezeCanvas } from "@/components/freeze-canvas";
 import { applyDrawCommand, type Stroke } from "@/lib/webrtc/draw";
+import {
+  setTorch,
+  switchCamera,
+  torchSupported,
+  type CameraState,
+  type Facing,
+} from "@/lib/webrtc/camera";
 
 type Phase = "ready" | "starting" | "call" | "denied" | "gone";
 
@@ -21,7 +28,15 @@ export function CameraStart({
 }) {
   const [phase, setPhase] = useState<Phase>("ready");
   const [callState, setCallState] = useState<CallState>("waiting");
-  const [facing, setFacing] = useState<"environment" | "user">("environment");
+  // 통화 콜백은 시작 시점 값을 기억하므로 지금 카메라 상태는 ref로 읽는다
+  const facingRef = useRef<Facing>("environment");
+  const torchRef = useRef(false);
+  const flippingRef = useRef(false);
+  // 기사님이 원격으로 바꿨을 때 잠깐 보이는 안내 (CALL-10, CALL-11)
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // 폰이 탭 없이는 카메라를 못 바꿀 때: '바꾸기' 버튼을 띄운다
+  const [flipRequested, setFlipRequested] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -37,6 +52,22 @@ export function CameraStart({
   function releaseWakeLock() {
     releaseWakeLockRef.current?.();
     releaseWakeLockRef.current = null;
+  }
+
+  function showNotice(text: string) {
+    setNotice(text);
+    clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = setTimeout(() => setNotice(null), 2500);
+  }
+
+  function reportCamera(error?: CameraState["error"]) {
+    const track = streamRef.current?.getVideoTracks()[0];
+    sessionRef.current?.sendCameraState({
+      facing: facingRef.current,
+      torch: torchRef.current,
+      torchSupported: torchSupported(track),
+      error,
+    });
   }
 
   function postEvent(name: string, props: Record<string, unknown> = {}) {
@@ -89,6 +120,7 @@ export function CameraStart({
           setStrokes([]);
         }
         if (s === "connected") {
+          reportCamera();
           // relay(TURN) 경유 여부 — 원가 지표. turn: TURN 자격증명을 받았는지
           setTimeout(async () => {
             const relay = (await sessionRef.current?.usedRelay()) ?? false;
@@ -102,6 +134,10 @@ export function CameraStart({
         }
       },
       onPointer: (pos) => showMarker(videoRef.current, pos),
+      onCameraCommand: (cmd) => {
+        if (cmd.cmd === "flip") flipCamera(true);
+        else applyTorch(cmd.on);
+      },
       onDraw: (e) => {
         if (e.t === "freeze") {
           setFrozen(e.image);
@@ -122,29 +158,46 @@ export function CameraStart({
     setPhase("call");
   }
 
-  // 카메라 전/후면 전환 (replaceTrack — 재협상 불필요)
-  async function flipCamera() {
-    const next = facing === "environment" ? "user" : "environment";
+  // 카메라 전/후면 전환 (replaceTrack — 재협상 불필요). byEngineer: 기사님이 원격으로 요청
+  async function flipCamera(byEngineer: boolean) {
+    const current = streamRef.current;
+    if (!current || flippingRef.current) return;
+    flippingRef.current = true;
     try {
-      const newStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: next },
-        audio: false,
-      });
-      const newTrack = newStream.getVideoTracks()[0];
-      await sessionRef.current?.replaceVideoTrack(newTrack);
-
-      const old = streamRef.current;
-      old?.getVideoTracks().forEach((t) => t.stop());
-      const merged = new MediaStream([
-        newTrack,
-        ...(old?.getAudioTracks() ?? []),
-      ]);
-      streamRef.current = merged;
-      if (videoRef.current) videoRef.current.srcObject = merged;
-      setFacing(next);
-    } catch {
-      // 전환 실패(전면 카메라 없음 등) — 현 카메라 유지
+      const r = await switchCamera(current, facingRef.current);
+      if (r.stream && r.stream !== current) {
+        await sessionRef.current?.replaceVideoTrack(r.stream.getVideoTracks()[0]);
+        streamRef.current = r.stream;
+        if (videoRef.current) videoRef.current.srcObject = r.stream;
+        torchRef.current = false; // 새 카메라는 손전등이 꺼진 상태
+      }
+      facingRef.current = r.facing;
+      if (r.ok) {
+        setFlipRequested(false);
+        if (byEngineer) {
+          showNotice(
+            r.facing === "user"
+              ? "기사님이 앞 카메라로 바꿨어요"
+              : "기사님이 뒤 카메라로 바꿨어요",
+          );
+        }
+        reportCamera();
+      } else {
+        if (r.reason === "needs_tap" && byEngineer) setFlipRequested(true);
+        reportCamera(r.reason);
+      }
+    } finally {
+      flippingRef.current = false;
     }
+  }
+
+  async function applyTorch(on: boolean) {
+    const ok = await setTorch(streamRef.current?.getVideoTracks()[0], on);
+    if (ok) {
+      torchRef.current = on;
+      showNotice(on ? "기사님이 손전등을 켰어요" : "기사님이 손전등을 껐어요");
+    }
+    reportCamera(ok ? undefined : "failed");
   }
 
   function hangup() {
@@ -170,6 +223,7 @@ export function CameraStart({
       sessionRef.current?.destroy();
       streamRef.current?.getTracks().forEach((t) => t.stop());
       releaseWakeLockRef.current?.();
+      clearTimeout(noticeTimerRef.current);
     };
   }, []);
 
@@ -272,9 +326,35 @@ export function CameraStart({
           </span>
         </div>
 
+        {notice && (
+          <div className="relative mx-6 mt-6 rounded-2xl bg-black/75 px-5 py-4 text-center text-xl font-bold text-white">
+            {notice}
+          </div>
+        )}
+
+        {flipRequested && (
+          <div className="relative mx-6 mt-6 flex flex-col items-center gap-3 rounded-2xl bg-white px-5 py-5 text-center">
+            <p className="text-xl font-bold text-gray-900">
+              기사님이 카메라를 바꿔 달라고 하세요
+            </p>
+            <button
+              onClick={() => flipCamera(false)}
+              className="h-16 w-full rounded-2xl bg-black text-xl font-bold text-white active:opacity-80"
+            >
+              🔄 바꾸기
+            </button>
+            <button
+              onClick={() => setFlipRequested(false)}
+              className="px-4 py-1 text-base text-gray-500 underline"
+            >
+              닫기
+            </button>
+          </div>
+        )}
+
         <div className="relative mt-auto flex items-center justify-center gap-4 bg-gradient-to-t from-black/70 to-transparent p-6 pb-10">
           <button
-            onClick={flipCamera}
+            onClick={() => flipCamera(false)}
             className="h-16 w-16 rounded-full bg-white/20 text-2xl text-white active:bg-white/40"
             aria-label="카메라 전환"
           >

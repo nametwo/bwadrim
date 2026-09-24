@@ -2,6 +2,12 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import { isPointerPos, type PointerPos } from "./pointer";
 import { parseDrawCommand, type DrawCommand, type DrawEvent } from "./draw";
+import {
+  parseCameraCommand,
+  parseCameraState,
+  type CameraCommand,
+  type CameraState,
+} from "./camera";
 
 // 정지 화면(JPEG data URL)은 DataChannel 메시지 크기 제한 때문에 조각내 보낸다
 const FREEZE_CHUNK = 12_000;
@@ -33,6 +39,10 @@ export interface CallSessionOptions {
   onPointer?: (pos: PointerPos) => void;
   // 상대가 화면을 멈추고 그렸다 (CALL-09)
   onDraw?: (e: DrawEvent) => void;
+  // 고객: 엔지니어가 카메라 전환·손전등을 요청했다 (CALL-10, CALL-11)
+  onCameraCommand?: (cmd: CameraCommand) => void;
+  // 엔지니어: 고객 카메라 상태(명령 결과 포함)
+  onCameraState?: (state: CameraState) => void;
   onPeerPresent?: (present: boolean) => void;
 }
 
@@ -88,6 +98,9 @@ export class CallSession {
       .on("broadcast", { event: "bye" }, () => this.onBye())
       .on("broadcast", { event: "pointer" }, ({ payload }) =>
         this.receivePointer(payload),
+      )
+      .on("broadcast", { event: "cam" }, ({ payload }) =>
+        this.receiveCamera(payload),
       )
       .on("presence", { event: "sync" }, () => this.onPresenceSync())
       .subscribe(async (status) => {
@@ -230,6 +243,7 @@ export class CallSession {
       }
       const t = (msg as { t?: unknown } | null)?.t;
       if (t === "pointer") this.receivePointer(msg);
+      else if (t === "cam" || t === "cam-state") this.receiveCamera(msg);
       else if (t === "freeze-chunk") this.receiveFreezeChunk(msg);
       else {
         const cmd = parseDrawCommand(msg);
@@ -297,6 +311,32 @@ export class CallSession {
   private receivePointer(msg: unknown) {
     if (this.closed || !isPointerPos(msg)) return;
     this.opts.onPointer?.({ x: msg.x, y: msg.y });
+  }
+
+  private receiveCamera(msg: unknown) {
+    if (this.closed) return;
+    if (this.opts.role === "customer") {
+      const cmd = parseCameraCommand(msg);
+      if (cmd) this.opts.onCameraCommand?.(cmd);
+    } else {
+      const state = parseCameraState(msg);
+      if (state) this.opts.onCameraState?.(state);
+    }
+  }
+
+  // 작은 메시지: 연결 후엔 DataChannel, 아직이면 시그널링 broadcast
+  private sendSmall(msg: { t: string } & Record<string, unknown>) {
+    if (this.closed) return;
+    if (this.dc?.readyState === "open") this.dc.send(JSON.stringify(msg));
+    else this.send("cam", msg);
+  }
+
+  sendCameraCommand(cmd: CameraCommand) {
+    this.sendSmall(cmd);
+  }
+
+  sendCameraState(state: CameraState) {
+    this.sendSmall({ t: "cam-state", ...state });
   }
 
   sendPointer(pos: PointerPos) {

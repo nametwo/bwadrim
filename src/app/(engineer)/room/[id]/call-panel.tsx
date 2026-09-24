@@ -12,6 +12,7 @@ import {
   type Stroke,
 } from "@/lib/webrtc/draw";
 import { keepScreenOn } from "@/lib/wake-lock";
+import type { CameraState } from "@/lib/webrtc/camera";
 import { PointerMarker, usePointerMarker } from "@/components/pointer-marker";
 import { FreezeCanvas, type DrawHandlers } from "@/components/freeze-canvas";
 import { endRoom, logToolUsed, markRoomActive } from "./actions";
@@ -64,12 +65,17 @@ export function CallPanel({
   const [freezeError, setFreezeError] = useState(false);
   const strokeRef = useRef<{ id: string; pending: Point[] } | null>(null);
   const flushFrameRef = useRef<number | null>(null);
+  // 고객 카메라 원격 전환·손전등 (CALL-10, CALL-11)
+  const [camState, setCamState] = useState<CameraState | null>(null);
+  const [camPending, setCamPending] = useState(false);
+  const camTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const { marker, show: showMarker } = usePointerMarker();
 
   useEffect(() => {
     unmountedRef.current = false;
     return () => {
       unmountedRef.current = true;
+      clearTimeout(camTimerRef.current);
       sessionRef.current?.destroy();
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
       releaseWakeLockRef.current?.();
@@ -120,6 +126,8 @@ export function CallPanel({
         if (call !== "connected") {
           setFrozen(null);
           setStrokes([]);
+          setCamState(null);
+          setCamPending(false);
         }
         if (call === "connected") {
           setEverConnected(true);
@@ -149,6 +157,11 @@ export function CallPanel({
             peerPresent: prev.phase === "call" ? prev.peerPresent : false,
           };
         });
+      },
+      onCameraState: (cs) => {
+        clearTimeout(camTimerRef.current);
+        setCamPending(false);
+        setCamState(cs);
       },
       onRemoteStream: (stream) => {
         remoteStreamRef.current = stream;
@@ -186,6 +199,18 @@ export function CallPanel({
     session.sendPointer(pos);
     showMarker(video, pos);
     logToolOnce("pointer_used");
+  }
+
+  function sendCamera(cmd: "flip" | "torch") {
+    const session = sessionRef.current;
+    if (!session || camPending || lastCallRef.current !== "connected") return;
+    if (cmd === "flip") session.sendCameraCommand({ t: "cam", cmd: "flip" });
+    else session.sendCameraCommand({ t: "cam", cmd: "torch", on: !camState?.torch });
+    setCamPending(true);
+    setCamState((cs) => (cs ? { ...cs, error: undefined } : cs));
+    // 응답이 안 오면(구버전 고객 화면 등) 버튼을 다시 풀어 준다
+    clearTimeout(camTimerRef.current);
+    camTimerRef.current = setTimeout(() => setCamPending(false), 6000);
   }
 
   function logToolOnce(name: "pointer_used" | "freeze_used") {
@@ -510,6 +535,23 @@ export function CallPanel({
               : "영상을 누르면 고객님 화면에 빨간 동그라미가 표시돼요"}
           </p>
         )}
+        {call === "connected" && camState && !frozen && (
+          <p className="text-center text-sm text-gray-500">
+            고객 카메라: {camState.facing === "user" ? "앞" : "뒤"}
+            {camState.torchSupported &&
+              ` · 손전등 ${camState.torch ? "켜짐" : "꺼짐"}`}
+            {camState.error === "needs_tap" && (
+              <span className="block text-amber-600">
+                고객님께 화면의 &lsquo;바꾸기&rsquo;를 눌러 달라고 말씀해 주세요
+              </span>
+            )}
+            {camState.error === "failed" && (
+              <span className="block text-red-600">
+                고객 폰에서 바꾸지 못했어요
+              </span>
+            )}
+          </p>
+        )}
         {freezeError && !frozen && (
           <p role="alert" className="text-center text-sm text-red-600">
             연결이 불안정해 화면을 멈추지 못했어요. 다시 눌러주세요.
@@ -544,12 +586,34 @@ export function CallPanel({
                   </button>
                 </>
               ) : (
-                <button
-                  onClick={freeze}
-                  className="h-14 rounded-xl bg-gray-800 px-4 text-base font-semibold text-white active:opacity-80"
-                >
-                  ⏸ 멈추고 그리기
-                </button>
+                <>
+                  <button
+                    onClick={freeze}
+                    className="h-14 rounded-xl bg-gray-800 px-4 text-base font-semibold text-white active:opacity-80"
+                  >
+                    ⏸ 멈추고 그리기
+                  </button>
+                  <button
+                    onClick={() => sendCamera("flip")}
+                    disabled={camPending}
+                    className="h-14 rounded-xl border border-gray-300 px-3 text-base text-gray-700 disabled:opacity-40"
+                  >
+                    🔄 카메라
+                  </button>
+                  {camState?.torchSupported && (
+                    <button
+                      onClick={() => sendCamera("torch")}
+                      disabled={camPending}
+                      className={`h-14 rounded-xl px-3 text-base disabled:opacity-40 ${
+                        camState.torch
+                          ? "bg-yellow-300 font-semibold text-gray-900"
+                          : "border border-gray-300 text-gray-700"
+                      }`}
+                    >
+                      🔦 손전등
+                    </button>
+                  )}
+                </>
               ))}
             {!micOn && (
               <span className="text-sm text-amber-600">
