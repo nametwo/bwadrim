@@ -22,3 +22,14 @@ body {
   color: var(--foreground);
   font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Malgun Gothic", sans-serif;
 }
+
+/* 레이저 포인터: 보이다가 끝에서 서서히 사라진다 (pointer-marker.tsx의 SHOW_MS와 맞출 것) */
+@keyframes pointer-fade {
+  0%,
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}

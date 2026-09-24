@@ -4,7 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CallSession, sendBye, type CallState } from "@/lib/webrtc/call";
 import { fetchIceServers } from "@/lib/webrtc/ice";
-import { endRoom, markRoomActive } from "./actions";
+import { toVideoPos } from "@/lib/webrtc/pointer";
+import { keepScreenOn } from "@/lib/wake-lock";
+import { PointerMarker, usePointerMarker } from "@/components/pointer-marker";
+import { endRoom, logPointerUsed, markRoomActive } from "./actions";
 
 type PanelState =
   | { phase: "idle" }
@@ -46,6 +49,9 @@ export function CallPanel({
   const endingRef = useRef(false);
   const lastCallRef = useRef<CallState>("waiting");
   const confirmShownAtRef = useRef(0);
+  const releaseWakeLockRef = useRef<(() => void) | null>(null);
+  const pointerLoggedRef = useRef(false);
+  const { marker, show: showMarker } = usePointerMarker();
 
   useEffect(() => {
     unmountedRef.current = false;
@@ -53,6 +59,7 @@ export function CallPanel({
       unmountedRef.current = true;
       sessionRef.current?.destroy();
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
+      releaseWakeLockRef.current?.();
     };
   }, []);
 
@@ -72,6 +79,8 @@ export function CallPanel({
   async function start() {
     if (starting || sessionRef.current) return;
     setStarting(true);
+    releaseWakeLockRef.current?.();
+    releaseWakeLockRef.current = keepScreenOn();
     let mic: MediaStream | null = null;
     try {
       mic = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -81,6 +90,7 @@ export function CallPanel({
     const ice = await fetchIceServers(code);
     if (unmountedRef.current) {
       mic?.getTracks().forEach((t) => t.stop());
+      releaseWakeLockRef.current?.();
       return;
     }
     micStreamRef.current = mic;
@@ -143,6 +153,24 @@ export function CallPanel({
     sessionRef.current = null;
     micStreamRef.current?.getTracks().forEach((t) => t.stop());
     micStreamRef.current = null;
+    releaseWakeLockRef.current?.();
+    releaseWakeLockRef.current = null;
+  }
+
+  // 영상을 탭한 곳을 고객 화면에 표시한다. 영상 밖 검은 여백은 무시
+  function pointAt(e: React.PointerEvent<HTMLDivElement>) {
+    const video = videoRef.current;
+    const session = sessionRef.current;
+    if (!video || !session || lastCallRef.current !== "connected") return;
+    const rect = video.getBoundingClientRect();
+    const pos = toVideoPos(video, e.clientX - rect.left, e.clientY - rect.top);
+    if (!pos) return;
+    session.sendPointer(pos);
+    showMarker(video, pos);
+    if (!pointerLoggedRef.current) {
+      pointerLoggedRef.current = true;
+      logPointerUsed(roomId).catch(() => {});
+    }
   }
 
   // 고객에게 종료를 알리고 이쪽 연결·마이크를 정리한다.
@@ -355,19 +383,28 @@ export function CallPanel({
     return (
       <section className="mt-2 flex flex-1 flex-col gap-3">
         {turnWarning}
-        <div className="relative flex-1 overflow-hidden rounded-2xl bg-black">
+        <div
+          onPointerDown={pointAt}
+          className="relative min-h-[50vh] flex-1 touch-none overflow-hidden rounded-2xl bg-black"
+        >
           <video
             ref={videoRef}
             autoPlay
             playsInline
-            className="h-full w-full object-contain"
+            className="absolute inset-0 h-full w-full object-contain"
           />
+          <PointerMarker marker={marker} size={56} />
           {call !== "connected" && (
             <p className="absolute inset-0 flex items-center justify-center text-white/70">
               연결 중…
             </p>
           )}
         </div>
+        {call === "connected" && (
+          <p className="text-center text-sm text-gray-400">
+            영상을 누르면 고객님 화면에 빨간 동그라미가 표시돼요
+          </p>
+        )}
         {confirmClose ? (
           closeConfirm
         ) : (

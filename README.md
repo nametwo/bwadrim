@@ -21,7 +21,7 @@
 - [x] 관리자(엔지니어) 로그인 — Supabase Auth
 - [x] 방 생성 + 초대 URL (만료 24h. 1회용은 아님 — ROOM-03)
 - [x] WebRTC 영상/음성 — Supabase Realtime 시그널링, STUN + Cloudflare TURN
-- [ ] 레이저 포인터 (DataChannel, 정규화 좌표)
+- [x] 레이저 포인터 (DataChannel, 정규화 좌표) + 통화 중 화면 꺼짐 방지
 - [ ] 프리즈 프레임 + 드로잉
 - [x] 카메라 전/후면 전환, 통화 종료 (+ 종료 시 "출장 없이 해결?" 지표 입력)
 - [ ] 인앱 브라우저(카카오톡) 감지 → 기본 브라우저로 열기 안내

@@ -1,9 +1,11 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
+import { isPointerPos, type PointerPos } from "./pointer";
 
 // 1:1 P2P 통화 세션. 시그널링은 Supabase Realtime broadcast `room:{id}`.
 // 역할 고정: customer(카메라 보유)가 offer, engineer가 answer.
 // 포인터·드로잉용 DataChannel('draw')은 offer에 미리 포함해 둔다.
+// 포인터는 연결 후 DataChannel로, 아직 열리지 않았으면 시그널링 broadcast로 보낸다.
 
 export type Role = "engineer" | "customer";
 
@@ -22,7 +24,8 @@ export interface CallSessionOptions {
   localStream: MediaStream | null;
   onState: (state: CallState) => void;
   onRemoteStream: (stream: MediaStream) => void;
-  onDataChannel?: (dc: RTCDataChannel) => void;
+  // 상대가 레이저 포인터를 찍었다 (영상 원본 기준 0~1 좌표)
+  onPointer?: (pos: PointerPos) => void;
   onPeerPresent?: (present: boolean) => void;
 }
 
@@ -46,6 +49,7 @@ export class CallSession {
   private channel: RealtimeChannel | null = null;
   private pc: RTCPeerConnection | null = null;
   private pendingIce: RTCIceCandidateInit[] = [];
+  private dc: RTCDataChannel | null = null;
   private negotiating = false;
   private closed = false;
   // 카메라 전환 시 교체된다. 이후 새로 맺는 연결도 지금 카메라로 보내기 위함
@@ -73,6 +77,9 @@ export class CallSession {
         if (payload.from !== role) this.addIce(payload.candidate);
       })
       .on("broadcast", { event: "bye" }, () => this.onBye())
+      .on("broadcast", { event: "pointer" }, ({ payload }) =>
+        this.receivePointer(payload),
+      )
       .on("presence", { event: "sync" }, () => this.onPresenceSync())
       .subscribe(async (status) => {
         if (status === "SUBSCRIBED") {
@@ -138,8 +145,7 @@ export class CallSession {
       this.opts.onState("connecting");
       const pc = this.createPeer();
 
-      const dc = pc.createDataChannel("draw");
-      this.opts.onDataChannel?.(dc);
+      this.attachDataChannel(pc.createDataChannel("draw"));
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -158,7 +164,7 @@ export class CallSession {
       if (this.pc) this.resetPeer(); // 고객이 재시도한 경우 이전 연결 폐기
       const pc = this.createPeer();
 
-      pc.ondatachannel = (e) => this.opts.onDataChannel?.(e.channel);
+      pc.ondatachannel = (e) => this.attachDataChannel(e.channel);
 
       await pc.setRemoteDescription(sdp);
       this.flushIce();
@@ -202,6 +208,32 @@ export class CallSession {
 
   private send(event: string, payload: Record<string, unknown>) {
     this.channel?.send({ type: "broadcast", event, payload });
+  }
+
+  private attachDataChannel(dc: RTCDataChannel) {
+    this.dc = dc;
+    dc.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg?.t === "pointer") this.receivePointer(msg);
+      } catch {
+        // 형식이 다른 메시지는 무시
+      }
+    };
+  }
+
+  private receivePointer(msg: unknown) {
+    if (this.closed || !isPointerPos(msg)) return;
+    this.opts.onPointer?.({ x: msg.x, y: msg.y });
+  }
+
+  sendPointer(pos: PointerPos) {
+    if (this.closed) return;
+    if (this.dc?.readyState === "open") {
+      this.dc.send(JSON.stringify({ t: "pointer", x: pos.x, y: pos.y }));
+    } else {
+      this.send("pointer", { x: pos.x, y: pos.y });
+    }
   }
 
   // 카메라 전/후면 전환 (재협상 없이 replaceTrack).
@@ -250,6 +282,7 @@ export class CallSession {
   private resetPeer() {
     this.pc?.close();
     this.pc = null;
+    this.dc = null;
     this.pendingIce = [];
     if (!this.closed) this.opts.onState("waiting");
   }

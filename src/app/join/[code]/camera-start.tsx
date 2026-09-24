@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { CallSession, type CallState } from "@/lib/webrtc/call";
 import { fetchIceServers } from "@/lib/webrtc/ice";
+import { keepScreenOn } from "@/lib/wake-lock";
+import { PointerMarker, usePointerMarker } from "@/components/pointer-marker";
 
 type Phase = "ready" | "starting" | "call" | "denied" | "gone";
 
@@ -24,6 +26,13 @@ export function CameraStart({
   const streamRef = useRef<MediaStream | null>(null);
   const sessionRef = useRef<CallSession | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+  const releaseWakeLockRef = useRef<(() => void) | null>(null);
+  const { marker, show: showMarker } = usePointerMarker();
+
+  function releaseWakeLock() {
+    releaseWakeLockRef.current?.();
+    releaseWakeLockRef.current = null;
+  }
 
   function postEvent(name: string, props: Record<string, unknown> = {}) {
     // 지표 기록 — 실패해도 진행을 막지 않는다
@@ -37,6 +46,9 @@ export function CameraStart({
 
   async function start() {
     setPhase("starting");
+    // 폰을 비추기만 하고 화면을 안 건드려서 자동 잠금으로 끊기기 쉽다 — 버튼 탭 안에서 요청
+    releaseWakeLock();
+    releaseWakeLockRef.current = keepScreenOn();
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -45,6 +57,7 @@ export function CameraStart({
       });
     } catch {
       postEvent("camera_denied");
+      releaseWakeLock();
       setPhase("denied");
       return;
     }
@@ -55,6 +68,7 @@ export function CameraStart({
     // 링크를 연 뒤 세션이 닫혔거나 만료됐다 — 종료 알림(bye)은 채널에 들어오기 전이라 받지 못했다
     if (ice.roomGone) {
       stream.getTracks().forEach((t) => t.stop());
+      releaseWakeLock();
       setPhase("gone");
       return;
     }
@@ -75,8 +89,10 @@ export function CameraStart({
         }
         if (s === "ended" || s === "failed") {
           streamRef.current?.getTracks().forEach((t) => t.stop());
+          releaseWakeLock();
         }
       },
+      onPointer: (pos) => showMarker(videoRef.current, pos),
       onRemoteStream: (remote) => {
         // 기사님 음성
         remoteStreamRef.current = remote;
@@ -116,6 +132,7 @@ export function CameraStart({
   function hangup() {
     sessionRef.current?.hangup();
     streamRef.current?.getTracks().forEach((t) => t.stop());
+    releaseWakeLock();
     setCallState("ended");
   }
 
@@ -134,6 +151,7 @@ export function CameraStart({
     return () => {
       sessionRef.current?.destroy();
       streamRef.current?.getTracks().forEach((t) => t.stop());
+      releaseWakeLockRef.current?.();
     };
   }, []);
 
@@ -210,8 +228,10 @@ export function CameraStart({
           autoPlay
           playsInline
           muted
-          className="absolute inset-0 h-full w-full object-cover"
+          className="absolute inset-0 h-full w-full object-contain"
         />
+        {/* 잘림 없이 전체를 보여 줘야 기사님이 가리킨 곳이 항상 화면 안에 있다 */}
+        <PointerMarker marker={marker} size={88} />
         <audio ref={audioRef} autoPlay />
 
         <div className="relative mt-4 flex justify-center">

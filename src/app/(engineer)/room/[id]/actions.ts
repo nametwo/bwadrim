@@ -72,3 +72,19 @@ export async function markRoomActive(roomId: string) {
     .eq("id", roomId)
     .eq("status", "waiting");
 }
+
+// 레이저 포인터 첫 사용 기록 (세션 화면을 열 때마다 1번). 자기 방인지는 RLS로 확인
+export async function logPointerUsed(roomId: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return;
+
+  const { data } = await supabase
+    .from("rooms")
+    .select("id")
+    .eq("id", roomId)
+    .maybeSingle();
+  if (data) await logEvent(roomId, "engineer", "pointer_used");
+}
