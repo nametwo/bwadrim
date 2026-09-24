@@ -417,3 +417,92 @@ export function pauseCustomerWhen(page: Page, what: "arrow" | "lost" | "pin-cent
 export async function resumeCustomer(page: Page) {
   await page.evaluate(() => document.querySelector<HTMLVideoElement>("[data-testid=cust-video]")!.play());
 }
+
+/** 엔지니어 화면(contain)에서 프레임 norm 점의 페이지 CSS 좌표 */
+export function engNormToPage(page: Page, p: { x: number; y: number }) {
+  return page.evaluate((p) => {
+    const v = document.querySelector<HTMLVideoElement>("[data-testid=eng-video]")!;
+    const b = v.getBoundingClientRect();
+    const s = Math.min(b.width / v.videoWidth, b.height / v.videoHeight);
+    const dw = v.videoWidth * s;
+    const dh = v.videoHeight * s;
+    return { x: b.left + (b.width - dw) / 2 + p.x * dw, y: b.top + (b.height - dh) / 2 + p.y * dh };
+  }, p);
+}
+
+/**
+ * 고객 화면 안내 기록 시작 (window.__guide): 매 프레임 앵커 id·추적 상태·세션 카드/화살표·화면의 카드/화살표 글씨.
+ * 짧게 지나가는 장면도 놓치지 않게 페이지 안 rAF로 기록한다.
+ */
+export async function recordCustomerGuide(page: Page) {
+  await page.evaluate(() => {
+    type Row = { t: number; anchor: string | null; state: string | null; reason: string | null; showCard: boolean; arrow: boolean; cardUi: boolean; arrowUi: boolean };
+    const w = window as unknown as { __lab: Record<string, any>; __guide: Row[] }; // eslint-disable-line @typescript-eslint/no-explicit-any
+    w.__guide = [];
+    const tick = () => {
+      const s = w.__lab.cust?.getSnapshot();
+      if (s) {
+        w.__guide.push({
+          t: performance.now(),
+          anchor: s.anchor?.id ?? null,
+          state: s.update?.state ?? null,
+          reason: s.update?.reason ?? null,
+          showCard: s.showCard,
+          arrow: s.arrow,
+          cardUi: !!document.querySelector("[data-testid=cust-card]"),
+          arrowUi: !!document.querySelector("[data-testid=cust-arrow-text]"),
+        });
+        if (w.__guide.length > 20000) w.__guide.shift();
+      }
+      requestAnimationFrame(tick);
+    };
+    tick();
+  });
+}
+
+export interface GuideRow {
+  t: number;
+  anchor: string | null;
+  state: string | null;
+  reason: string | null;
+  showCard: boolean;
+  arrow: boolean;
+  cardUi: boolean;
+  arrowUi: boolean;
+}
+
+export function customerGuide(page: Page): Promise<GuideRow[]> {
+  return page.evaluate(() => (window as unknown as { __guide: GuideRow[] }).__guide);
+}
+
+/** 고객 화면에 지금 그려진 핀(첫 주석)의 CSS 좌표 (고객 영상 요소 기준, 추적 중일 때만) */
+export function custPinCss(page: Page) {
+  return page.evaluate(() => {
+    const lab = (window as unknown as { __lab: Record<string, any> }).__lab; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const s = lab.cust.getSnapshot();
+    const u = s.update;
+    const pin = s.anchor?.annotations.find((a: { kind: string }) => a.kind === "pin");
+    if (!u?.H || !pin) return null;
+    const X = pin.p.x * u.refSize.width;
+    const Y = pin.p.y * u.refSize.height;
+    const w = u.H[6] * X + u.H[7] * Y + u.H[8];
+    const fx = ((u.H[0] * X + u.H[1] * Y + u.H[2]) / w + 0.5) / u.frameSize.width;
+    const fy = ((u.H[3] * X + u.H[4] * Y + u.H[5]) / w + 0.5) / u.frameSize.height;
+    const v = document.querySelector<HTMLVideoElement>("[data-testid=cust-video]")!;
+    const ew = v.clientWidth;
+    const eh = v.clientHeight;
+    const k = Math.max(ew / v.videoWidth, eh / v.videoHeight);
+    const dw = v.videoWidth * k;
+    const dh = v.videoHeight * k;
+    return { x: (ew - dw) / 2 + fx * dw, y: (eh - dh) / 2 + fy * dh, ew, eh, fx, fy };
+  });
+}
+
+/** 합성 카메라(?synthetic=…)를 손으로 가린 것처럼 덮기/걷기 */
+export function coverSyntheticCamera(page: Page, on: boolean) {
+  return page.evaluate((on) => {
+    const cam = (window as unknown as { __labCamera?: { cover: ((on: boolean) => void) | null } }).__labCamera;
+    if (!cam?.cover) throw new Error("합성 카메라 없음");
+    cam.cover(on);
+  }, on);
+}

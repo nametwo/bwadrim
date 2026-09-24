@@ -373,14 +373,15 @@ export function EngineerCallView({
 
         {snap.retap && !showHint && (
           <div className="pointer-events-none absolute inset-x-0 top-1/2 flex -translate-y-1/2 justify-center p-8">
-            <p
+            <div
               data-testid="eng-retap"
               role="status"
-              className="flex items-center gap-2 rounded-3xl bg-black/70 px-5 py-4 text-center text-lg font-bold leading-snug break-keep shadow-2xl backdrop-blur-sm"
+              className="flex flex-col items-center gap-1.5 rounded-3xl bg-black/70 px-6 py-4 text-center break-keep shadow-2xl backdrop-blur-sm"
             >
-              <TapIcon className="h-7 w-7 shrink-0" />
-              표시를 놓쳤어요 — 다시 탭해 주세요
-            </p>
+              <TapIcon className="h-8 w-8" />
+              <p className="text-base font-semibold text-white/80">표시를 놓쳤어요</p>
+              <p className="text-xl font-bold leading-snug">다시 탭해 주세요</p>
+            </div>
           </div>
         )}
 
@@ -391,7 +392,16 @@ export function EngineerCallView({
               role="alert"
               className="max-w-[20rem] rounded-2xl bg-amber-400 px-4 py-3 text-center text-[15px] font-semibold leading-snug break-keep text-black shadow-xl"
             >
-              {toastText}
+              {toastText.split(" — ").map((part, i, all) => (
+                <span key={i}>
+                  {part}
+                  {i < all.length - 1 && (
+                    <>
+                      {" —"} <br />
+                    </>
+                  )}
+                </span>
+              ))}
             </p>
           </div>
         )}

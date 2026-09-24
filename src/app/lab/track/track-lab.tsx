@@ -30,8 +30,8 @@ export interface TrackLabProps {
   /** 패널 크기 "390x844" (스크린숏용) */
   pane?: string | null;
   initialMode?: Mode;
-  /** 테스트용 합성 카메라: "blank" = 무늬 없는 회색 면 (무늬 부족 경로 확인) */
-  synthetic?: "blank" | null;
+  /** 테스트용 합성 카메라: "blank" = 무늬 없는 회색 면 (무늬 부족), "repeat" = 똑같은 타일 반복 (반복 무늬) */
+  synthetic?: SyntheticKind | null;
 }
 
 interface Running {
@@ -43,6 +43,8 @@ interface Running {
   source: Source;
   /** 합성 카메라 그리기 루프 정지 */
   stopSynthetic: (() => void) | null;
+  /** 합성 카메라 가리기 (e2e) */
+  cover?: (on: boolean) => void;
 }
 
 const NULL_LINK: DataLink = {
@@ -67,8 +69,46 @@ type CaptureCapable = HTMLVideoElement & {
   mozCaptureStream?: () => MediaStream;
 };
 
-/** 무늬 없는 회색 면을 30fps로 그리는 합성 카메라 (캔버스 captureStream). 아주 약한 밝기 기울기만 있다 */
-function blankCamera(): { stream: MediaStream; stop(): void } | null {
+type SyntheticKind = "blank" | "repeat";
+
+interface SyntheticCamera {
+  stream: MediaStream;
+  stop(): void;
+  /** 손으로 가린 것처럼 화면을 어둡게 덮기 (e2e: 놓침 → 다시 탭 안내 확인) */
+  cover(on: boolean): void;
+}
+
+/** 똑같은 무늬 타일 (고정 시드) — 반복 무늬(콘센트 줄·환풍구·키 배열) 흉내 */
+function repeatTile(): HTMLCanvasElement {
+  const t = document.createElement("canvas");
+  t.width = 72;
+  t.height = 72;
+  const g = t.getContext("2d")!;
+  g.fillStyle = "#9a9a9a";
+  g.fillRect(0, 0, 72, 72);
+  let seed = 12345;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  for (let i = 0; i < 14; i++) {
+    const v = Math.round(30 + rnd() * 200);
+    g.fillStyle = `rgb(${v},${v},${v})`;
+    const x = rnd() * 60;
+    const y = rnd() * 60;
+    if (i % 2) g.fillRect(x, y, 4 + rnd() * 14, 4 + rnd() * 14);
+    else {
+      g.beginPath();
+      g.arc(x + 6, y + 6, 2 + rnd() * 7, 0, Math.PI * 2);
+      g.fill();
+    }
+  }
+  return t;
+}
+
+/**
+ * 합성 카메라 (캔버스 captureStream, 30fps). 테스트·시연용
+ *  - blank: 무늬 없는 회색 면 (아주 약한 밝기 기울기) → 무늬 부족 경로
+ *  - repeat: 화면 전체가 똑같은 타일 반복 + 아주 느린 흔들림 → 반복 무늬(ambiguous) 경로
+ */
+function syntheticCamera(kind: SyntheticKind): SyntheticCamera | null {
   const c = document.createElement("canvas");
   c.width = 480;
   c.height = 640;
@@ -78,12 +118,30 @@ function blankCamera(): { stream: MediaStream; stop(): void } | null {
   const g = ctx.createLinearGradient(0, 0, 0, 640);
   g.addColorStop(0, "#8a8a8a");
   g.addColorStop(1, "#7e7e7e");
+  const pattern = kind === "repeat" ? ctx.createPattern(repeatTile(), "repeat") : null;
   let n = 0;
+  let covered = false;
   const draw = () => {
+    n++;
+    if (covered) {
+      ctx.fillStyle = n % 2 ? "#2a2522" : "#2b2623";
+      ctx.fillRect(0, 0, 480, 640);
+      return;
+    }
+    if (pattern) {
+      const dx = Math.sin(n / 40) * 3;
+      const dy = Math.cos(n / 55) * 2;
+      ctx.save();
+      ctx.translate(dx, dy);
+      ctx.fillStyle = pattern;
+      ctx.fillRect(-10, -10, 500, 660);
+      ctx.restore();
+      return;
+    }
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, 480, 640);
     // 새 프레임으로 인식되도록 한 픽셀만 바꾼다 (캔버스가 바뀌어야 captureStream이 프레임을 낸다)
-    ctx.fillStyle = n++ % 2 ? "#858585" : "#868686";
+    ctx.fillStyle = n % 2 ? "#858585" : "#868686";
     ctx.fillRect(0, 0, 1, 1);
   };
   draw();
@@ -94,6 +152,9 @@ function blankCamera(): { stream: MediaStream; stop(): void } | null {
     stop: () => {
       clearInterval(timer);
       stream.getTracks().forEach((t) => t.stop());
+    },
+    cover: (on) => {
+      covered = on;
     },
   };
 }
@@ -125,6 +186,12 @@ export function TrackLab({ e2e = false, pane = null, initialMode = "loopback", s
 
   useEffect(() => () => stopAll(runningRef.current), []);
 
+  // e2e: 합성 카메라 가리기 (손으로 가린 상황 → 놓침)
+  useEffect(() => {
+    if (!e2e) return;
+    (window as unknown as { __labCamera?: unknown }).__labCamera = { cover: running?.cover ?? null };
+  }, [e2e, running]);
+
   // 카메라·파일 재생은 반드시 이 버튼 탭(사용자 제스처) 안에서 시작
   async function start() {
     setError(null);
@@ -134,11 +201,13 @@ export function TrackLab({ e2e = false, pane = null, initialMode = "loopback", s
       let fileUrl: string | null = null;
       let fileVideo: HTMLVideoElement | null = null;
       let stopSynthetic: (() => void) | null = null;
-      if (synthetic === "blank") {
-        const cam = blankCamera();
+      let cover: ((on: boolean) => void) | undefined;
+      if (synthetic) {
+        const cam = syntheticCamera(synthetic);
         if (!cam) throw new Error("합성 카메라를 만들 수 없어요");
         stream = cam.stream;
         stopSynthetic = cam.stop;
+        cover = cam.cover;
       } else if (source === "camera") {
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
       } else {
@@ -160,7 +229,7 @@ export function TrackLab({ e2e = false, pane = null, initialMode = "loopback", s
         }
       }
       setRecorder(new LabRecorder(e2e));
-      setRunning({ mode, stream, fileUrl, fileVideo, source: synthetic ? "file" : source, stopSynthetic });
+      setRunning({ mode, stream, fileUrl, fileVideo, source: synthetic ? "file" : source, stopSynthetic, cover });
     } catch (e) {
       setError(e instanceof Error ? `${e.name === "Error" ? "" : e.name + ": "}${e.message}` : String(e));
     } finally {

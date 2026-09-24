@@ -208,7 +208,7 @@ describe("엔지니어 안내: 기준 토스트 · 다시 탭", () => {
       "표시한 곳 주변에 무늬가 적어요 — 고객에게 사진 카드로 보여줘요",
     );
     expect(referenceToast({ trackable: true, referenceReason: "ambiguous" })).toBe(
-      "같은 무늬가 반복돼 고객 화면에선 사진 카드로 보여줘요",
+      "같은 무늬가 반복돼요 — 고객에게 사진 카드로 보여줘요",
     );
   });
 

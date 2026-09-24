@@ -13,6 +13,10 @@ function one(v: string | string[] | undefined): string | null {
   return typeof v === "string" ? v : Array.isArray(v) ? (v[0] ?? null) : null;
 }
 
+function synthetic(v: string | null): "blank" | "repeat" | null {
+  return v === "blank" || v === "repeat" ? v : null;
+}
+
 export default async function TrackLabPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const sp = await searchParams;
   const mode = one(sp.mode) === "single" ? "single" : "loopback";
@@ -21,7 +25,7 @@ export default async function TrackLabPage({ searchParams }: { searchParams: Pro
       e2e={one(sp.e2e) === "1"}
       pane={one(sp.pane)}
       initialMode={mode}
-      synthetic={one(sp.synthetic) === "blank" ? "blank" : null}
+      synthetic={synthetic(one(sp.synthetic))}
     />
   );
 }
