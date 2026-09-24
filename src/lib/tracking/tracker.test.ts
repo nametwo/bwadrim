@@ -237,14 +237,12 @@ describe("PlanarTracker", () => {
         if (r.state === "lost") lostWhileOut++;
         // 내부적으로는 계속 추적 중
         expect(tr.getState() === "tracking" || tr.getState() === "weak").toBe(true);
-        // ROI 대부분이 화면 밖이라 인라이어가 적다(내부 weak) → 방향 hint를 믿을 수 없으니 내지 않는다
-        if (tr.getState() === "weak") {
-          expect(r.hint).toBeNull();
-          expect(r.reason).toBe("unverified");
-        } else {
-          expect(r.reason).toBe("offscreen");
-          expect(r.hint).not.toBeNull();
-        }
+        // 내부 추적이 (ROI 대부분이 화면 밖이라 인라이어가 적어 weak여도) 검증을 통과했으면 그 H가 hint —
+        // 방향 화살표 전용이고, 위치도 수 px 안으로 맞는다
+        expect(r.reason).toBe("offscreen");
+        expect(r.hint).not.toBeNull();
+        const h = applyH(r.hint!, pin)!;
+        expect(Math.hypot(h.x - gt.x, h.y - gt.y)).toBeLessThan(3);
       } else {
         expect(shown(r)).toBe(true);
         expect(pinError(r, s4, 0, t, pin)).toBeLessThan(2);
@@ -595,5 +593,162 @@ describe("PlanarTracker", () => {
     const info = tr.setReference(seq.frames[0], { x: 290, y: -20, width: 80, height: 60 });
     expect(info.roi.x + info.roi.width).toBeLessThanOrEqual(W);
     expect(info.roi.y).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("PlanarTracker offscreen direction hint (dead reckoning)", () => {
+  // 넓은 월드: 대상(ROI)이 화면 밖으로 완전히 나가도 화면에는 다른 무늬가 보인다 (벽·주변 기기)
+  const world2 = makeTexture(1700, 700, 23);
+  const roi2: Rect = { x: 110, y: 70, width: 100, height: 100 };
+  const anchor = { x: 160, y: 120 };
+  const ease = (u: number) => 0.5 - 0.5 * Math.cos(Math.PI * Math.max(0, Math.min(1, u)));
+  // 엔지니어 30fps: 0.27초 제자리 → 0.73초에 520px 오른쪽으로 → 1.3초 머묾 → 0.73초에 돌아옴 → 머묾
+  const shift = (t: number) => (t < 8 ? 0 : t < 30 ? 520 * ease((t - 8) / 22) : t < 70 ? 520 : 520 * (1 - ease((t - 70) / 22)));
+  const view2 = (t: number): Mat3 =>
+    camHomography({
+      cx: 450,
+      cy: 350,
+      tx: -290 - shift(t),
+      ty: -230 + 5 * Math.sin(t * 0.3),
+      rot: 0.03 * Math.sin(t * 0.2),
+      scale: 0.6 * (1 + 0.04 * Math.sin(t * 0.15)),
+    });
+  const N = 100;
+  const dt = 1000 / 30;
+  const seq2 = makeSeq(world2, N, view2, 2, 31);
+  const gtAnchor = (t: number) => applyH(mul3(seq2.views[t], invert3(seq2.views[0])!), anchor)!;
+  const m = DEFAULT_TRACKER_CONFIG.offscreenMargin;
+  const isOut = (p: Point) => p.x < -m || p.y < -m || p.x > W - 1 + m || p.y > H - 1 + m;
+  const angle = (a: Point, b: Point) => {
+    const cx = (W - 1) / 2;
+    const cy = (H - 1) / 2;
+    let d = Math.abs(Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+    if (d > Math.PI) d = 2 * Math.PI - d;
+    return (d * 180) / Math.PI;
+  };
+  const q = (v: number[], p: number) => [...v].sort((a, b) => a - b)[Math.min(v.length - 1, Math.floor((v.length - 1) * p))];
+
+  it("anchor leaves with the whole ROI → hint from dead reckoning on ≥80% of offscreen frames, arrow within 15°/35°", () => {
+    const tr = new PlanarTracker();
+    expect(tr.setReference(seq2.frames[0], roi2, IDENTITY, anchor).trackable).toBe(true);
+    let off = 0;
+    let hints = 0;
+    let internalLost = 0;
+    const angles: number[] = [];
+    let backAt = -1;
+    let reacquired = -1;
+    for (let t = 1; t < N; t++) {
+      const r = tr.process(seq2.frames[t], t * dt);
+      const g = gtAnchor(t);
+      // 계약: hint는 lost + offscreen에서만, reason=offscreen이면 hint가 있다
+      expect(r.reason === "offscreen").toBe(r.hint !== null);
+      if (r.hint) expect(r.state).toBe("lost");
+      if (shown(r)) expect(pinError(r, seq2, 0, t, anchor)).toBeLessThan(2);
+      if (isOut(g)) {
+        off++;
+        expect(shown(r)).toBe(false);
+        expect(r.H).toBeNull();
+        const internal = tr.getState();
+        if (internal === "lost") internalLost++;
+        if (r.hint) {
+          hints++;
+          angles.push(angle(applyH(r.hint, anchor)!, g));
+        }
+      } else {
+        // 화면 안인데 표시하지 못하면(재검출 전) 화살표도 없다
+        if (!shown(r) && t > 40) {
+          expect(r.hint).toBeNull();
+          expect(r.reason).not.toBe("offscreen");
+        }
+        if (t > 40 && backAt < 0) backAt = t;
+        if (backAt >= 0 && reacquired < 0 && shown(r)) reacquired = t;
+      }
+    }
+    expect(off).toBeGreaterThan(45);
+    // ROI까지 화면 밖이라 내부 추적도 끊긴 프레임이 대부분 — 예전에는 여기서 hint가 없었다
+    expect(internalLost).toBeGreaterThan(off / 2);
+    expect(hints / off).toBeGreaterThanOrEqual(0.8);
+    expect(q(angles, 0.5)).toBeLessThanOrEqual(15);
+    expect(q(angles, 0.95)).toBeLessThanOrEqual(35);
+    // 돌아오면 재검출로 다시 tracking (추측 항법은 관여하지 않는다)
+    expect(reacquired).toBeGreaterThan(0);
+    expect(reacquired - backAt).toBeLessThanOrEqual(10);
+  });
+
+  it("dead reckoning never changes state / H: identical to hintDeadReckon=false except for hint and reason", () => {
+    const a = new PlanarTracker();
+    const b = new PlanarTracker({ hintDeadReckon: false });
+    a.setReference(seq2.frames[0], roi2, IDENTITY, anchor);
+    b.setReference(seq2.frames[0], roi2, IDENTITY, anchor);
+    let extra = 0;
+    for (let t = 1; t < N; t++) {
+      const ra = a.process(seq2.frames[t], t * dt);
+      const rb = b.process(seq2.frames[t], t * dt);
+      expect(ra.state).toBe(rb.state);
+      expect(ra.H).toEqual(rb.H);
+      expect(ra.inliers).toBe(rb.inliers);
+      expect(ra.redetected).toBe(rb.redetected);
+      if (rb.hint) expect(ra.hint).toEqual(rb.hint);
+      if (ra.hint && !rb.hint) extra++;
+      // 추측 항법 비용은 검증된 자세가 없는 프레임에서만 든다
+      if (shown(ra)) expect(ra.timings.hint).toBeUndefined();
+    }
+    expect(extra).toBeGreaterThan(20);
+  });
+
+  it("stops instead of guessing after an unmatchable frame (violent shake), until re-verified", () => {
+    const junk = renderView(makeTexture(900, 700, 77), camHomography({ cx: 450, cy: 350, tx: -290, ty: -230, scale: 0.6 }), W, H, { noise: 2 });
+    const tr = new PlanarTracker();
+    tr.setReference(seq2.frames[0], roi2, IDENTITY, anchor);
+    let before = 0;
+    for (let t = 1; t < N; t++) {
+      const frame = t === 45 ? junk : seq2.frames[t];
+      const r = tr.process(frame, t * dt);
+      if (t < 45 && r.hint) before++;
+      // 흔들린 뒤로는 다시 검증될 때까지 화살표 없음 (끊긴 사슬을 추측으로 잇지 않는다)
+      if (t >= 45 && t < 70) expect(r.hint).toBeNull();
+    }
+    expect(before).toBeGreaterThan(10);
+  });
+
+  it("expires after hintMaxAgeMs since the last verified pose", () => {
+    const tr = new PlanarTracker({ hintMaxAgeMs: 800 });
+    tr.setReference(seq2.frames[0], roi2, IDENTITY, anchor);
+    let lastVerified = 0;
+    let drHints = 0;
+    for (let t = 1; t < 70; t++) {
+      const ts = t * dt;
+      const r = tr.process(seq2.frames[t], ts);
+      const internal = tr.getState();
+      if (internal === "tracking" || internal === "weak") lastVerified = ts;
+      else if (r.hint) {
+        drHints++;
+        expect(ts - lastVerified).toBeLessThanOrEqual(800);
+      }
+    }
+    expect(drHints).toBeGreaterThan(5);
+  });
+
+  it("no hint when tracking is lost in the middle of the frame (occlusion), nor when disabled", () => {
+    const blank = makeFlat(W, H, 3, 1);
+    const tr = new PlanarTracker();
+    tr.setReference(seq2.frames[0], roi2, IDENTITY, anchor);
+    for (let t = 1; t < 6; t++) expect(shown(tr.process(seq2.frames[t], t * dt))).toBe(true);
+    for (let t = 6; t < 12; t++) {
+      const r = tr.process(blank, t * dt);
+      expect(r.state).toBe("lost");
+      expect(r.hint).toBeNull();
+      expect(r.reason).toBe("unverified");
+      // 앵커가 화면 한가운데 있었으므로 추측 항법을 시작하지도 않는다 (CPU 0)
+      expect(r.timings.hint).toBeUndefined();
+    }
+
+    const off = new PlanarTracker({ hintDeadReckon: false });
+    off.setReference(seq2.frames[0], roi2, IDENTITY, anchor);
+    for (let t = 1; t < 70; t++) {
+      const r = off.process(seq2.frames[t], t * dt);
+      const internal = off.getState();
+      if (internal === "lost") expect(r.hint).toBeNull();
+    }
   });
 });

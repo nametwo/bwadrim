@@ -10,7 +10,7 @@ import {
 } from "@/lib/tracking/session";
 import { AnchorOverlay } from "@/components/anchor-overlay";
 import { SessionHolder } from "./session-holder";
-import { CustomerOutcomeTracker, type AnchorOutcome } from "./usage";
+import { CustomerOutcomeTracker, customerUntrackable, type AnchorOutcome } from "./usage";
 import { AnnotatedPhoto } from "./annotated-photo";
 import { FlipIcon } from "./icons";
 
@@ -19,6 +19,7 @@ import { FlipIcon } from "./icons";
 //  - 찾으면: 영상 위 빨간 핀·선 (사물에 붙어 움직임)
 //  - 핀이 화면 밖: 가장자리 빨간 화살표 + 위쪽 큰 글씨 "화살표 쪽으로 폰을 돌려주세요"
 //  - 못 찾음(0.8초 이상): 위쪽 큰 카드 — 기사님이 표시한 사진 + "기사님이 표시한 곳을 비춰주세요"
+//    (무늬가 적거나 반복 무늬라 이 기준으로는 찾을 수 없으면 기다리지 않고 바로 카드)
 // 한 화면에 한 가지: 카드·화살표 안내가 떠 있으면 연결 상태 문구는 숨긴다.
 // 부모 크기를 가득 채운다 (고객 페이지는 fixed inset-0, 실험실은 폰 크기 상자).
 
@@ -57,6 +58,8 @@ interface ViewState {
   looked: boolean;
   /** 지금 기사님 표시가 영상 위에 보인다 (tracking/weak) */
   shown: boolean;
+  /** 이 기준으로는 스스로 찾을 수 없음 (무늬 부족·반복 무늬) → 카드를 기다리지 않고 바로 */
+  untrackable: boolean;
 }
 
 function selectView(s: CustomerSnapshot): ViewState {
@@ -68,6 +71,7 @@ function selectView(s: CustomerSnapshot): ViewState {
     arrow: s.arrow,
     looked: s.update !== null,
     shown: !!s.update?.H && (st === "tracking" || st === "weak"),
+    untrackable: customerUntrackable(s.update),
   };
 }
 
@@ -141,8 +145,9 @@ export function CustomerCallView({
   }, [stream]);
 
   const cardAllowed = snap.looked || (!!snap.anchor && cardForcedFor === snap.anchor.id);
-  const card =
-    snap.showCard && cardAllowed && snap.anchor && snap.cardUrl ? { anchor: snap.anchor, url: snap.cardUrl } : null;
+  // 카드: 못 찾은 채 0.8초(세션 규칙) 또는 이 기준으로는 찾을 수 없음(추적기가 알려 옴) → 바로
+  const wantCard = (snap.showCard && cardAllowed) || snap.untrackable;
+  const card = wantCard && !snap.arrow && snap.anchor && snap.cardUrl ? { anchor: snap.anchor, url: snap.cardUrl } : null;
   const arrow = !card && snap.arrow;
   // 표시가 화면에 보이는 동안은 "무엇을 보면 되는지"를 알려 준다
   const pinShown = !card && !arrow && !!snap.anchor && snap.shown;

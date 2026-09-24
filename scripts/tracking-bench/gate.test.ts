@@ -4,7 +4,7 @@
 // - 성능 목표(추적 ≤5ms, 재검출 ≤15ms 중앙값)는 다른 테스트와 CPU를 나눠 쓰므로 기본 2배 여유로 확인.
 //   TRACKING_GATE_PERF=strict 이면 README 값 그대로, =off 이면 확인 안 함.
 import { beforeAll, describe, expect, it } from "vitest";
-import { readFrameCache } from "./framecache";
+import { cachedRef, readFrameCache } from "./framecache";
 import { runSequence } from "./harness";
 import {
   type Check,
@@ -47,7 +47,7 @@ describe.skipIf(!HAS_TRACKER)("tracking quality gate (README 품질 목표)", ()
       const seq = seqs[0];
       const cached = readFrameCache(seq);
       const tr = factory.create(seq);
-      tr.setReference(seq.ref, seq.roi, seq.initialH, seq.pinRef);
+      tr.setReference(cachedRef(seq), seq.roi, seq.initialH, seq.pinRef);
       for (let k = 0; k < Math.min(10, seq.times.length); k++) {
         tr.process(cached ? cached.frame(k) : seq.renderFrame(k), seq.times[k] * 1000);
       }

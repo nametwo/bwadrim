@@ -409,7 +409,7 @@ const CAT_KO: Record<Category, string> = {
   reentry: "화면 밖→복귀",
   acquire: "고객 최초 탐색",
   stress: "스트레스(표 밖)",
-  drift: "드리프트(60초)",
+  drift: "드리프트(긴 시퀀스)",
 };
 
 export function categoryName(c: Category): string {

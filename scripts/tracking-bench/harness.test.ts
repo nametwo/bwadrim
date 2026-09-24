@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { cachedRef, readRefCache, REF_DIR, sequenceFingerprint } from "./framecache";
 import { runSequence } from "./harness";
 import { allScenarios, selectScenarios } from "./catalog";
 import { SCENARIOS, suiteOf } from "./scenarios";
@@ -94,6 +95,28 @@ describe("scenario ground truth sanity", () => {
     const seq = buildSequence(SCENARIOS.find((s) => s.id === "stress/orientation/boiler")!);
     const dims = new Set(seq.gt.map((g) => `${g.width}x${g.height}`));
     expect(dims).toEqual(new Set(["240x320", "320x240"]));
+  });
+
+  it("reference image cache returns the same bytes as a fresh render", () => {
+    // 짧게 줄인 사본 → 캐시 파일 이름(길이 포함)이 본 벤치 캐시와 겹치지 않는다
+    const sc = { ...SCENARIOS.find((s) => s.id === "acquire/pos")!, duration: 1.1 };
+    const a = buildSequence(sc);
+    const fp = sequenceFingerprint(a);
+    try {
+      const fresh = cachedRef(a, fp); // 없으면 렌더 + 쓰기, 있으면 읽기
+      const b = buildSequence(sc);
+      expect(b.hasRef()).toBe(false);
+      const hit = readRefCache(b, fp);
+      expect(hit).not.toBeNull();
+      const got = cachedRef(b, fp);
+      expect(b.hasRef()).toBe(true);
+      expect(Buffer.from(got.data).equals(Buffer.from(fresh.data))).toBe(true);
+      // 캐시와 무관하게 렌더한 것과도 같다 (렌더는 결정적)
+      const c = buildSequence(sc);
+      expect(Buffer.from(c.ref.data).equals(Buffer.from(fresh.data))).toBe(true);
+    } finally {
+      for (const f of fs.readdirSync(REF_DIR)) if (f.startsWith("acquire_pos.d1100.")) fs.rmSync(path.join(REF_DIR, f), { force: true });
+    }
   });
 });
 

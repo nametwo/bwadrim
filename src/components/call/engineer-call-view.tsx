@@ -11,7 +11,14 @@ import {
 } from "@/lib/tracking/session";
 import { AnchorOverlay } from "@/components/anchor-overlay";
 import { SessionHolder } from "./session-holder";
-import { PointerUsageTracker, engineerChip, type ChipTone, type PointerUsedProps } from "./usage";
+import {
+  PointerUsageTracker,
+  engineerChip,
+  needsRetap,
+  referenceToast,
+  type ChipTone,
+  type PointerUsedProps,
+} from "./usage";
 import { AnnotatedPhoto } from "./annotated-photo";
 import { EraseIcon, HangupIcon, MicOffIcon, PauseIcon, PlayIcon, TapIcon } from "./icons";
 
@@ -68,7 +75,10 @@ interface ViewState {
   customerArrow: boolean;
   customerReason: EngineerSnapshot["customerReason"];
   trackable: boolean | null;
+  referenceReason: EngineerSnapshot["referenceReason"];
   frozen: boolean;
+  /** 내 화면에서 놓쳤고 이 기준으로는 다시 못 찾음 → "다시 탭해 주세요" */
+  retap: boolean;
 }
 
 function selectView(s: EngineerSnapshot): ViewState {
@@ -78,7 +88,9 @@ function selectView(s: EngineerSnapshot): ViewState {
     customerArrow: s.customerArrow,
     customerReason: s.customerReason,
     trackable: s.trackable,
+    referenceReason: s.referenceReason,
     frozen: s.frozen,
+    retap: needsRetap(s),
   };
 }
 
@@ -225,14 +237,15 @@ export function EngineerCallView({
   }, [stream, holder]);
 
   const hasCommitted = !!snap.anchor && snap.anchor.annotations.some((a) => a.id !== "draft");
-  const untrackableId = snap.trackable === false && hasCommitted && snap.anchor ? snap.anchor.id : null;
+  // 기준 설정 결과 토스트 (무늬 부족·핀 주변 비어 있음·반복 무늬): 앵커마다 한 번, 잠시 뒤 사라진다
+  const toastText = hasCommitted ? referenceToast(snap) : null;
+  const toastKey = toastText && snap.anchor ? `${snap.anchor.id}:${snap.referenceReason ?? ""}` : null;
 
-  // 무늬 부족 토스트는 앵커마다 한 번, 잠시 뒤 사라진다
   useEffect(() => {
-    if (!untrackableId) return;
-    const t = setTimeout(() => setToastDismissed(untrackableId), TOAST_MS);
+    if (!toastKey) return;
+    const t = setTimeout(() => setToastDismissed(toastKey), TOAST_MS);
     return () => clearTimeout(t);
-  }, [untrackableId]);
+  }, [toastKey]);
 
   function clear() {
     holder.current()?.clear();
@@ -259,7 +272,7 @@ export function EngineerCallView({
 
   const chip = engineerChip(snap);
   const showHint = !annotatedOnce && !snap.anchor && !connecting;
-  const showToast = untrackableId !== null && untrackableId !== toastDismissed;
+  const showToast = toastKey !== null && toastKey !== toastDismissed;
   // 고객에게 사진 카드가 보이는 상황 (무늬 부족 또는 고객이 놓침·찾는 중, 화살표 안내가 아닐 때)
   const customerSeesCard =
     hasCommitted &&
@@ -358,16 +371,27 @@ export function EngineerCallView({
           </div>
         )}
 
-        {showToast && (
+        {snap.retap && !showHint && (
+          <div className="pointer-events-none absolute inset-x-0 top-1/2 flex -translate-y-1/2 justify-center p-8">
+            <p
+              data-testid="eng-retap"
+              role="status"
+              className="flex items-center gap-2 rounded-3xl bg-black/70 px-5 py-4 text-center text-lg font-bold leading-snug break-keep shadow-2xl backdrop-blur-sm"
+            >
+              <TapIcon className="h-7 w-7 shrink-0" />
+              표시를 놓쳤어요 — 다시 탭해 주세요
+            </p>
+          </div>
+        )}
+
+        {showToast && toastText && (
           <div className="pointer-events-none absolute inset-x-3 bottom-3 flex justify-center">
             <p
               data-testid="eng-toast"
               role="alert"
-              className="rounded-2xl bg-amber-400 px-4 py-3 text-center text-[15px] font-semibold leading-snug break-keep text-black shadow-xl"
+              className="max-w-[20rem] rounded-2xl bg-amber-400 px-4 py-3 text-center text-[15px] font-semibold leading-snug break-keep text-black shadow-xl"
             >
-              무늬가 적어 고정이 어려워요 —{" "}
-              <br />
-              고객에게 사진 카드로 보여줘요
+              {toastText}
             </p>
           </div>
         )}

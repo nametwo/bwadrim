@@ -322,7 +322,8 @@ function Hud({ probe, testId, label, compactOnPhone = false }: { probe: SideProb
             {s.state ?? "—"}
             {s.reason ? `/${s.reason}` : ""}
           </span>{" "}
-          · {s.fps}fps · {s.processMs.toFixed(1)}ms · 인라이어 {s.inliers}/{s.tracked}
+          · {s.fps}fps · {s.processMs.toFixed(1)}ms · 획득 {s.grabMs === null ? "—" : s.grabMs.toFixed(1)}ms · 인라이어{" "}
+          {s.inliers}/{s.tracked}
           {s.redetected ? " R" : ""}
         </p>
       )}
@@ -347,9 +348,14 @@ function Hud({ probe, testId, label, compactOnPhone = false }: { probe: SideProb
         <span className="text-neutral-400">신뢰</span>
         <span>{s.confidence.toFixed(2)}</span>
         <span className="text-neutral-400">획득</span>
-        <span className="truncate">
+        <span className="truncate" title={s.demoted ? `내려감: ${s.demoted}` : undefined}>
           {s.acquisition ?? "—"}
           {s.frame ? ` ${s.frame.width}×${s.frame.height}` : ""}
+        </span>
+        <span className="text-neutral-400">획득ms</span>
+        <span data-testid={testId ? `${testId}-grab` : undefined}>
+          {s.grabMs === null ? "—" : `${s.grabMs.toFixed(2)}ms`}
+          {s.demoted ? " ↓" : ""}
         </span>
       </div>
     </>

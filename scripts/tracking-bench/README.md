@@ -59,6 +59,7 @@ npx vitest run scripts/tracking-bench           # 단위 테스트 + 품질 게�
 | drift 긴 시퀀스 | 이동 기준 (추적률 ≥ 85%, 중앙값 ≤ 3px, 틀림 ≤ 1%) + 처음/마지막 10초 오차 비교 | 벤치 자체 |
 | 성능 | 추적 프레임 중앙값 ≤ 5ms, 재검출 프레임 중앙값 ≤ 15ms (데스크톱 Node) | README |
 
+성능 줄 아래에 `setReference` 시간(시나리오당 1번, 중앙값·p95·최대 — 기준 이미지 렌더는 타이머 밖)이 나온다.
 출력 끝에는 (1) 화면 밖 안내 표 (2) **실감 변형 ↔ 원본** 표(둘 다 이번 실행에 있을 때 — 추적률·오차·틀림·탐색/재검출을 나란히)
 (3) 실제 코덱 캡처 표(코덱·인코더·실측 kbps·평균 QP·디코드 해상도·받은 프레임 수)가 나온다.
 
@@ -101,7 +102,9 @@ HTML/CSS/SVG ─Playwright Chromium→ 텍스처 PNG (.cache/textures, 캐시)  
     같은 식이다: 축소 = 정확한 겹침 가중치 면적 평균(가로·세로 정수배면 박스 합), **확대 = 픽셀 중심 정렬 선형 보간**(수신 해상도가 긴 변 320보다 작을 때 —
     런타임은 긴 변을 항상 320으로 맞춘다), 반올림 `floor(v + 0.5 + 1e-4)`. 디코더 Y 평면(16~235)은 리샘플 뒤 한 번에 `(Y−16)·255/219`로 편다(`toWorkingLimited`).
 - **좌표 규약**: GT의 H·핀은 작업 해상도 **픽셀 중심 규약**(첫 픽셀 중심 = (0,0)) — 배열을 직접 다루는 추적기의 좌표와 같다.
-  (정규화 좌표 `norm = (px + 0.5) / W`)
+  벤치의 정규화 좌표(y4m 사이드카)는 **가장자리 규약** `norm = (px + 0.5) / W = x_edge / W`다.
+  **런타임 프로토콜(`pxToNorm`, session/protocol)의 norm은 `px_center / W_작업`** — 같은 점이 벤치 값보다 `0.5 / W_작업`(긴 변 320이면 0.0016) 작다.
+  E2E 등에서 둘을 비교할 때는 `norm_런타임 = norm_벤치 − 0.5 / W_작업`으로 맞출 것 (작업 해상도에서 0.5px라 8px 판정에는 거의 영향 없음).
 
 ## 실감 효과 (`scenarios.ts` `RealismSpec`, 렌더 `render.ts realRows`)
 
@@ -197,10 +200,14 @@ HTML/CSS/SVG ─Playwright Chromium→ 텍스처 PNG (.cache/textures, 캐시)  
 
 - 렌더가 시간의 대부분이다. 처음 실행은 CPU-1개 작업자로 병렬 렌더(`--jobs`)해서 `.cache/frames/`에 저장하고,
   이후 실행은 캐시만 읽어 추적기만 돈다. (4코어 기준) base 약 7,500장 5분 남짓, realism 약 2,700장 + 코덱 캡처 10개 약 12분,
-  holdout 약 3,000장 + 코덱 캡처 14개 약 15분. 캐시가 있으면 base+realism 약 1분, holdout 약 20초.
+  holdout 약 3,000장 + 코덱 캡처 14개 약 14분. 캐시가 있으면 base+realism 약 50초(추적 35초), holdout 약 20초 (4코어 실측).
 - 캐시 키는 "장면 함수들을 모든 프레임 시각에서 평가한 값 + 렌더 코드 해시 + 텍스처 해시"라서 궤적·조명·코드가 바뀌면 그 시나리오만 자동으로 다시 렌더한다.
+- **기준 이미지**도 같은 지문으로 `.cache/refs/`에 캐시한다 (실감 시나리오는 기준 한 장 렌더에 ~1초 — 캐시가 없으면 기본 실행에 ~17초가 더 든다).
+  `--no-cache`면 둘 다 안 쓴다.
   코드 해시는 base 소스(render/camera/sequence/imageops/textures/rng) + 실감 시나리오만 실감 소스(lens/relief/isp/dlt/photoize, `codehash.ts`) —
-  실감 코드만 고치면 base 캐시는 그대로다. 수동으로 지우려면 `rm -rf scripts/tracking-bench/.cache/frames` (코덱 캡처는 `.cache/codec`).
+  실감 코드만 고치면 base 캐시는 그대로다. **주의**: 코덱 캡처 키에도 이 해시가 들어가므로 `sequence.ts` 같은 BASE 소스를 한 줄만 고쳐도
+  코덱 캡처 24개(realism 10 + holdout 14)가 모두 다시 떠진다(실시간이라 ~25분, 결과도 조금 달라진다). 렌더와 무관한 코드는 BASE 소스 밖에 둘 것.
+  수동으로 지우려면 `rm -rf scripts/tracking-bench/.cache/frames` (코덱 캡처는 `.cache/codec`).
 - 추적기 시간은 렌더가 끝난 뒤 다른 부하 없이 잰다 (첫 시나리오 앞부분으로 JIT 예열 후).
 - 기준선 추적기(oracle/null/shifted)는 영상을 보지 않으므로 렌더·코덱 캡처를 생략한다 (`--render`로 강제).
 
@@ -209,7 +216,7 @@ HTML/CSS/SVG ─Playwright Chromium→ 텍스처 PNG (.cache/textures, 캐시)  
 `out/latest.json` (기준선 추적기면 `out/latest-<이름>.json`, 홀드아웃이면 `-holdout`이 붙는다, `--json=<파일>`로 바꿀 수 있음). 시각이 들어가지 않아 diff하기 좋다.
 
 - `pass`, `suites`, `categories[]` (묶음·범주별 합산 지표·목표 판정·`hint`), `perf` (추적/재검출 ms 통계)
-- `scenarios[]`: 시나리오별 지표 + `suite`·`variantOf`·`codec`(캡처 통계) + `hint`(화면 밖 안내) + `refMs`(setReference 시간) + `roi`
+- `scenarios[]`: 시나리오별 지표 + `suite`·`variantOf`·`codec`(캡처 통계) + `hint`(화면 밖 안내) + `refMs`(`setReference` 한 번의 시간 — 기준 이미지 렌더·JPEG은 타이머 밖에서 미리 한다) + `roi`
   + `stageMs`(추적기가 `TrackResult.timings`로 보고한 단계별 평균 ms)
   + `trace` — 프레임별 한 글자·숫자 배열: `state`(T/W/L/S), `reason`(O=offscreen U=unverified X=untrackable I=invalid_frame, -=없음),
   `err`(px, 표시 안 함 null, 무한대 -1), `hintErr`(화면 밖 안내 방향 오차 도, 핀이 화면 안인데 hint만 있으면 -1), `ms`, `redetected`(0/1),

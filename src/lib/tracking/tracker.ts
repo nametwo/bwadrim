@@ -11,8 +11,9 @@ import type {
   TrackState,
   TrackTimings,
 } from "./types";
-import { clampRect, localScale, mul3, rectCorners, warpRect } from "./geometry";
+import { applyH, clampRect, invert3, localScale, mul3, rectCorners, warpRect } from "./geometry";
 import { Aligner, DEFAULT_ALIGN, buildAlignTemplate, type AlignParams, type AlignTemplate } from "./cv/align";
+import { DeadReckoner } from "./cv/deadreckon";
 import { CornerList, detectFast, minDistanceFilter, scoreCorners } from "./cv/fast";
 import {
   HomographyRansac,
@@ -70,9 +71,19 @@ import { Rng } from "./cv/rng";
 //
 // TrackResult.reason / hint
 //   tracking·weak       → reason 없음, hint = null
-//   lost + offscreen    → 내부 추적이 이번 프레임 검증을 강하게 통과했고(넓은 ROI 기준 tracking 조건) 앵커만 화면 밖.
-//                          hint = 그 H (화면 밖 방향 화살표 전용). 앵커가 카메라 뒤이거나 프레임 대각선의
-//                          hintMaxDiag배보다 멀면 방향을 믿을 수 없으니 hint를 내지 않는다(→ unverified).
+//   lost + offscreen    → 앵커가 화면 밖이고 방향을 믿을 만한 H가 있다. hint = 그 H (화면 밖 방향 화살표 전용 —
+//                          주석을 그리는 데 쓰면 안 된다). 둘 중 하나:
+//                          (a) 내부 추적이 이번 프레임 검증을 통과(tracking 조건, hintWeak면 weak 조건도)했고 앵커만 화면 밖.
+//                          (b) 추측 항법(cv/deadreckon.ts): 검증이 끊긴 뒤에도 화면 전체의 프레임 간 호모그래피를
+//                              마지막 검증 H에 이어 붙인 추정. 시작은 직전 프레임이 검증됐고(hintMaxGapMs 안) 그때 앵커가
+//                              화면 밖이거나 가장자리 띠(hintStartBand, 속도로 hintMaxGapMs 뒤 예상 위치 포함) 안일 때만
+//                              — 화면 한가운데서 놓친 것(가림·흐림)은 안내할 일이 아니다. 맞춤이 한 번이라도 나쁘면
+//                              (빠른 흔들기·블러·무늬 없는 벽) 멈추고, hintMaxAgeMs·누적 이동량 예산을 넘어도 멈춘다.
+//                              추측 앵커는 누적 이동량에 비례한 여유(hintDriftFrac)만큼 더 나가야 hint를 낸다.
+//                              추측 앵커가 화면 안이면 hint 없음(→ unverified), hintInFrameMs 넘게 머물면 멈춘다.
+//                              재검출(ORB)은 그동안에도 계속 돌고, 검증되면 바로 tracking으로 돌아간다.
+//                          앵커가 카메라 뒤이거나 프레임 대각선의 hintMaxDiag배보다 멀면 방향을 믿을 수 없으니
+//                          hint를 내지 않는다(→ unverified). 반복 무늬로 재검출이 꺼진 기준은 (b)를 하지 않는다.
 //   lost/searching + unverified   → 이번 프레임에 검증된 위치 없음 (후보가 없었거나 검증에서 떨어짐)
 //   lost/searching + untrackable  → 이 기준으로는 위치를 낼 수 없음: trackable=false, 또는 반복 무늬로
 //                                    재검출이 꺼진 기준을 놓친 뒤(다시 찾을 방법이 없다 → 새로 찍어야 함)
@@ -195,6 +206,25 @@ export interface PlanarTrackerOptions extends TrackerConfig {
   offscreenMargin: number;
   /** hint: 앵커가 프레임 중심에서 (프레임 대각선 × 이 값)보다 멀면 내지 않는다 */
   hintMaxDiag: number;
+  // ── 화면 밖 안내: 추측 항법 (cv/deadreckon.ts) ──
+  /** 검증된 자세가 끊긴 뒤 화면 전체 움직임으로 hint를 이어 가는가 */
+  hintDeadReckon: boolean;
+  /** 마지막 검증 자세 이후 이 시간(ms)까지만 */
+  hintMaxAgeMs: number;
+  /** 시작 조건: 직전 검증 프레임이 이 시간(ms) 안이고 */
+  hintMaxGapMs: number;
+  /** 그 자세에서 앵커가 화면 밖이거나 가장자리에서 (짧은 변 × 이 값) 안쪽 띠에 있을 것 */
+  hintStartBand: number;
+  /** 추측 앵커가 화면 안에 이 시간(ms) 넘게 머무는데 재검출이 못 찾으면 멈춘다 */
+  hintInFrameMs: number;
+  /**
+   * 추측 앵커는 화면 밖으로 offscreenMargin + 이 거리(px) + (누적 이동량 × hintDriftFrac) 넘게 나가야 hint를 낸다
+   * — 추측은 이동할수록 흐르므로, 돌아오는 순간 이미 화면 안인데 '화면 밖'이라 하지 않게.
+   */
+  hintDeadReckonMargin: number;
+  hintDriftFrac: number;
+  /** 앵커가 화면 밖일 때 약한(weak) 검증만 통과한 내부 H로도 hint를 낸다 */
+  hintWeak: boolean;
 }
 
 export const DEFAULT_TRACKER_CONFIG: PlanarTrackerOptions = {
@@ -271,6 +301,15 @@ export const DEFAULT_TRACKER_CONFIG: PlanarTrackerOptions = {
   pinAreaPeakWeak: -0.05,
   offscreenMargin: 2,
   hintMaxDiag: 3,
+
+  hintDeadReckon: true,
+  hintMaxAgeMs: 5000,
+  hintMaxGapMs: 500,
+  hintStartBand: 0.25,
+  hintInFrameMs: 500,
+  hintDeadReckonMargin: 0,
+  hintDriftFrac: 0.05,
+  hintWeak: true,
 };
 
 /** 기준 프레임에서 만든 모든 것 */
@@ -457,6 +496,20 @@ export class PlanarTracker implements PlanarTrackerApi {
   private everLocked = false;
   private pendingInitH: Mat3 | null = null;
 
+  // 화면 밖 안내 추측 항법 (hint 전용 — 상태·H·주석에는 절대 쓰지 않는다)
+  private dr: DeadReckoner;
+  /** 처리한 프레임 순번 */
+  private frameNo = 0;
+  /** 마지막으로 검증된(tracking/weak) 자세와 그 프레임 */
+  private goodH: Mat3 | null = null;
+  private goodTs = 0;
+  private goodFrame = -1;
+  /** 연속한 두 검증 프레임 사이 움직임 (이전 프레임 → goodH 프레임)과 그 간격(ms) */
+  private goodVel: Mat3 | null = null;
+  private goodVelDt = 0;
+  /** 추측 앵커가 화면 안에 들어온 시각 (밖이면 null) */
+  private drInSince: number | null = null;
+
   // 프레임
   private pyrA = new Pyramid();
   private pyrB = new Pyramid();
@@ -537,6 +590,7 @@ export class PlanarTracker implements PlanarTrackerApi {
     this.config = mergeConfig(config);
     const c = this.config;
     this.rng = new Rng(c.seed);
+    this.dr = new DeadReckoner({ maxAgeMs: c.hintMaxAgeMs });
     const cap = Math.max(8, c.maxTrackedPoints | 0);
     this.refX = new Float64Array(cap);
     this.refY = new Float64Array(cap);
@@ -616,6 +670,7 @@ export class PlanarTracker implements PlanarTrackerApi {
     this.ref = null;
     this.pendingInitH = null;
     this.resetTracking();
+    this.resetHint();
     this.state = "lost";
     this.everLocked = false;
   }
@@ -1018,6 +1073,14 @@ export class PlanarTracker implements PlanarTrackerApi {
       this.resetTracking();
     }
 
+    // 화면 밖 안내 추측 항법: 검증된 자세가 있으면 기억만, 끊겼으면 (조건이 맞을 때) 화면 전체 움직임으로 잇는다
+    this.frameNo++;
+    if (out && out.ok && out.H) {
+      this.noteVerified(out.H, ts);
+    } else {
+      this.stepHint(cur, frame.width, frame.height, ts, tm);
+    }
+
     this.prevPyr = cur;
     this.prevValid = true;
 
@@ -1030,7 +1093,9 @@ export class PlanarTracker implements PlanarTrackerApi {
     if (H) {
       const vis = this.anchorVisibility(H, frame.width, frame.height);
       if (vis !== "in") {
-        if (vis === "out" && out && out.hintOk) hint = H.slice();
+        // 넓은 검증을 강하게 통과했으면(hintOk) 그 H. hintWeak면 약하게(weak 기준) 통과한 H도 — 방향 화살표에는 충분하고,
+        // 추측 항법도 어차피 이 H에서 출발한다
+        if (vis === "out" && out && (out.hintOk || c.hintWeak)) hint = H.slice();
         state = "lost";
         H = null;
         reason = hint ? "offscreen" : "unverified";
@@ -1038,6 +1103,8 @@ export class PlanarTracker implements PlanarTrackerApi {
     } else {
       // 반복 무늬라 재검출이 꺼진 기준을 놓쳤으면 다시 찾을 방법이 없다 → 새로 찍어야 한다
       reason = this.canDetect() ? "unverified" : "untrackable";
+      hint = this.hintFromDeadReckoning(frame.width, frame.height, ts);
+      if (hint) reason = "offscreen";
     }
     tm.total = now() - t0;
     const res: TrackResult = {
@@ -1142,7 +1209,7 @@ export class PlanarTracker implements PlanarTrackerApi {
    * "out" = 밖이지만 방향을 믿을 만함 (카메라 앞, 프레임 중심에서 대각선 × hintMaxDiag 이내),
    * "far" = 카메라 뒤이거나 너무 멀어 방향도 믿기 어려움.
    */
-  private anchorVisibility(H: Mat3, W: number, Hh: number): "in" | "out" | "far" {
+  private anchorVisibility(H: Mat3, W: number, Hh: number, extraMargin = 0): "in" | "out" | "far" {
     const a = this.ref!.anchor;
     const c = this.config;
     const w = H[6] * a.x + H[7] * a.y + H[8];
@@ -1150,7 +1217,7 @@ export class PlanarTracker implements PlanarTrackerApi {
     const x = (H[0] * a.x + H[1] * a.y + H[2]) / w;
     const y = (H[3] * a.x + H[4] * a.y + H[5]) / w;
     if (!Number.isFinite(x) || !Number.isFinite(y)) return "far";
-    const m = c.offscreenMargin;
+    const m = c.offscreenMargin + extraMargin;
     if (x >= -m && y >= -m && x <= W - 1 + m && y <= Hh - 1 + m) return "in";
     const d = Math.hypot(x - (W - 1) / 2, y - (Hh - 1) / 2);
     return d <= c.hintMaxDiag * Math.hypot(W, Hh) ? "out" : "far";
@@ -1177,7 +1244,99 @@ export class PlanarTracker implements PlanarTrackerApi {
     this.prevPyr = null;
     this.pendingInitH = null;
     this.resetTracking();
+    this.resetHint();
     if (this.state === "tracking" || this.state === "weak") this.state = "lost";
+  }
+
+  // ───────────────────────── 내부: 화면 밖 안내 (추측 항법) ─────────────────────────
+
+  private resetHint(): void {
+    this.dr.stop();
+    this.goodH = null;
+    this.goodFrame = -1;
+    this.goodVel = null;
+    this.drInSince = null;
+  }
+
+  /** 검증된 자세(tracking/weak)를 기억한다. 추측 항법은 필요 없으니 멈춘다 */
+  private noteVerified(H: Mat3, ts: number): void {
+    if (this.dr.active) this.dr.stop();
+    this.drInSince = null;
+    let vel: Mat3 | null = null;
+    if (this.goodH && this.goodFrame === this.frameNo - 1) {
+      const inv = invert3(this.goodH);
+      if (inv) vel = mul3(H, inv);
+    }
+    this.goodVel = vel;
+    this.goodVelDt = vel ? ts - this.goodTs : 0;
+    this.goodH = H.slice();
+    this.goodTs = ts;
+    this.goodFrame = this.frameNo;
+  }
+
+  /**
+   * 검증된 자세가 없는 프레임: 추측 항법을 (조건이 맞으면) 시작하거나 한 칸 잇는다.
+   * 시작 조건 — 바로 앞 프레임이 검증됐고(hintMaxGapMs 안) 그때 앵커가 화면 밖이거나 가장자리 띠 안.
+   * (화면 한가운데서 놓친 것 — 가림·흐림 — 은 방향 안내할 일이 아니다.)
+   */
+  private stepHint(cur: Pyramid, W: number, Hh: number, ts: number, tm: TrackTimings): void {
+    const c = this.config;
+    const good = this.goodH;
+    const fresh = good !== null && this.goodFrame === this.frameNo - 1 && ts - this.goodTs <= c.hintMaxGapMs;
+    this.goodH = null;
+    this.goodVel = fresh ? this.goodVel : null;
+    const prev = this.prevValid ? this.prevPyr : null;
+    // 재검출이 꺼진 기준(반복 무늬)은 돌아와도 다시 찾을 수 없으니 안내하지 않는다
+    if (!c.hintDeadReckon || !prev || prev === cur || !this.canDetect()) {
+      if (this.dr.active) this.dr.stop();
+      return;
+    }
+    const t = now();
+    if (!this.dr.active && fresh && good && this.nearEdge(good, this.goodVel, this.goodVelDt, W, Hh)) {
+      this.dr.start(good, this.goodTs, this.goodVel, this.goodVelDt);
+      this.drInSince = null;
+    }
+    if (!this.dr.active) return;
+    this.dr.step(prev, cur, ts);
+    tm.hint = now() - t;
+  }
+
+  /**
+   * 앵커가 화면 밖이거나 가장자리에서 (짧은 변 × hintStartBand) 안쪽 띠에 있는가.
+   * 움직이는 중이면(vel: 간격 velDt ms 동안의 프레임 간 움직임) hintMaxGapMs 뒤 예상 위치도 본다 — 빠르게 돌리면
+   * 가장자리에 닿기 전에 흐림으로 놓친다.
+   */
+  private nearEdge(H: Mat3, vel: Mat3 | null, velDt: number, W: number, Hh: number): boolean {
+    const p = applyH(H, this.ref!.anchor);
+    if (!p) return false;
+    const b = this.config.hintStartBand * Math.min(W, Hh);
+    const inBand = (x: number, y: number) => x < b || y < b || x > W - 1 - b || y > Hh - 1 - b;
+    if (inBand(p.x, p.y)) return true;
+    const q = vel && velDt > 0 ? applyH(vel, p) : null;
+    if (!q) return false;
+    const k = this.config.hintMaxGapMs / velDt;
+    return inBand(p.x + k * (q.x - p.x), p.y + k * (q.y - p.y));
+  }
+
+  /** 추측 항법 자세로 낸 hint (앵커가 확실히 화면 밖일 때만), 아니면 null */
+  private hintFromDeadReckoning(W: number, Hh: number, ts: number): Mat3 | null {
+    const Hd = this.dr.pose;
+    if (!Hd) return null;
+    const c = this.config;
+    const vis = this.anchorVisibility(Hd, W, Hh, c.hintDeadReckonMargin + c.hintDriftFrac * this.dr.travelPx);
+    if (vis === "out") {
+      this.drInSince = null;
+      return Hd;
+    }
+    if (vis === "far") {
+      // 카메라 뒤·너무 멂 → 방향을 믿을 수 없다
+      this.dr.stop("external");
+      return null;
+    }
+    // 화면 안인데 검증이 안 됨 → hint 없음. 오래 머물면(재검출이 못 찾음) 추측이 틀렸다고 보고 멈춘다
+    if (this.drInSince === null) this.drInSince = ts;
+    else if (ts - this.drInSince > c.hintInFrameMs) this.dr.stop("external");
+    return null;
   }
 
   /** initialH: 기준을 initialH로 워프한 가상 이전 프레임에서 바로 추적 시작 */

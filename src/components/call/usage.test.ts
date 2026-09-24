@@ -6,7 +6,15 @@ import {
   type EngineerSnapshot,
 } from "@/lib/tracking/session";
 import type { AnchorDescriptor, Annotation, TrackUpdate } from "@/lib/tracking/types";
-import { CustomerOutcomeTracker, PointerUsageTracker, TRACKABLE_WAIT_MS, engineerChip } from "./usage";
+import {
+  CustomerOutcomeTracker,
+  PointerUsageTracker,
+  TRACKABLE_WAIT_MS,
+  customerUntrackable,
+  engineerChip,
+  needsRetap,
+  referenceToast,
+} from "./usage";
 
 const pin = (id: string, x = 0.5): Annotation => ({ id, kind: "pin", p: { x, y: 0.5 } });
 const stroke = (id: string): Annotation => ({
@@ -183,5 +191,54 @@ describe("CustomerOutcomeTracker", () => {
     t.observe(cust({ anchor: a1, update: upd("a1", "lost"), arrow: true }), 200);
     const done = t.observe(cust({}), 700);
     expect(done).toMatchObject({ acquire_ms: null, tracked_ms: 0, arrow_ms: 500, annotations: 1, end: "cleared" });
+  });
+});
+
+describe("엔지니어 안내: 기준 토스트 · 다시 탭", () => {
+  it("기준 설정 결과별 토스트", () => {
+    expect(referenceToast({ trackable: null, referenceReason: null })).toBeNull();
+    expect(referenceToast({ trackable: true, referenceReason: null })).toBeNull();
+    expect(referenceToast({ trackable: false, referenceReason: "low_texture" })).toBe(
+      "무늬가 적어 고정이 어려워요 — 고객에게 사진 카드로 보여줘요",
+    );
+    expect(referenceToast({ trackable: false, referenceReason: null })).toBe(
+      "무늬가 적어 고정이 어려워요 — 고객에게 사진 카드로 보여줘요",
+    );
+    expect(referenceToast({ trackable: false, referenceReason: "pin_blank" })).toBe(
+      "표시한 곳 주변에 무늬가 적어요 — 고객에게 사진 카드로 보여줘요",
+    );
+    expect(referenceToast({ trackable: true, referenceReason: "ambiguous" })).toBe(
+      "같은 무늬가 반복돼 고객 화면에선 사진 카드로 보여줘요",
+    );
+  });
+
+  it("추적 가능하던 기준을 놓쳤고 다시 못 찾음(untrackable)일 때만 다시 탭", () => {
+    const a = anchor("a1", [pin("p1")]);
+    const lostU: TrackUpdate = { ...upd("a1", "lost"), reason: "untrackable" };
+    expect(needsRetap(eng({ anchor: a, update: lostU, trackable: true }))).toBe(true);
+    expect(needsRetap(eng({ anchor: a, update: { ...lostU, state: "searching" }, trackable: true }))).toBe(true);
+    // 다른 이유로 놓침 (화면 밖·검증 실패) → 스스로 다시 찾는다
+    expect(needsRetap(eng({ anchor: a, update: { ...lostU, reason: "offscreen" }, trackable: true }))).toBe(false);
+    expect(needsRetap(eng({ anchor: a, update: { ...lostU, reason: "unverified" }, trackable: true }))).toBe(false);
+    // 추적 중, 정지 화면, 처음부터 추적 불가(토스트), 다른 앵커의 갱신, 그리는 중
+    expect(needsRetap(eng({ anchor: a, update: upd("a1", "tracking"), trackable: true }))).toBe(false);
+    expect(needsRetap(eng({ anchor: a, update: lostU, trackable: true, frozen: true }))).toBe(false);
+    expect(needsRetap(eng({ anchor: a, update: lostU, trackable: false }))).toBe(false);
+    expect(needsRetap(eng({ anchor: a, update: { ...lostU, anchorId: "a0" }, trackable: true }))).toBe(false);
+    expect(needsRetap(eng({ anchor: anchor("a1", [pin("p1"), pin("draft")]), update: lostU, trackable: true }))).toBe(false);
+  });
+
+  it("고객: untrackable이면 바로 카드, 카드 시간에도 넣는다", () => {
+    expect(customerUntrackable(null)).toBe(false);
+    expect(customerUntrackable({ state: "searching", reason: "untrackable" })).toBe(true);
+    expect(customerUntrackable({ state: "lost", reason: "untrackable" })).toBe(true);
+    expect(customerUntrackable({ state: "lost", reason: "offscreen" })).toBe(false);
+    expect(customerUntrackable({ state: "tracking", reason: "untrackable" })).toBe(false);
+
+    const t = new CustomerOutcomeTracker();
+    const a1 = anchor("a1", [pin("p1")]);
+    t.observe(cust({ anchor: a1, cardUrl: "blob:x" }), 0);
+    t.observe(cust({ anchor: a1, cardUrl: "blob:x", update: { ...upd("a1", "searching"), reason: "untrackable" } }), 100);
+    expect(t.finish(1100, "ended")).toMatchObject({ card_ms: 1000, acquire_ms: null });
   });
 });

@@ -172,7 +172,8 @@ export function exportY4m(
         fps: CAMERA_FPS,
         frames: n,
         loopSeconds: n / CAMERA_FPS,
-        coords: "정규화 0~1, 가장자리 규약 (x_norm = x_px / W). H: ref 정규화 → 프레임 정규화",
+        coords:
+          "정규화 0~1, 가장자리 규약 (x_norm = x_px / W). H: ref 정규화 → 프레임 정규화. 런타임 프로토콜 norm(pxToNorm)은 작업 픽셀 중심/W_작업 → norm_런타임 = x_norm − 0.5/W_작업",
         marker: marker
           ? {
               rows: MARKER.rows,

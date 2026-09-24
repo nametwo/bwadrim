@@ -23,7 +23,12 @@ export interface SideStats {
   /** 최근 1초 갱신 수 */
   fps: number;
   frame: { width: number; height: number } | null;
+  /** 프레임 획득 방식 (session.trackerStats().acquisition) */
   acquisition: string | null;
+  /** 프레임 한 장 획득에 메인 스레드에서 쓴 시간 EMA (ms, trackerStats().grabMsEma) */
+  grabMs: number | null;
+  /** 획득 방식이 내려간 기록 (예: "videoframe-worker: aspect") */
+  demoted: string | null;
 }
 
 export interface LogRow {
@@ -149,6 +154,8 @@ export function emptyStats(): SideStats {
     fps: 0,
     frame: null,
     acquisition: null,
+    grabMs: null,
+    demoted: null,
   };
 }
 
@@ -209,7 +216,10 @@ export class SideProbe {
     s.redetected = !!r?.redetected;
     s.fps = this.times.length;
     s.frame = u.frameSize;
-    s.acquisition = this.tracker?.stats()?.acquisition ?? null;
+    const fs = this.tracker?.stats() ?? null;
+    s.acquisition = fs?.acquisition ?? null;
+    s.grabMs = fs && Number.isFinite(fs.grabMsEma) ? fs.grabMsEma : null;
+    s.demoted = fs && fs.demoted.length ? fs.demoted.map((d) => `${d.mode}: ${d.reason}`).join(", ") : null;
     if (this.lab.recordMarkers && this.lab.log.length < MAX_LOG) {
       this.lab.log.push({
         side: this.side,

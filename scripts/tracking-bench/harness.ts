@@ -2,7 +2,7 @@
 import path from "node:path";
 import type { GrayImage, LostReason, Mat3, Point, ReferenceInfo, TrackResult, TrackState } from "../../src/lib/tracking/types";
 import { applyH, rectCorners, warpRect } from "../../src/lib/tracking/geometry";
-import { compressFrame, readFrameCache, sequenceFingerprint, writeFrameCache } from "./framecache";
+import { cachedRef, compressFrame, readFrameCache, sequenceFingerprint, writeFrameCache } from "./framecache";
 import { type FrameRecord, type ScenarioMetrics, arrowErrorDeg, classifyFrame, scenarioMetrics } from "./metrics";
 import { Canvas, type RGB } from "./png";
 import { type Scenario, suiteOf } from "./scenarios";
@@ -69,10 +69,12 @@ export function runSequence(seq: Sequence, factory: TrackerFactory, opts: RunOpt
   };
 
   const tracker = factory.create(seq);
-  const r0 = performance.now();
   // anchor = 핀 (ref 픽셀) — 런타임도 핀 위치를 넘긴다
   // 빈 프레임 모드(영상을 안 보는 기준선)는 기준 이미지도 렌더하지 않는다 (코덱 캡처가 없어도 돈다)
-  const ref = blank ? getFrame(0) : seq.ref;
+  // seq.ref는 게으르게 렌더(+JPEG)되므로 타이머를 켜기 전에 읽는다 — refMs는 setReference만 잰다.
+  // 캐시를 쓰면 기준 이미지도 캐시(.cache/refs)에서 (프레임 캐시와 같은 지문)
+  const ref = blank ? getFrame(0) : opts.useCache === false ? seq.ref : cachedRef(seq, fp);
+  const r0 = performance.now();
   const info = tracker.setReference(ref, seq.roi, seq.initialH, seq.pinRef);
   const refMs = performance.now() - r0;
   const trackable = info?.trackable !== false;

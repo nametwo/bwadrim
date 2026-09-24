@@ -398,13 +398,20 @@ export async function captureCodec(seq: Sequence, opts: { jobs?: number; log?: (
 }
 
 /** 코덱 시나리오 중 캡처가 없는 것만 캡처 (실시간이라 차례로). 반환: 새로 캡처한 수 */
-export async function ensureCodecCaptures(scs: Scenario[], opts: { jobs?: number; log?: (s: string) => void } = {}): Promise<number> {
+export async function ensureCodecCaptures(
+  scs: Scenario[],
+  opts: { jobs?: number; log?: (s: string) => void; built?: Map<Scenario, Sequence> } = {},
+): Promise<number> {
   const log = opts.log ?? (() => {});
   let n = 0;
   for (const sc of scs) {
     if (!sc.realism?.codec) continue;
     const seq = buildSequence(sc);
-    if (seq.codec) continue;
+    // 캡처가 이미 있으면 만든 시퀀스를 돌려준다 (호출측이 다시 만들지 않게). 새로 뜬 것은 캡처를 읽어 다시 만들어야 한다
+    if (seq.codec) {
+      opts.built?.set(sc, seq);
+      continue;
+    }
     log(`코덱 캡처: ${sc.id} (${sc.realism.codec.codec} ${sc.realism.codec.kbps}kbps${sc.realism.codec.scaleDown ? ` ÷${sc.realism.codec.scaleDown}` : ""})`);
     let err: unknown = null;
     for (let attempt = 0; attempt < 2; attempt++) {

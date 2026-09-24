@@ -19,10 +19,10 @@ import {
 } from "./metrics";
 import { scenarioById, selectScenarios } from "./catalog";
 import { ensureCodecCaptures } from "./codec";
-import { readFrameCache } from "./framecache";
+import { cachedRef, readFrameCache } from "./framecache";
 import { defaultJobs, prerender } from "./prerender";
 import { type Scenario, type Suite, suiteOf } from "./scenarios";
-import { buildSequence, pipelineOptions } from "./sequence";
+import { type Sequence, buildSequence, pipelineOptions } from "./sequence";
 import { type TrackerName, getTracker, trackerExists } from "./trackers";
 import { BENCH_DIR, ensureTextures, texturesFor } from "./textures";
 import { Y4M_DEFAULTS, exportY4m } from "./y4m";
@@ -252,11 +252,12 @@ async function main(): Promise<number> {
   const useCache = !args["no-cache"];
   const jobs = typeof args.jobs === "string" ? Math.max(1, parseInt(args.jobs, 10) || 1) : defaultJobs();
   // 실제 코덱 시나리오: 캡처(렌더 + Chromium 루프백)가 캐시에 없으면 먼저 뜬다 — 처리 프레임·기준 시각이 캡처 결과로 정해진다
+  const built = new Map<Scenario, Sequence>();
   if (!blankFrames) {
-    const n = await ensureCodecCaptures(scenarios, { jobs, log });
+    const n = await ensureCodecCaptures(scenarios, { jobs, log, built });
     if (n) log(`코덱 캡처 ${n}개 완료`);
   }
-  const seqs = scenarios.map((sc) => buildSequence(sc));
+  const seqs = scenarios.map((sc) => built.get(sc) ?? buildSequence(sc));
   if (useCache && !blankFrames) await prerender(seqs, { jobs, log });
   if (args["render-only"] || args.prerender) return 0;
   if (blankFrames) log("기준선 추적기: 프레임 렌더 생략 (--render로 강제)");
@@ -280,7 +281,9 @@ async function main(): Promise<number> {
   {
     const seq = seqs[0];
     const tr = factory.create(seq);
-    tr.setReference(seq.ref, seq.roi, seq.initialH, seq.pinRef);
+    // 기준선(빈 프레임)은 기준 이미지도 렌더하지 않는다
+    const blankRef = { width: seq.gt[0].width, height: seq.gt[0].height, data: new Uint8Array(seq.gt[0].width * seq.gt[0].height) };
+    tr.setReference(blankFrames ? blankRef : useCache ? cachedRef(seq) : seq.ref, seq.roi, seq.initialH, seq.pinRef);
     const n = blankFrames ? 0 : Math.min(15, seq.times.length);
     const cached = useCache ? readFrameCache(seq) : null;
     for (let k = 0; k < n; k++) {
@@ -319,6 +322,17 @@ async function main(): Promise<number> {
     `\n성능 (Node, 작업 해상도): 추적 프레임 중앙값 ${f(p.msTrack.median)}ms / p95 ${f(p.msTrack.p95)}ms (n=${p.msTrack.n}, 목표 ≤${PERF_TARGETS.trackMedianMs}ms)` +
       `  재검출 프레임 중앙값 ${f(p.msRedetect.median)}ms / p95 ${f(p.msRedetect.p95)}ms (n=${p.msRedetect.n}, 목표 ≤${PERF_TARGETS.redetectMedianMs}ms)`,
   );
+  {
+    // setReference 시간 (시나리오당 1번, 기준 이미지 렌더는 타이머 밖). trackable=false도 포함
+    const ms = runs.map((r) => r.refMs).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+    if (ms.length && !blankFrames) {
+      const q = (p: number) => ms[Math.min(ms.length - 1, Math.floor(p * (ms.length - 1) + 0.5))];
+      const worst = runs.reduce((a, b) => (b.refMs > a.refMs ? b : a));
+      console.log(
+        `setReference: 중앙값 ${f(q(0.5))}ms / p95 ${f(q(0.95))}ms / 최대 ${f(ms[ms.length - 1])}ms (${worst.scenario.id}, n=${ms.length})`,
+      );
+    }
+  }
   const drift = runs.find((r) => r.metrics.drift);
   if (drift?.metrics.drift) {
     console.log(

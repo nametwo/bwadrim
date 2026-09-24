@@ -1,5 +1,5 @@
 import type { CustomerSnapshot, EngineerSnapshot } from "@/lib/tracking/session";
-import type { Annotation, TrackState } from "@/lib/tracking/types";
+import type { Annotation, TrackState, TrackUpdate } from "@/lib/tracking/types";
 
 // 통화 화면의 순수 로직 (DOM·React 없음, 단위 테스트 대상):
 //  - 엔지니어 상태칩 문구
@@ -52,6 +52,46 @@ export function engineerChip(
     default:
       return { text: "고객에게 보내는 중…", tone: "wait" };
   }
+}
+
+// ───────────────────────── 엔지니어 안내 (토스트·다시 탭) ─────────────────────────
+
+/**
+ * 기준 설정 결과를 엔지니어에게 한 번 알리는 토스트 문구 (없으면 null).
+ *  - trackable=false: 고객은 처음부터 사진 카드를 본다. pin_blank면 "표시한 곳 주변"이 문제라고 짚어 준다
+ *    (조금 옆 무늬가 있는 곳을 다시 탭하면 고정될 수 있다)
+ *  - ambiguous(추적 가능): 엔지니어 화면에선 붙어 있지만 고객 쪽은 반복 무늬라 스스로 못 찾아 사진 카드로 보인다
+ */
+export function referenceToast(
+  s: Pick<EngineerSnapshot, "trackable" | "referenceReason">,
+): string | null {
+  if (s.trackable === false) {
+    if (s.referenceReason === "pin_blank") return "표시한 곳 주변에 무늬가 적어요 — 고객에게 사진 카드로 보여줘요";
+    return "무늬가 적어 고정이 어려워요 — 고객에게 사진 카드로 보여줘요";
+  }
+  if (s.trackable === true && s.referenceReason === "ambiguous") {
+    return "같은 무늬가 반복돼 고객 화면에선 사진 카드로 보여줘요";
+  }
+  return null;
+}
+
+/**
+ * 엔지니어 자기 화면에서 표시를 놓쳤고 이 기준으로는 다시 찾을 수 없음 (반복 무늬 등, reason untrackable)
+ * → "다시 탭해 주세요". 정지 화면·무늬 부족(처음부터 추적 불가, 토스트로 안내)·그리는 중에는 아니다.
+ */
+export function needsRetap(
+  s: Pick<EngineerSnapshot, "anchor" | "update" | "trackable" | "frozen">,
+): boolean {
+  const a = s.anchor;
+  const u = s.update;
+  if (!a || !u || s.frozen || s.trackable !== true || u.anchorId !== a.id) return false;
+  if (a.annotations.some((x) => x.id === DRAFT_ID) || committedOf(a.annotations).length === 0) return false;
+  return (u.state === "lost" || u.state === "searching") && u.reason === "untrackable";
+}
+
+/** 고객 쪽: 이 기준으로는 스스로 찾을 수 없음 (무늬 부족·반복 무늬) → 사진 카드를 바로 보인다 */
+export function customerUntrackable(u: Pick<TrackUpdate, "state" | "reason"> | null | undefined): boolean {
+  return !!u && (u.state === "searching" || u.state === "lost") && u.reason === "untrackable";
 }
 
 // ───────────────────────── 엔지니어: pointer_used ─────────────────────────
@@ -239,7 +279,8 @@ export class CustomerOutcomeTracker {
     const c = this.cur;
     this.accumulate(c, now);
     c.shown = isShown(s.update?.state, !!s.update?.H);
-    c.card = s.showCard;
+    // 추적 불가 기준이면 화면은 카드를 바로 띄운다 (customer-call-view와 같은 규칙)
+    c.card = s.showCard || (!!s.cardUrl && customerUntrackable(s.update));
     c.arrow = s.arrow;
     c.annotations = committedOf(s.anchor.annotations).length;
     if (c.shown && c.acquire === null) c.acquire = now - c.start;

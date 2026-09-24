@@ -84,7 +84,12 @@ export interface Sequence {
   refTime: number;
   /** 처리하는 카메라 프레임 시각들 */
   times: number[];
+  /** 기준 이미지 (처음 읽을 때 렌더 — 캐시된 것을 쓰려면 framecache.cachedRef) */
   ref: GrayImage;
+  /** 캐시에서 읽은 기준 이미지를 넣는다 (크기가 맞을 때만, 이후 ref가 이것을 돌려준다) */
+  provideRef(img: GrayImage): void;
+  /** 기준 이미지를 이미 렌더했거나 받았는지 */
+  hasRef(): boolean;
   roi: Rect;
   /** ref 작업 픽셀 좌표의 핀 */
   pinRef: Point;
@@ -711,6 +716,10 @@ export function buildSequence(sc: Scenario): Sequence {
       if (!refImg) refImg = renderRef();
       return refImg;
     },
+    provideRef(img: GrayImage): void {
+      if (img.width === refP.w && img.height === refP.h && img.data.length === refP.w * refP.h) refImg = img;
+    },
+    hasRef: () => refImg !== null,
     roi,
     pinRef,
     pinPlane,
