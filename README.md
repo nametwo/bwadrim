@@ -10,6 +10,8 @@
 
 ## MVP 범위 (1차)
 
+기능별 상세 동작·제약·알려진 문제는 [docs/requirements.md](docs/requirements.md)(기능 요구사항)가 기준이다. 아래 체크리스트는 요약이다.
+
 | 역할 | 기기 | 하는 일 |
 |---|---|---|
 | 엔지니어 | 폰 + PC 웹 | 로그인 → 방 생성 → 고객에게 링크 전송 → 영상 보며 레이저 포인터 / 프리즈 프레임 표시 |
@@ -17,7 +19,7 @@
 
 - [x] Next.js + Supabase 스캐폴드
 - [x] 관리자(엔지니어) 로그인 — Supabase Auth
-- [x] 방 생성 + 1회성 초대 URL (만료 24h)
+- [x] 방 생성 + 초대 URL (만료 24h. 1회용은 아님 — ROOM-03)
 - [x] WebRTC 영상/음성 — Supabase Realtime 시그널링, STUN + Cloudflare TURN
 - [ ] 레이저 포인터 (DataChannel, 정규화 좌표)
 - [ ] 프리즈 프레임 + 드로잉
