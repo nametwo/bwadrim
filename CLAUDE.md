@@ -45,7 +45,12 @@ docs/requirements.md                             # 기능 요구사항 (기준 �
 
 ## 시그널링
 
-Supabase Realtime broadcast 채널 `room:{id}`. 메시지 타입: `offer` / `answer` / `ice` / `pointer` / `freeze` / `bye`.
+Supabase Realtime **비공개** broadcast 채널, 역할별 일방통행 두 개 (CALL-12):
+- `room:{id}:e` 엔지니어 → 고객. 보내기는 방 주인(로그인 JWT)만 — `supabase/schema.sql`의 `realtime.messages` 정책
+- `room:{id}:c` 고객 → 엔지니어. 링크를 연 누구나
+
+각자 자기 채널로 보내고 상대 채널만 듣는다. 고객은 `:e`에서 온 신호만 믿을 것 (엔지니어 사칭 차단). 공개 채널로 되돌리지 말 것.
+메시지 타입: `offer` / `answer` / `ice` / `pointer` / `cam` / `bye`.
 포인터·드로잉은 연결 후 DataChannel로 옮길 것 (지연 최소화). 좌표는 0~1 정규화.
 
 ## 이벤트 이름 (events 테이블)

@@ -13,7 +13,11 @@ import {
 const FREEZE_CHUNK = 12_000;
 const FREEZE_MAX_CHUNKS = 400;
 
-// 1:1 P2P 통화 세션. 시그널링은 Supabase Realtime broadcast `room:{id}`.
+// 1:1 P2P 통화 세션. 시그널링은 Supabase Realtime 비공개(private) 채널 두 개 — 역할별 일방통행.
+//   room:{id}:e  엔지니어 → 고객. 보내기(broadcast·presence)는 방 주인(로그인 JWT)만 — DB 정책(RLS)이 검사
+//   room:{id}:c  고객 → 엔지니어. 링크를 연 사람 누구나
+// 각자 자기 채널로만 보내고 상대 채널만 듣는다. 고객은 :e에서 온 신호만 믿으므로
+// 링크를 가진 제3자가 엔지니어 행세를 할 수 없다 (BUG-09). 정책은 supabase/schema.sql.
 // 역할 고정: customer(카메라 보유)가 offer, engineer가 answer.
 // 포인터·드로잉용 DataChannel('draw')은 offer에 미리 포함해 둔다.
 // 포인터는 연결 후 DataChannel로, 아직 열리지 않았으면 시그널링 broadcast로 보낸다.
@@ -25,6 +29,7 @@ export type CallState =
   | "connecting" // offer/answer 교환 중
   | "connected"
   | "failed"
+  | "denied" // 채널 권한 거부 — 엔지니어는 로그인 만료, 고객은 세션 종료·만료
   | "ended"; // 상대가 종료(bye 수신). 내가 hangup()한 경우엔 알리지 않는다
 
 export interface CallSessionOptions {
@@ -46,13 +51,21 @@ export interface CallSessionOptions {
   onPeerPresent?: (present: boolean) => void;
 }
 
+function laneTopic(roomId: string, role: Role) {
+  return `room:${roomId}:${role === "engineer" ? "e" : "c"}`;
+}
+
 // 통화 세션 없이(연결 준비 전, 새로고침 후) 상대에게 종료를 알린다.
 // 채널에 들어가지 않고 REST로 보낸다. 세션이 살아 있으면 CallSession.hangup()을 쓸 것 —
 // 같은 토픽의 채널을 재사용하므로 여기서 지우면 살아 있는 세션의 채널까지 지워진다.
 export async function sendBye(roomId: string, from: Role) {
   const supabase = createClient();
-  const channel = supabase.channel(`room:${roomId}`);
+  const channel = supabase.channel(laneTopic(roomId, from), {
+    config: { private: true },
+  });
   try {
+    // REST 전송은 소켓이 받아 둔 토큰을 쓴다. 소켓이 아직 없으면 비어 있어 권한 검사에 걸리므로 먼저 받아 둔다
+    await supabase.realtime.setAuth();
     await channel.httpSend("bye", { from });
   } catch {
     await channel.send({ type: "broadcast", event: "bye", payload: { from } });
@@ -63,7 +76,10 @@ export async function sendBye(roomId: string, from: Role) {
 
 export class CallSession {
   private supabase = createClient();
-  private channel: RealtimeChannel | null = null;
+  // sendLane: 내가 보내는 채널(내 역할) / listenLane: 상대가 보내는 채널
+  private sendLane: RealtimeChannel | null = null;
+  private listenLane: RealtimeChannel | null = null;
+  private sendLaneReady = false;
   private pc: RTCPeerConnection | null = null;
   private pendingIce: RTCIceCandidateInit[] = [];
   private dc: RTCDataChannel | null = null;
@@ -80,21 +96,42 @@ export class CallSession {
 
   join() {
     const { roomId, role } = this.opts;
+    const peer = this.peerRole();
 
-    this.channel = this.supabase.channel(`room:${roomId}`, {
-      config: { presence: { key: role }, broadcast: { self: false } },
+    this.sendLane = this.supabase.channel(laneTopic(roomId, role), {
+      config: { private: true, presence: { key: role }, broadcast: { self: false } },
+    });
+    this.listenLane = this.supabase.channel(laneTopic(roomId, peer), {
+      config: { private: true },
     });
 
-    this.channel
+    this.sendLane.subscribe(async (status, err) => {
+      if (status === "SUBSCRIBED") {
+        const tracked = await this.sendLane?.track({ at: Date.now() });
+        // 채널엔 들어왔는데 보내기 권한이 없다 (엔지니어 로그인이 다른 기기에서 풀린 경우 등)
+        if (tracked === "error") {
+          this.onChannelError(new Error("Unauthorized: presence track"));
+          return;
+        }
+        this.sendLaneReady = true;
+        // 재구독(망 전환 등)이나 track 대기 중 이미 연결이 시작됐으면 상태를 덮어쓰지 않는다
+        if (!this.closed && !this.pc) this.opts.onState("waiting");
+        this.onPresenceSync(); // 상대가 먼저 와 있었으면 지금 시작
+      } else if (status === "CHANNEL_ERROR") {
+        this.onChannelError(err);
+      }
+    });
+
+    this.listenLane
       .on("broadcast", { event: "offer" }, ({ payload }) => {
         if (role === "engineer") this.answer(payload.sdp);
       })
       .on("broadcast", { event: "answer" }, ({ payload }) => {
         if (role === "customer") this.acceptAnswer(payload.sdp);
       })
-      .on("broadcast", { event: "ice" }, ({ payload }) => {
-        if (payload.from !== role) this.addIce(payload.candidate);
-      })
+      .on("broadcast", { event: "ice" }, ({ payload }) =>
+        this.addIce(payload.candidate),
+      )
       .on("broadcast", { event: "bye" }, () => this.onBye())
       .on("broadcast", { event: "pointer" }, ({ payload }) =>
         this.receivePointer(payload),
@@ -103,13 +140,19 @@ export class CallSession {
         this.receiveCamera(payload),
       )
       .on("presence", { event: "sync" }, () => this.onPresenceSync())
-      .subscribe(async (status) => {
-        if (status === "SUBSCRIBED") {
-          await this.channel?.track({ at: Date.now() });
-          // 재구독(망 전환 등)이나 track 대기 중 이미 연결이 시작됐으면 상태를 덮어쓰지 않는다
-          if (!this.closed && !this.pc) this.opts.onState("waiting");
-        }
+      .subscribe((status, err) => {
+        if (status === "CHANNEL_ERROR") this.onChannelError(err);
       });
+  }
+
+  // 권한 거부만 통화 실패로 본다. 망 끊김 등은 realtime이 스스로 다시 들어간다
+  private onChannelError(err?: Error) {
+    console.warn("[call] 채널 오류:", err);
+    if (this.closed || !/unauthori[sz]ed|permission|denied/i.test(err?.message ?? "")) {
+      return;
+    }
+    this.opts.onState("denied");
+    this.destroy();
   }
 
   private peerRole(): Role {
@@ -117,8 +160,8 @@ export class CallSession {
   }
 
   private onPresenceSync() {
-    if (this.closed || !this.channel) return;
-    const present = !!this.channel.presenceState()[this.peerRole()]?.length;
+    if (this.closed || !this.listenLane) return;
+    const present = !!this.listenLane.presenceState()[this.peerRole()]?.length;
     this.opts.onPeerPresent?.(present);
 
     if (!present) {
@@ -127,8 +170,13 @@ export class CallSession {
       return;
     }
 
-    // customer가 offer 측: 엔지니어가 보이고 아직 연결 전이면 시작
-    if (this.opts.role === "customer" && !this.pc && !this.negotiating) {
+    // customer가 offer 측: 엔지니어가 보이고 아직 연결 전이면 시작 (보낼 채널이 준비된 뒤)
+    if (
+      this.opts.role === "customer" &&
+      this.sendLaneReady &&
+      !this.pc &&
+      !this.negotiating
+    ) {
       this.offer();
     }
   }
@@ -144,10 +192,7 @@ export class CallSession {
     };
     pc.onicecandidate = (e) => {
       if (e.candidate) {
-        this.send("ice", {
-          from: this.opts.role,
-          candidate: e.candidate.toJSON(),
-        });
+        this.send("ice", { candidate: e.candidate.toJSON() });
       }
     };
     pc.onconnectionstatechange = () => {
@@ -229,7 +274,7 @@ export class CallSession {
   }
 
   private send(event: string, payload: Record<string, unknown>) {
-    this.channel?.send({ type: "broadcast", event, payload });
+    this.sendLane?.send({ type: "broadcast", event, payload });
   }
 
   private attachDataChannel(dc: RTCDataChannel) {
@@ -430,7 +475,11 @@ export class CallSession {
     this.closed = true;
     this.pc?.close();
     this.pc = null;
-    if (this.channel) this.supabase.removeChannel(this.channel);
-    this.channel = null;
+    for (const ch of [this.sendLane, this.listenLane]) {
+      if (ch) this.supabase.removeChannel(ch);
+    }
+    this.sendLane = null;
+    this.listenLane = null;
+    this.sendLaneReady = false;
   }
 }

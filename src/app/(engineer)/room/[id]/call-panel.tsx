@@ -141,6 +141,13 @@ export function CallPanel({
           setConfirmClose(false);
         }
         if (call === "connecting") setSaveError(false);
+        if (call === "denied") {
+          // 채널 권한이 없다 — 세션은 스스로 닫혔다. 마이크·화면 켜짐도 푼다
+          micStreamRef.current?.getTracks().forEach((t) => t.stop());
+          micStreamRef.current = null;
+          releaseWakeLockRef.current?.();
+          releaseWakeLockRef.current = null;
+        }
         setState((prev) => {
           if (prev.phase === "confirm-end") {
             // 고객이 종료한 뒤 링크를 다시 열고 들어오면 통화로 돌아간다
@@ -628,6 +635,25 @@ export function CallPanel({
             </button>
           </div>
         )}
+      </section>
+    );
+  }
+
+  if (call === "denied") {
+    return (
+      <section className="mt-auto flex flex-col items-center gap-3 py-6 text-center">
+        <p className="text-lg font-semibold text-red-600">
+          통화 권한을 확인하지 못했어요
+        </p>
+        <p className="text-sm text-gray-500">
+          로그인이 풀렸을 수 있어요. 다시 로그인하면 이 화면으로 돌아와요.
+        </p>
+        <button
+          onClick={() => router.replace(`/login?next=/room/${roomId}`)}
+          className="mt-2 h-12 rounded-xl bg-black px-6 font-semibold text-white"
+        >
+          다시 로그인
+        </button>
       </section>
     );
   }

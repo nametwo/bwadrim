@@ -128,7 +128,7 @@ export function CameraStart({
             if (relay) postEvent("relay_used");
           }, 1000);
         }
-        if (s === "ended" || s === "failed") {
+        if (s === "ended" || s === "failed" || s === "denied") {
           streamRef.current?.getTracks().forEach((t) => t.stop());
           releaseWakeLock();
         }
@@ -265,6 +265,18 @@ export function CameraStart({
         <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-8 text-center">
           <h1 className="text-3xl font-bold">상담이 끝났습니다</h1>
           <p className="text-lg text-gray-600">이용해 주셔서 감사합니다.</p>
+        </main>
+      );
+    }
+
+    // 채널 권한 거부 = 링크를 연 뒤 세션이 닫혔거나 만료됐다
+    if (callState === "denied") {
+      return (
+        <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-8 text-center">
+          <h1 className="text-2xl font-bold">종료된 연결이에요</h1>
+          <p className="text-lg text-gray-600">
+            기사님께 새 링크를 보내달라고 말씀해 주세요.
+          </p>
         </main>
       );
     }

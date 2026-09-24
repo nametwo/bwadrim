@@ -55,3 +55,67 @@ create or replace function gen_room_code() returns text language sql as $$
   select string_agg(substr('ABCDEFGHJKMNPQRSTUVWXYZ23456789', (random()*30)::int + 1, 1), '')
   from generate_series(1, 6);
 $$;
+
+-- ─── 통화 시그널링 채널 권한 (Supabase Realtime 비공개 채널, BUG-09) ───
+-- 방마다 일방통행 채널 두 개:
+--   room:{id}:e  엔지니어 → 고객. 보내기는 로그인한 방 주인만 → 엔지니어 사칭 차단
+--   room:{id}:c  고객 → 엔지니어. 링크를 연 사람 누구나 (고객은 로그인 없음)
+-- 듣기는 두 채널 모두 열린 방(종료·만료 전)이면 누구나. 종료·만료된 방은 새로 들어올 수 없다.
+-- 적용 후 대시보드 Realtime 설정에서 공개 채널 허용(Allow public access)을 끌 것.
+-- 켜 두면 비공개 설정을 뺀 채널은 이 규칙을 거치지 않는다.
+
+-- API로 노출되지 않는 스키마 (public 함수는 누구나 RPC로 부를 수 있다)
+create schema if not exists private;
+grant usage on schema private to anon, authenticated;
+
+-- 토픽이 'room:{uuid}:{lane}' 형식이고 방이 열려 있으면 방 주인 id, 아니면 null.
+-- 정책을 평가하는 쪽(anon)은 rooms를 못 읽으므로 security definer로 읽는다
+create or replace function private.open_room_owner(topic text, lane text)
+returns uuid
+language plpgsql stable security definer set search_path = ''
+as $$
+declare
+  m text[];
+  owner uuid;
+begin
+  m := regexp_match(topic, '^room:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):([ec])$');
+  if m is null or m[2] <> lane then
+    return null;
+  end if;
+  select r.engineer_id into owner
+    from public.rooms r
+   where r.id = m[1]::uuid
+     and r.status <> 'ended'
+     and r.expires_at > now();
+  return owner;
+end;
+$$;
+
+grant execute on function private.open_room_owner(text, text) to anon, authenticated;
+
+drop policy if exists "bwadrim lanes: listen" on realtime.messages;
+create policy "bwadrim lanes: listen" on realtime.messages
+  for select to anon, authenticated
+  using (
+    realtime.messages.extension in ('broadcast', 'presence')
+    and (
+      private.open_room_owner(realtime.topic(), 'e') is not null
+      or private.open_room_owner(realtime.topic(), 'c') is not null
+    )
+  );
+
+drop policy if exists "bwadrim customer lane: send" on realtime.messages;
+create policy "bwadrim customer lane: send" on realtime.messages
+  for insert to anon, authenticated
+  with check (
+    realtime.messages.extension in ('broadcast', 'presence')
+    and private.open_room_owner(realtime.topic(), 'c') is not null
+  );
+
+drop policy if exists "bwadrim engineer lane: send" on realtime.messages;
+create policy "bwadrim engineer lane: send" on realtime.messages
+  for insert to authenticated
+  with check (
+    realtime.messages.extension in ('broadcast', 'presence')
+    and private.open_room_owner(realtime.topic(), 'e') = (select auth.uid())
+  );
