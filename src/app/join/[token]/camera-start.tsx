@@ -112,6 +112,7 @@ export function CameraStart({
       roomId,
       role: "customer",
       iceServers: ice.iceServers,
+      clockOffsetMs: ice.clockOffsetMs,
       localStream: stream,
       onState: (s) => {
         setCallState(s);
@@ -128,7 +129,7 @@ export function CameraStart({
             if (relay) postEvent("relay_used");
           }, 1000);
         }
-        if (s === "ended" || s === "failed" || s === "denied") {
+        if (s === "ended" || s === "failed" || s === "denied" || s === "replaced") {
           streamRef.current?.getTracks().forEach((t) => t.stop());
           releaseWakeLock();
         }
@@ -265,6 +266,25 @@ export function CameraStart({
         <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-8 text-center">
           <h1 className="text-3xl font-bold">상담이 끝났습니다</h1>
           <p className="text-lg text-gray-600">이용해 주셔서 감사합니다.</p>
+        </main>
+      );
+    }
+
+    // 같은 링크를 다른 폰(또는 다른 창)에서 열어 그쪽이 이어받았다 (BUG-04)
+    if (callState === "replaced") {
+      return (
+        <main className="flex min-h-screen flex-col items-center justify-center gap-5 px-8 text-center">
+          <h1 className="text-2xl font-bold">다른 곳에서 연결했어요</h1>
+          <p className="text-lg text-gray-600">
+            같은 링크를 다른 폰이나 창에서 열었어요.
+            <br />이 폰으로 계속하려면 아래를 눌러주세요.
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="h-16 w-full max-w-xs rounded-2xl bg-black text-xl font-bold text-white"
+          >
+            이 폰으로 연결
+          </button>
         </main>
       );
     }

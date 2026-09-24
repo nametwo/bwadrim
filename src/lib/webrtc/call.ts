@@ -1,4 +1,7 @@
-import type { RealtimeChannel } from "@supabase/supabase-js";
+import type {
+  RealtimeChannel,
+  RealtimePresenceState,
+} from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import { isPointerPos, type PointerPos } from "./pointer";
 import { parseDrawCommand, type DrawCommand, type DrawEvent } from "./draw";
@@ -18,6 +21,10 @@ const FREEZE_MAX_CHUNKS = 400;
 //   room:{id}:c  고객 → 엔지니어. 링크를 연 사람 누구나
 // 각자 자기 채널로만 보내고 상대 채널만 듣는다. 고객은 :e에서 온 신호만 믿으므로
 // 링크를 가진 제3자가 엔지니어 행세를 할 수 없다 (BUG-09). 정책은 supabase/schema.sql.
+// 이어받기 (BUG-04): 기기(탭)마다 고유 id를 두고, 같은 역할이 여러 기기에서 들어오면 **가장 늦게 들어온 기기**가
+// 이어받는다. 신호에는 보낸 id(from)와 받을 id(to)를 붙여 다른 기기의 신호를 무시한다.
+// 밀려난 기기는 'replaced'가 되고 채널에서 나간다(bye 없음 — 상대 연결은 새 기기와 이어진다).
+// 순서는 서버 시각 기준(clockOffsetMs)이라 기기 시계가 틀려도 대체로 맞다.
 // 역할 고정: customer(카메라 보유)가 offer, engineer가 answer.
 // 포인터·드로잉용 DataChannel('draw')은 offer에 미리 포함해 둔다.
 // 포인터는 연결 후 DataChannel로, 아직 열리지 않았으면 시그널링 broadcast로 보낸다.
@@ -30,6 +37,7 @@ export type CallState =
   | "connected"
   | "failed"
   | "denied" // 채널 권한 거부 — 엔지니어는 로그인 만료, 고객은 세션 종료·만료
+  | "replaced" // 같은 역할의 다른 기기가 이어받았다. 세션은 스스로 닫혔다
   | "ended"; // 상대가 종료(bye 수신). 내가 hangup()한 경우엔 알리지 않는다
 
 export interface CallSessionOptions {
@@ -38,6 +46,8 @@ export interface CallSessionOptions {
   iceServers: RTCIceServer[];
   // customer: 카메라+마이크 / engineer: 마이크(없으면 null — 듣기만)
   localStream: MediaStream | null;
+  // 서버 시각 - 이 기기 시각(ms). 이어받기 순서를 정하는 데 쓴다 (fetchIceServers가 알려 준다)
+  clockOffsetMs?: number;
   onState: (state: CallState) => void;
   onRemoteStream: (stream: MediaStream) => void;
   // 상대가 레이저 포인터를 찍었다 (영상 원본 기준 0~1 좌표)
@@ -49,6 +59,31 @@ export interface CallSessionOptions {
   // 엔지니어: 고객 카메라 상태(명령 결과 포함)
   onCameraState?: (state: CameraState) => void;
   onPeerPresent?: (present: boolean) => void;
+  // 상대 기기가 바뀌었다 (새로고침 또는 다른 기기에서 링크를 열었음)
+  onPeerChanged?: () => void;
+}
+
+// presence에 올리는 내 정보. at = 들어온 시각(서버 기준)
+interface Member {
+  id: string;
+  at: number;
+}
+
+function isNewer(a: Member, b: Member) {
+  return a.at !== b.at ? a.at > b.at : a.id > b.id;
+}
+
+// 채널에 있는 기기 중 가장 늦게 들어온 기기 (모든 기기가 같은 답을 얻는다)
+function newestMember(state: RealtimePresenceState): Member | null {
+  let best: Member | null = null;
+  for (const metas of Object.values(state)) {
+    for (const m of metas as unknown as Partial<Member>[]) {
+      if (typeof m.id !== "string" || typeof m.at !== "number") continue;
+      const member = { id: m.id, at: m.at };
+      if (!best || isNewer(member, best)) best = member;
+    }
+  }
+  return best;
 }
 
 function laneTopic(roomId: string, role: Role) {
@@ -80,8 +115,17 @@ export class CallSession {
   private sendLane: RealtimeChannel | null = null;
   private listenLane: RealtimeChannel | null = null;
   private sendLaneReady = false;
+  // 이 기기(탭)의 id와 들어온 시각
+  private readonly id = crypto.randomUUID();
+  private joinedAt = 0;
+  // 상대 역할에서 지금 이어받은 기기 / 지금 연결(pc)의 상대 기기
+  private activePeer: string | null = null;
+  private pcPeer: string | null = null;
+  // 엔지니어: presence보다 먼저 도착한 offer
+  private pendingOffer: { from: string; sdp: RTCSessionDescriptionInit } | null =
+    null;
   private pc: RTCPeerConnection | null = null;
-  private pendingIce: RTCIceCandidateInit[] = [];
+  private pendingIce: { from: string; candidate: RTCIceCandidateInit }[] = [];
   private dc: RTCDataChannel | null = null;
   private incomingFreeze: { id: string; parts: string[]; got: number } | null =
     null;
@@ -106,21 +150,30 @@ export class CallSession {
     // 그 전에 채널에 들어가면 익명으로 취급돼 엔지니어 채널 보내기가 거부된다 (고객은 원래 익명)
     await this.refreshAuth();
     if (this.closed) return;
+    this.joinedAt = Date.now() + (this.opts.clockOffsetMs ?? 0);
 
+    // 내 채널의 presence도 본다: 같은 역할의 더 늦은 기기가 오면 물러난다
     this.sendLane = this.supabase.channel(laneTopic(roomId, role), {
-      config: { private: true, presence: { key: role }, broadcast: { self: false } },
+      config: {
+        private: true,
+        presence: { key: this.id },
+        broadcast: { self: false },
+      },
     });
     this.listenLane = this.supabase.channel(laneTopic(roomId, peer), {
       config: { private: true },
     });
 
-    this.sendLane.subscribe(async (status, err) => {
+    const me: Member = { id: this.id, at: this.joinedAt };
+    this.sendLane
+      .on("presence", { event: "sync" }, () => this.onOwnLaneSync())
+      .subscribe(async (status, err) => {
       if (status === "SUBSCRIBED") {
-        let tracked = await this.sendLane?.track({ at: Date.now() });
+        let tracked = await this.sendLane?.track(me);
         if (tracked === "error") {
           // 토큰이 막 바뀐 경우일 수 있다 — 토큰을 다시 싣고 한 번 더
           await this.refreshAuth();
-          tracked = await this.sendLane?.track({ at: Date.now() });
+          tracked = await this.sendLane?.track(me);
         }
         if (this.closed) return;
         // 그래도 거부 = 보내기 권한이 없다 (로그인이 풀렸거나 이 세션의 주인이 아님)
@@ -131,6 +184,7 @@ export class CallSession {
         this.sendLaneReady = true;
         // 재구독(망 전환 등)이나 track 대기 중 이미 연결이 시작됐으면 상태를 덮어쓰지 않는다
         if (!this.closed && !this.pc) this.opts.onState("waiting");
+        this.onOwnLaneSync();
         this.onPresenceSync(); // 상대가 먼저 와 있었으면 지금 시작
       } else if (status === "CHANNEL_ERROR") {
         this.onChannelError(err);
@@ -139,21 +193,23 @@ export class CallSession {
 
     this.listenLane
       .on("broadcast", { event: "offer" }, ({ payload }) => {
-        if (role === "engineer") this.answer(payload.sdp);
+        if (role === "engineer") this.onOffer(payload);
       })
       .on("broadcast", { event: "answer" }, ({ payload }) => {
-        if (role === "customer") this.acceptAnswer(payload.sdp);
+        if (role === "customer") this.acceptAnswer(payload);
       })
-      .on("broadcast", { event: "ice" }, ({ payload }) =>
-        this.addIce(payload.candidate),
-      )
-      .on("broadcast", { event: "bye" }, () => this.onBye())
-      .on("broadcast", { event: "pointer" }, ({ payload }) =>
-        this.receivePointer(payload),
-      )
-      .on("broadcast", { event: "cam" }, ({ payload }) =>
-        this.receiveCamera(payload),
-      )
+      .on("broadcast", { event: "ice" }, ({ payload }) => this.onIce(payload))
+      .on("broadcast", { event: "bye" }, ({ payload }) => {
+        // 엔지니어 채널엔 방 주인만 쓸 수 있으므로 엔지니어의 종료는 어느 기기에서 왔든 따른다
+        // (세션 없이 보내는 sendBye는 id가 없다). 고객 쪽 종료는 지금 이어진 기기 것만
+        if (role === "customer" || payload?.from === this.activePeer) this.onBye();
+      })
+      .on("broadcast", { event: "pointer" }, ({ payload }) => {
+        if (payload?.from === this.activePeer) this.receivePointer(payload);
+      })
+      .on("broadcast", { event: "cam" }, ({ payload }) => {
+        if (payload?.from === this.activePeer) this.receiveCamera(payload);
+      })
       .on("presence", { event: "sync" }, () => this.onPresenceSync())
       .subscribe((status, err) => {
         if (status === "CHANNEL_ERROR") this.onChannelError(err);
@@ -182,15 +238,40 @@ export class CallSession {
     return this.opts.role === "engineer" ? "customer" : "engineer";
   }
 
+  // 같은 역할의 더 늦은 기기가 들어왔으면 물러난다. bye는 보내지 않는다 — 상대는 새 기기와 이어진다
+  private onOwnLaneSync() {
+    if (this.closed || !this.sendLane || !this.sendLaneReady) return;
+    const top = newestMember(this.sendLane.presenceState());
+    if (top && top.id !== this.id && isNewer(top, { id: this.id, at: this.joinedAt })) {
+      this.opts.onState("replaced");
+      this.destroy();
+    }
+  }
+
   private onPresenceSync() {
     if (this.closed || !this.listenLane) return;
-    const present = !!this.listenLane.presenceState()[this.peerRole()]?.length;
-    this.opts.onPeerPresent?.(present);
+    const top = newestMember(this.listenLane.presenceState());
+    this.opts.onPeerPresent?.(!!top);
 
-    if (!present) {
+    const prev = this.activePeer;
+    this.activePeer = top?.id ?? null;
+
+    if (!top) {
       // 상대가 나갔다 — 연결을 정리하고 재접속을 기다린다 (고객이 새로고침하는 경우)
       if (this.pc) this.resetPeer();
       return;
+    }
+
+    if (top.id !== prev) {
+      // 상대 기기가 바뀌었다 — 이전 기기와의 연결은 버리고 새 기기와 맺는다
+      if (this.pc) this.resetPeer();
+      if (prev) this.opts.onPeerChanged?.();
+      const queued = this.pendingOffer;
+      if (queued?.from === top.id) {
+        this.pendingOffer = null;
+        this.answer(queued.from, queued.sdp);
+        return;
+      }
     }
 
     // customer가 offer 측: 엔지니어가 보이고 아직 연결 전이면 시작 (보낼 채널이 준비된 뒤)
@@ -204,7 +285,7 @@ export class CallSession {
     }
   }
 
-  private createPeer(): RTCPeerConnection {
+  private createPeer(peerId: string): RTCPeerConnection {
     const pc = new RTCPeerConnection({ iceServers: this.opts.iceServers });
 
     const stream = this.localStream;
@@ -214,90 +295,136 @@ export class CallSession {
       if (e.streams[0]) this.opts.onRemoteStream(e.streams[0]);
     };
     pc.onicecandidate = (e) => {
-      if (e.candidate) {
-        this.send("ice", { candidate: e.candidate.toJSON() });
+      if (e.candidate && this.pc === pc) {
+        this.send("ice", { to: peerId, candidate: e.candidate.toJSON() });
       }
     };
     pc.onconnectionstatechange = () => {
-      if (this.closed) return;
+      if (this.closed || this.pc !== pc) return;
       if (pc.connectionState === "connected") this.opts.onState("connected");
       else if (pc.connectionState === "failed") this.fail();
     };
 
     this.pc = pc;
-    this.pendingIce = [];
+    this.pcPeer = peerId;
     return pc;
   }
 
   private async offer() {
+    const peerId = this.activePeer;
+    if (!peerId) return;
+    let pc: RTCPeerConnection | null = null;
     try {
       this.negotiating = true;
       this.opts.onState("connecting");
-      const pc = this.createPeer();
+      pc = this.createPeer(peerId);
 
       this.attachDataChannel(pc.createDataChannel("draw"));
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      this.send("offer", { sdp: offer });
+      if (this.pc !== pc) return; // 그사이 상대 기기가 바뀌었다
+      this.send("offer", { to: peerId, sdp: offer });
     } catch (e) {
+      if (this.pc !== pc) return;
       console.error("[call] offer 실패:", e);
       this.fail();
     } finally {
       this.negotiating = false;
+      // 준비하는 동안 상대 기기가 바뀌었으면 새 기기로 다시 시작
+      if (!this.closed && this.pc !== pc) this.onPresenceSync();
     }
   }
 
-  private async answer(sdp: RTCSessionDescriptionInit) {
+  // 엔지니어: 지금 이어진 고객 기기의 offer만 받는다. presence가 아직 안 왔으면 잠시 맡아 둔다
+  private onOffer(payload: { from?: unknown; to?: unknown; sdp?: RTCSessionDescriptionInit }) {
+    if (typeof payload?.from !== "string" || payload.to !== this.id || !payload.sdp) {
+      return;
+    }
+    if (payload.from !== this.activePeer) {
+      this.pendingOffer = { from: payload.from, sdp: payload.sdp };
+      return;
+    }
+    this.answer(payload.from, payload.sdp);
+  }
+
+  private async answer(peerId: string, sdp: RTCSessionDescriptionInit) {
+    let pc: RTCPeerConnection | null = null;
     try {
       this.opts.onState("connecting");
       if (this.pc) this.resetPeer(); // 고객이 재시도한 경우 이전 연결 폐기
-      const pc = this.createPeer();
+      pc = this.createPeer(peerId);
 
       pc.ondatachannel = (e) => this.attachDataChannel(e.channel);
 
       await pc.setRemoteDescription(sdp);
+      if (this.pc !== pc) return;
       this.flushIce();
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      this.send("answer", { sdp: answer });
+      if (this.pc !== pc) return;
+      this.send("answer", { to: peerId, sdp: answer });
     } catch (e) {
+      if (this.pc !== pc) return;
       console.error("[call] answer 실패:", e);
       this.fail();
     }
   }
 
-  private async acceptAnswer(sdp: RTCSessionDescriptionInit) {
+  private async acceptAnswer(payload: { from?: unknown; to?: unknown; sdp?: RTCSessionDescriptionInit }) {
+    const pc = this.pc;
+    if (!pc || payload?.to !== this.id || payload.from !== this.pcPeer || !payload.sdp) {
+      return;
+    }
     try {
-      if (!this.pc) return;
-      await this.pc.setRemoteDescription(sdp);
+      await pc.setRemoteDescription(payload.sdp);
+      if (this.pc !== pc) return;
       this.flushIce();
     } catch (e) {
+      if (this.pc !== pc) return;
       console.error("[call] answer 수신 처리 실패:", e);
       this.fail();
     }
   }
 
-  private async addIce(candidate: RTCIceCandidateInit) {
-    if (this.pc?.remoteDescription) {
+  // 나에게 온, 지금(또는 곧) 연결할 기기의 후보만 받는다
+  private onIce(payload: { from?: unknown; to?: unknown; candidate?: RTCIceCandidateInit }) {
+    if (typeof payload?.from !== "string" || payload.to !== this.id || !payload.candidate) {
+      return;
+    }
+    this.addIce(payload.from, payload.candidate);
+  }
+
+  private async addIce(from: string, candidate: RTCIceCandidateInit) {
+    const pc = this.pc;
+    if (pc?.remoteDescription && from === this.pcPeer) {
       try {
-        await this.pc.addIceCandidate(candidate);
+        await pc.addIceCandidate(candidate);
       } catch (e) {
         console.warn("[call] ICE 후보 추가 실패:", e);
       }
     } else {
-      this.pendingIce.push(candidate);
+      // 연결 준비 전(엔지니어가 offer를 맡아 둔 사이 포함) — 연결을 맺으면 그 기기 것만 넣는다
+      this.pendingIce.push({ from, candidate });
+      if (this.pendingIce.length > 200) this.pendingIce.shift();
     }
   }
 
   private flushIce() {
     const queued = this.pendingIce;
     this.pendingIce = [];
-    queued.forEach((c) => this.addIce(c));
+    for (const q of queued) {
+      if (q.from === this.pcPeer) this.addIce(q.from, q.candidate);
+    }
   }
 
+  // 모든 신호에 내 기기 id(from)를 붙인다
   private send(event: string, payload: Record<string, unknown>) {
-    this.sendLane?.send({ type: "broadcast", event, payload });
+    this.sendLane?.send({
+      type: "broadcast",
+      event,
+      payload: { ...payload, from: this.id },
+    });
   }
 
   private attachDataChannel(dc: RTCDataChannel) {
@@ -460,18 +587,21 @@ export class CallSession {
   }
 
   private resetPeer() {
+    const old = this.pcPeer;
     this.pc?.close();
     this.pc = null;
+    this.pcPeer = null;
     this.dc = null;
     this.incomingFreeze = null;
-    this.pendingIce = [];
+    // 이전 기기의 후보만 버린다 — 새 기기 후보가 먼저 와 있을 수 있다
+    this.pendingIce = this.pendingIce.filter((q) => q.from !== old);
     if (!this.closed) this.opts.onState("waiting");
   }
 
   // 직접 종료: 상대에게 bye를 알리고 채널에서 나간다. onState는 부르지 않는다(호출측이 안다).
   // 채널이 붙어 있으면 bye는 즉시 소켓에 실리므로 곧바로 나가도 순서가 지켜진다.
   hangup() {
-    this.send("bye", { from: this.opts.role });
+    this.send("bye", { role: this.opts.role });
     this.destroy();
   }
 
@@ -481,6 +611,7 @@ export class CallSession {
     if (this.closed) return;
     this.pc?.close();
     this.pc = null;
+    this.pcPeer = null;
     this.opts.onState("ended");
     if (this.opts.role === "customer") this.destroy();
   }
@@ -498,6 +629,7 @@ export class CallSession {
     this.closed = true;
     this.pc?.close();
     this.pc = null;
+    this.pcPeer = null;
     for (const ch of [this.sendLane, this.listenLane]) {
       if (ch) this.supabase.removeChannel(ch);
     }

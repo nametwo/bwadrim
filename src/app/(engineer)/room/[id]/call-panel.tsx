@@ -48,6 +48,9 @@ export function CallPanel({
   const [ending, setEnding] = useState(false);
   const [saveError, setSaveError] = useState(false);
   const [turnError, setTurnError] = useState<string | null>(null);
+  // 고객 쪽 기기가 바뀐 직후 잠깐 알린다 (BUG-04: 링크가 새서 다른 사람이 들어온 경우를 알아채게)
+  const [peerChanged, setPeerChanged] = useState(false);
+  const peerChangedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const sessionRef = useRef<CallSession | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -77,6 +80,7 @@ export function CallPanel({
     return () => {
       unmountedRef.current = true;
       clearTimeout(camTimerRef.current);
+      clearTimeout(peerChangedTimerRef.current);
       sessionRef.current?.destroy();
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
       releaseWakeLockRef.current?.();
@@ -120,6 +124,7 @@ export function CallPanel({
       roomId,
       role: "engineer",
       iceServers: ice.iceServers,
+      clockOffsetMs: ice.clockOffsetMs,
       localStream: mic,
       onState: (call) => {
         lastCallRef.current = call;
@@ -142,8 +147,10 @@ export function CallPanel({
           setConfirmClose(false);
         }
         if (call === "connecting") setSaveError(false);
-        if (call === "denied") {
-          // 채널 권한이 없다 — 세션은 스스로 닫혔다. 마이크·화면 켜짐도 푼다
+        if (call === "denied" || call === "replaced") {
+          // 채널 권한이 없거나 다른 기기가 이어받았다 — 세션은 스스로 닫혔다.
+          // 마이크·화면 켜짐도 풀고, '여기서 다시 받기'로 새 세션을 열 수 있게 비운다
+          sessionRef.current = null;
           micStreamRef.current?.getTracks().forEach((t) => t.stop());
           micStreamRef.current = null;
           releaseWakeLockRef.current?.();
@@ -174,6 +181,11 @@ export function CallPanel({
       onRemoteStream: (stream) => {
         remoteStreamRef.current = stream;
         if (videoRef.current) videoRef.current.srcObject = stream;
+      },
+      onPeerChanged: () => {
+        setPeerChanged(true);
+        clearTimeout(peerChangedTimerRef.current);
+        peerChangedTimerRef.current = setTimeout(() => setPeerChanged(false), 8000);
       },
       onPeerPresent: (present) => {
         setState((prev) =>
@@ -506,10 +518,18 @@ export function CallPanel({
     </p>
   );
 
+  const peerNotice = peerChanged && (
+    <p className="rounded-lg bg-amber-100 px-3 py-2 text-sm font-medium text-amber-800">
+      고객 쪽 연결이 새로 바뀌었어요 (고객 새로고침 또는 다른 기기). 모르는 사람이면
+      종료하세요.
+    </p>
+  );
+
   if (call === "connected" || (call === "connecting" && peerPresent)) {
     return (
       <section className="mt-2 flex flex-1 flex-col gap-3">
         {turnWarning}
+        {peerNotice}
         <div
           onPointerDown={frozen ? undefined : pointAt}
           className="relative min-h-[50vh] flex-1 touch-none overflow-hidden rounded-2xl bg-black"
@@ -640,6 +660,24 @@ export function CallPanel({
     );
   }
 
+  if (call === "replaced") {
+    return (
+      <section className="mt-auto flex flex-col items-center gap-3 py-6 text-center">
+        <p className="text-lg font-semibold">다른 기기에서 이어받았어요</p>
+        <p className="text-sm text-gray-500">
+          이 기기는 통화에서 빠졌어요. 여기서 계속하려면 아래를 누르세요.
+        </p>
+        <button
+          onClick={start}
+          disabled={starting}
+          className="mt-2 h-14 rounded-xl bg-blue-600 px-8 text-lg font-semibold text-white disabled:opacity-50"
+        >
+          {starting ? "준비 중…" : "여기서 다시 받기"}
+        </button>
+      </section>
+    );
+  }
+
   if (call === "denied") {
     return (
       <section className="mt-auto flex flex-col items-center gap-3 py-6 text-center">
@@ -685,6 +723,7 @@ export function CallPanel({
   return (
     <section className="mt-auto flex flex-col items-center gap-2 py-6 text-center">
       {turnWarning}
+      {peerNotice}
       <p className="text-lg font-semibold">
         {peerPresent ? "고객님 접속됨 — 연결 중…" : "고객님 접속 대기 중…"}
       </p>
