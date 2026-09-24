@@ -95,8 +95,17 @@ export class CallSession {
   }
 
   join() {
+    void this.start();
+  }
+
+  private async start() {
     const { roomId, role } = this.opts;
     const peer = this.peerRole();
+
+    // 로그인 토큰(JWT)을 소켓에 먼저 실어 둔다. 페이지를 막 연 직후엔 토큰이 늦게 붙어서,
+    // 그 전에 채널에 들어가면 익명으로 취급돼 엔지니어 채널 보내기가 거부된다 (고객은 원래 익명)
+    await this.refreshAuth();
+    if (this.closed) return;
 
     this.sendLane = this.supabase.channel(laneTopic(roomId, role), {
       config: { private: true, presence: { key: role }, broadcast: { self: false } },
@@ -107,8 +116,14 @@ export class CallSession {
 
     this.sendLane.subscribe(async (status, err) => {
       if (status === "SUBSCRIBED") {
-        const tracked = await this.sendLane?.track({ at: Date.now() });
-        // 채널엔 들어왔는데 보내기 권한이 없다 (엔지니어 로그인이 다른 기기에서 풀린 경우 등)
+        let tracked = await this.sendLane?.track({ at: Date.now() });
+        if (tracked === "error") {
+          // 토큰이 막 바뀐 경우일 수 있다 — 토큰을 다시 싣고 한 번 더
+          await this.refreshAuth();
+          tracked = await this.sendLane?.track({ at: Date.now() });
+        }
+        if (this.closed) return;
+        // 그래도 거부 = 보내기 권한이 없다 (로그인이 풀렸거나 이 세션의 주인이 아님)
         if (tracked === "error") {
           this.onChannelError(new Error("Unauthorized: presence track"));
           return;
@@ -143,6 +158,14 @@ export class CallSession {
       .subscribe((status, err) => {
         if (status === "CHANNEL_ERROR") this.onChannelError(err);
       });
+  }
+
+  private async refreshAuth() {
+    try {
+      await this.supabase.realtime.setAuth();
+    } catch (e) {
+      console.warn("[call] 토큰 갱신 실패:", e);
+    }
   }
 
   // 권한 거부만 통화 실패로 본다. 망 끊김 등은 realtime이 스스로 다시 들어간다
