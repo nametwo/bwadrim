@@ -41,14 +41,30 @@ export type TrackState = "searching" | "tracking" | "weak" | "lost";
 export interface TrackTimings {
   /** 프레임 1장 처리 총 시간(ms) */
   total: number;
-  /** 세부 단계(선택): detect, describe, match, lk, ransac, refine 등 */
+  /** 세부 단계(선택): pyramid, lk, ransac, align, verify, replenish, detect, match */
   [stage: string]: number;
 }
+
+/**
+ * lost/searching의 이유 (UI 안내·지표용).
+ * offscreen — 앵커가 화면 밖으로 나갔을 뿐 내부적으로는 추적 중 (hint 제공)
+ * unverified — 후보는 있으나 검증 실패 (반복 패턴 등)
+ * untrackable — 기준 자체가 추적 불가 (ReferenceInfo.trackable=false)
+ * invalid_frame — 입력 프레임 오류
+ */
+export type LostReason = "offscreen" | "unverified" | "untrackable" | "invalid_frame";
 
 export interface TrackResult {
   state: TrackState;
   /** ref → frame. state가 tracking/weak일 때만 non-null */
   H: Mat3 | null;
+  /**
+   * state가 lost인데 앵커만 화면 밖으로 나간 경우(reason=offscreen)의 내부 추정 H.
+   * 주석을 그리는 데 쓰면 안 된다 — "화면 밖 이쪽에 있어요" 가장자리 화살표에만 쓴다.
+   * 그 외에는 null.
+   */
+  hint: Mat3 | null;
+  reason?: LostReason;
   /** 0~1. UI 투명도·상태 판정에 사용 */
   confidence: number;
   /** 이번 프레임에서 호모그래피를 지지한 점 수 */
@@ -68,6 +84,12 @@ export interface ReferenceInfo {
   features: number;
   /** false면 무늬가 너무 없어 추적 불가 — 호출측은 정지 화면 방식으로 폴백 */
   trackable: boolean;
+  /**
+   * trackable=false 이거나 제약이 있을 때의 이유.
+   * low_texture — ROI 전체에 무늬가 부족 / pin_blank — 핀 주변만 비어 있음
+   * ambiguous — 똑같은 무늬가 반복돼 재검출을 끔 (추적은 가능할 수 있음)
+   */
+  reason?: "low_texture" | "pin_blank" | "ambiguous";
 }
 
 export interface TrackerConfig {
@@ -97,8 +119,10 @@ export interface PlanarTrackerApi {
    * 기준 프레임 설정. roi는 ref 픽셀 좌표 (보통 엔지니어가 찍은 점 주변).
    * initialH가 있으면 "지금 프레임이 곧 기준"이라는 뜻(엔지니어 쪽: 단위행렬) — 탐색 없이 바로 tracking.
    * 없으면 searching에서 시작해 ORB 매칭으로 찾는다(고객 쪽).
+   * anchor는 주석이 실제로 있는 곳(ref 픽셀) — 화면 밖 판정·핀 주변 검증의 기준. 없으면 ROI 중심.
+   * initialH를 줘도 trackable=false면 tracking을 시작하지 않는다 (searching/lost 유지).
    */
-  setReference(ref: GrayImage, roi: Rect, initialH?: Mat3): ReferenceInfo;
+  setReference(ref: GrayImage, roi: Rect, initialH?: Mat3, anchor?: Point): ReferenceInfo;
   clearReference(): void;
   hasReference(): boolean;
   /** 프레임 1장 처리. frame 크기는 호출마다 달라질 수 있다(회전 등) */
@@ -142,6 +166,9 @@ export interface TrackUpdate {
   state: TrackState;
   /** ref 픽셀 → frame 픽셀. tracking/weak일 때만 */
   H: Mat3 | null;
+  /** TrackResult.hint 그대로 — 화면 밖 방향 화살표 전용 */
+  hint: Mat3 | null;
+  reason?: LostReason;
   confidence: number;
   refSize: { width: number; height: number };
   /** 처리된 프레임의 작업 해상도 */
