@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logEvent } from "@/lib/events";
+import { detectInApp } from "@/lib/in-app-browser";
 import { CameraStart } from "./camera-start";
+import { OpenInBrowser } from "./open-in-browser";
 
 export const metadata: Metadata = {
   title: "봐드림",
@@ -57,8 +59,12 @@ export default async function JoinPage({ params }: PageProps<"/join/[code]">) {
   }
 
   const ua = (await headers()).get("user-agent") ?? "";
-  await logEvent(room.id, "customer", "link_opened", { ua });
+  const inApp = detectInApp(ua);
+  await logEvent(room.id, "customer", "link_opened", { ua, inapp: inApp });
 
+  if (inApp) {
+    return <OpenInBrowser kind={inApp} roomId={room.id} code={normalized} />;
+  }
   return <CameraStart roomId={room.id} code={normalized} />;
 }
 

@@ -36,6 +36,7 @@ src/lib/
   supabase/{client,server,admin}.ts              # admin = service role, 서버 전용
   webrtc/                                        # peer 연결, ICE 설정, 시그널링, 포인터 좌표(pointer.ts), 화면 멈춤·그리기(draw.ts)
   wake-lock.ts                                   # 통화 중 화면 꺼짐 방지
+  in-app-browser.ts                              # 카톡 등 인앱 브라우저 감지·외부 브라우저로 열기
   events.ts                                      # 지표 이벤트 기록
 src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기)
 supabase/schema.sql
