@@ -75,7 +75,11 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
         <ShareButtons joinUrl={joinUrl} />
       </section>
 
-      <CallPanel roomId={room.id} code={room.code} />
+      <CallPanel
+        roomId={room.id}
+        code={room.code}
+        everConnected={room.status === "active"}
+      />
     </main>
   );
 }

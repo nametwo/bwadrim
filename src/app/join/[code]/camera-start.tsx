@@ -109,6 +109,8 @@ export function CameraStart({
 
   function hangup() {
     sessionRef.current?.hangup();
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    setCallState("ended");
   }
 
   // 로컬 미리보기 연결

@@ -12,7 +12,7 @@ export type CallState =
   | "connecting" // offer/answer 교환 중
   | "connected"
   | "failed"
-  | "ended"; // bye 수신 또는 직접 종료
+  | "ended"; // 상대가 종료(bye 수신). 내가 hangup()한 경우엔 알리지 않는다
 
 export interface CallSessionOptions {
   roomId: string;
@@ -33,8 +33,12 @@ export class CallSession {
   private pendingIce: RTCIceCandidateInit[] = [];
   private negotiating = false;
   private closed = false;
+  // 카메라 전환 시 교체된다. 이후 새로 맺는 연결도 지금 카메라로 보내기 위함
+  private localStream: MediaStream | null;
 
-  constructor(private opts: CallSessionOptions) {}
+  constructor(private opts: CallSessionOptions) {
+    this.localStream = opts.localStream;
+  }
 
   join() {
     const { roomId, role } = this.opts;
@@ -53,12 +57,13 @@ export class CallSession {
       .on("broadcast", { event: "ice" }, ({ payload }) => {
         if (payload.from !== role) this.addIce(payload.candidate);
       })
-      .on("broadcast", { event: "bye" }, () => this.teardown("ended"))
+      .on("broadcast", { event: "bye" }, () => this.onBye())
       .on("presence", { event: "sync" }, () => this.onPresenceSync())
       .subscribe(async (status) => {
         if (status === "SUBSCRIBED") {
           await this.channel?.track({ at: Date.now() });
-          this.opts.onState("waiting");
+          // 재구독(망 전환 등)이나 track 대기 중 이미 연결이 시작됐으면 상태를 덮어쓰지 않는다
+          if (!this.closed && !this.pc) this.opts.onState("waiting");
         }
       });
   }
@@ -87,9 +92,8 @@ export class CallSession {
   private createPeer(): RTCPeerConnection {
     const pc = new RTCPeerConnection({ iceServers: this.opts.iceServers });
 
-    this.opts.localStream
-      ?.getTracks()
-      .forEach((t) => pc.addTrack(t, this.opts.localStream!));
+    const stream = this.localStream;
+    stream?.getTracks().forEach((t) => pc.addTrack(t, stream));
 
     pc.ontrack = (e) => {
       if (e.streams[0]) this.opts.onRemoteStream(e.streams[0]);
@@ -105,7 +109,7 @@ export class CallSession {
     pc.onconnectionstatechange = () => {
       if (this.closed) return;
       if (pc.connectionState === "connected") this.opts.onState("connected");
-      else if (pc.connectionState === "failed") this.opts.onState("failed");
+      else if (pc.connectionState === "failed") this.fail();
     };
 
     this.pc = pc;
@@ -127,7 +131,7 @@ export class CallSession {
       this.send("offer", { sdp: offer });
     } catch (e) {
       console.error("[call] offer 실패:", e);
-      this.opts.onState("failed");
+      this.fail();
     } finally {
       this.negotiating = false;
     }
@@ -148,7 +152,7 @@ export class CallSession {
       this.send("answer", { sdp: answer });
     } catch (e) {
       console.error("[call] answer 실패:", e);
-      this.opts.onState("failed");
+      this.fail();
     }
   }
 
@@ -159,7 +163,7 @@ export class CallSession {
       this.flushIce();
     } catch (e) {
       console.error("[call] answer 수신 처리 실패:", e);
-      this.opts.onState("failed");
+      this.fail();
     }
   }
 
@@ -185,8 +189,11 @@ export class CallSession {
     this.channel?.send({ type: "broadcast", event, payload });
   }
 
-  // 카메라 전/후면 전환 (재협상 없이 replaceTrack)
+  // 카메라 전/후면 전환 (재협상 없이 replaceTrack).
+  // 아직 연결 전이어도 교체해 두어야, 나중에 맺는 연결이 꺼진 이전 카메라를 보내지 않는다
   async replaceVideoTrack(track: MediaStreamTrack) {
+    const audio = this.localStream?.getAudioTracks() ?? [];
+    this.localStream = new MediaStream([track, ...audio]);
     const sender = this.pc
       ?.getSenders()
       .find((s) => s.track?.kind === "video");
@@ -232,20 +239,32 @@ export class CallSession {
     if (!this.closed) this.opts.onState("waiting");
   }
 
-  // 직접 종료: 상대에게 bye를 알리고 정리
+  // 직접 종료: 상대에게 bye를 알리고 채널에서 나간다. onState는 부르지 않는다(호출측이 안다).
+  // 채널이 붙어 있으면 bye는 즉시 소켓에 실리므로 곧바로 나가도 순서가 지켜진다.
   hangup() {
     this.send("bye", { from: this.opts.role });
-    this.teardown("ended");
+    this.destroy();
   }
 
-  private teardown(state: CallState) {
+  // 상대가 종료했다. 고객은 채널에서 나가 이후 재연결되지 않게 하고,
+  // 엔지니어는 채널에 남아 고객이 링크를 다시 열면 이어받는다.
+  private onBye() {
     if (this.closed) return;
     this.pc?.close();
     this.pc = null;
-    this.opts.onState(state);
+    this.opts.onState("ended");
+    if (this.opts.role === "customer") this.destroy();
   }
 
-  // 언마운트 시 호출. 로컬 트랙 정지는 호출측 책임(미리보기 재사용 가능성).
+  // 고객은 실패하면 카메라를 끄고 '다시 연결'(새로고침)으로만 복구하므로 채널에서 나간다.
+  // 남아 있으면 엔지니어가 다시 들어올 때 꺼진 카메라로 재연결된다.
+  private fail() {
+    if (this.closed) return;
+    this.opts.onState("failed");
+    if (this.opts.role === "customer") this.destroy();
+  }
+
+  // 언마운트 시에도 호출. 여러 번 불러도 된다. 로컬 트랙 정지는 호출측 책임.
   destroy() {
     this.closed = true;
     this.pc?.close();
