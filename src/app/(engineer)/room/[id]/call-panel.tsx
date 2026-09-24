@@ -99,9 +99,12 @@ export function CallPanel({
           markRoomActive(roomId);
         }
         if (call === "ended") {
+          // 고객이 끊으면 열려 있던 '세션을 닫을까요?'는 확인 화면으로 대체된다
           confirmShownAtRef.current = Date.now();
           setSaveError(false);
+          setConfirmClose(false);
         }
+        if (call === "connecting") setSaveError(false);
         setState((prev) => {
           if (prev.phase === "confirm-end") {
             // 고객이 종료한 뒤 링크를 다시 열고 들어오면 통화로 돌아간다
@@ -192,14 +195,14 @@ export function CallPanel({
     }
     if (unmountedRef.current) return;
     if (result?.ok) {
-      // 저장 중에 고객이 다시 들어왔을 수 있다 — 떠나기 전에 종료를 알린다
-      sessionRef.current?.hangup();
-      stopSession();
+      // 확인 화면에 있는 동안 고객이 다시 들어왔을 수 있다 — 세션이 없어도 떠나기 전에 종료를 알린다
+      hangupAndStop();
       router.replace("/dashboard");
       return;
     }
     if (result?.reason === "auth") {
-      router.replace("/login");
+      // 다시 로그인하면 답하지 못한 이 세션으로 돌아온다
+      router.replace(`/login?next=/room/${roomId}`);
       return;
     }
     endingRef.current = false;

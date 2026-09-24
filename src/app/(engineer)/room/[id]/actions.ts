@@ -1,5 +1,6 @@
 "use server";
 
+import { isAuthRetryableFetchError } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { logEvent } from "@/lib/events";
 
@@ -16,8 +17,15 @@ export async function endRoom(
   const supabase = await createClient();
   const {
     data: { user },
+    error: authError,
   } = await supabase.auth.getUser();
-  if (!user) return { ok: false, reason: "auth" };
+  // 인증 서버 일시 장애는 로그인 풀림이 아니다 — 다시 시도하게 해야 답이 사라지지 않는다
+  if (!user) {
+    return {
+      ok: false,
+      reason: isAuthRetryableFetchError(authError) ? "db" : "auth",
+    };
+  }
 
   // RLS로 자기 방만 갱신된다. 이미 종료된 방은 건드리지 않아 중복 기록을 막는다
   const { data, error } = await supabase
