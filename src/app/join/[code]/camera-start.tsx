@@ -5,6 +5,8 @@ import { CallSession, type CallState } from "@/lib/webrtc/call";
 import { fetchIceServers } from "@/lib/webrtc/ice";
 import { keepScreenOn } from "@/lib/wake-lock";
 import { PointerMarker, usePointerMarker } from "@/components/pointer-marker";
+import { FreezeCanvas } from "@/components/freeze-canvas";
+import { applyDrawCommand, type Stroke } from "@/lib/webrtc/draw";
 
 type Phase = "ready" | "starting" | "call" | "denied" | "gone";
 
@@ -28,6 +30,9 @@ export function CameraStart({
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const releaseWakeLockRef = useRef<(() => void) | null>(null);
   const { marker, show: showMarker } = usePointerMarker();
+  // 기사님이 멈춘 화면과 그 위의 선 (CALL-09)
+  const [frozen, setFrozen] = useState<string | null>(null);
+  const [strokes, setStrokes] = useState<Stroke[]>([]);
 
   function releaseWakeLock() {
     releaseWakeLockRef.current?.();
@@ -79,6 +84,10 @@ export function CameraStart({
       localStream: stream,
       onState: (s) => {
         setCallState(s);
+        if (s !== "connected") {
+          setFrozen(null);
+          setStrokes([]);
+        }
         if (s === "connected") {
           // relay(TURN) 경유 여부 — 원가 지표. turn: TURN 자격증명을 받았는지
           setTimeout(async () => {
@@ -93,6 +102,15 @@ export function CameraStart({
         }
       },
       onPointer: (pos) => showMarker(videoRef.current, pos),
+      onDraw: (e) => {
+        if (e.t === "freeze") {
+          setFrozen(e.image);
+          setStrokes([]);
+          return;
+        }
+        if (e.t === "resume") setFrozen(null);
+        setStrokes((prev) => applyDrawCommand(prev, e));
+      },
       onRemoteStream: (remote) => {
         // 기사님 음성
         remoteStreamRef.current = remote;
@@ -215,7 +233,9 @@ export function CameraStart({
     }
 
     const statusText =
-      callState === "connected"
+      frozen
+        ? "기사님이 화면을 멈추고 설명 중이에요"
+        : callState === "connected"
         ? "기사님이 보고 있어요"
         : callState === "connecting"
           ? "기사님과 연결 중…"
@@ -231,13 +251,21 @@ export function CameraStart({
           className="absolute inset-0 h-full w-full object-contain"
         />
         {/* 잘림 없이 전체를 보여 줘야 기사님이 가리킨 곳이 항상 화면 안에 있다 */}
-        <PointerMarker marker={marker} size={88} />
+        {frozen ? (
+          <FreezeCanvas image={frozen} strokes={strokes} lineWidth={8} />
+        ) : (
+          <PointerMarker marker={marker} size={88} />
+        )}
         <audio ref={audioRef} autoPlay />
 
         <div className="relative mt-4 flex justify-center">
           <span
             className={`rounded-full px-4 py-2 text-sm font-medium text-white ${
-              callState === "connected" ? "bg-green-600/90" : "bg-black/50"
+              frozen
+                ? "bg-amber-500/90"
+                : callState === "connected"
+                  ? "bg-green-600/90"
+                  : "bg-black/50"
             }`}
           >
             {statusText}

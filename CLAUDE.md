@@ -34,10 +34,10 @@ src/app/
   api/events                                     # 고객(비로그인) 쪽 지표 이벤트 수집
 src/lib/
   supabase/{client,server,admin}.ts              # admin = service role, 서버 전용
-  webrtc/                                        # peer 연결, ICE 설정, 시그널링, 포인터 좌표(pointer.ts)
+  webrtc/                                        # peer 연결, ICE 설정, 시그널링, 포인터 좌표(pointer.ts), 화면 멈춤·그리기(draw.ts)
   wake-lock.ts                                   # 통화 중 화면 꺼짐 방지
   events.ts                                      # 지표 이벤트 기록
-src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미 등)
+src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기)
 supabase/schema.sql
 docs/requirements.md                             # 기능 요구사항 (기준 문서)
 ```

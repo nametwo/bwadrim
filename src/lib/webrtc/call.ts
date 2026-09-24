@@ -1,6 +1,11 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import { isPointerPos, type PointerPos } from "./pointer";
+import { parseDrawCommand, type DrawCommand, type DrawEvent } from "./draw";
+
+// 정지 화면(JPEG data URL)은 DataChannel 메시지 크기 제한 때문에 조각내 보낸다
+const FREEZE_CHUNK = 12_000;
+const FREEZE_MAX_CHUNKS = 400;
 
 // 1:1 P2P 통화 세션. 시그널링은 Supabase Realtime broadcast `room:{id}`.
 // 역할 고정: customer(카메라 보유)가 offer, engineer가 answer.
@@ -26,6 +31,8 @@ export interface CallSessionOptions {
   onRemoteStream: (stream: MediaStream) => void;
   // 상대가 레이저 포인터를 찍었다 (영상 원본 기준 0~1 좌표)
   onPointer?: (pos: PointerPos) => void;
+  // 상대가 화면을 멈추고 그렸다 (CALL-09)
+  onDraw?: (e: DrawEvent) => void;
   onPeerPresent?: (present: boolean) => void;
 }
 
@@ -50,6 +57,8 @@ export class CallSession {
   private pc: RTCPeerConnection | null = null;
   private pendingIce: RTCIceCandidateInit[] = [];
   private dc: RTCDataChannel | null = null;
+  private incomingFreeze: { id: string; parts: string[]; got: number } | null =
+    null;
   private negotiating = false;
   private closed = false;
   // 카메라 전환 시 교체된다. 이후 새로 맺는 연결도 지금 카메라로 보내기 위함
@@ -213,13 +222,76 @@ export class CallSession {
   private attachDataChannel(dc: RTCDataChannel) {
     this.dc = dc;
     dc.onmessage = (e) => {
+      let msg: unknown;
       try {
-        const msg = JSON.parse(e.data);
-        if (msg?.t === "pointer") this.receivePointer(msg);
+        msg = JSON.parse(e.data);
       } catch {
-        // 형식이 다른 메시지는 무시
+        return; // 형식이 다른 메시지는 무시
+      }
+      const t = (msg as { t?: unknown } | null)?.t;
+      if (t === "pointer") this.receivePointer(msg);
+      else if (t === "freeze-chunk") this.receiveFreezeChunk(msg);
+      else {
+        const cmd = parseDrawCommand(msg);
+        if (cmd && !this.closed) this.opts.onDraw?.(cmd);
       }
     };
+  }
+
+  private receiveFreezeChunk(msg: unknown) {
+    const m = msg as Record<string, unknown>;
+    const { id, i, n, d } = m;
+    if (
+      typeof id !== "string" ||
+      typeof i !== "number" ||
+      typeof n !== "number" ||
+      typeof d !== "string" ||
+      n < 1 ||
+      n > FREEZE_MAX_CHUNKS ||
+      i < 0 ||
+      i >= n
+    ) {
+      return;
+    }
+    // 새 정지 화면이 오면 이전에 모으던 것은 버린다
+    if (this.incomingFreeze?.id !== id) {
+      this.incomingFreeze = { id, parts: new Array(n), got: 0 };
+    }
+    const f = this.incomingFreeze;
+    if (f.parts.length !== n || f.parts[i] !== undefined) return;
+    f.parts[i] = d;
+    f.got++;
+    if (f.got === n) {
+      this.incomingFreeze = null;
+      const image = f.parts.join("");
+      if (image.startsWith("data:image/jpeg;base64,") && !this.closed) {
+        this.opts.onDraw?.({ t: "freeze", image });
+      }
+    }
+  }
+
+  private dcOpen() {
+    return !this.closed && this.dc?.readyState === "open";
+  }
+
+  // 정지 화면 보내기. 연결(DataChannel)이 없으면 false — 크기가 커서 시그널링으로는 못 보낸다
+  sendFreeze(image: string): boolean {
+    if (!this.dcOpen()) return false;
+    const id = crypto.randomUUID();
+    const n = Math.ceil(image.length / FREEZE_CHUNK);
+    if (n > FREEZE_MAX_CHUNKS) return false;
+    for (let i = 0; i < n; i++) {
+      const d = image.slice(i * FREEZE_CHUNK, (i + 1) * FREEZE_CHUNK);
+      this.dc!.send(JSON.stringify({ t: "freeze-chunk", id, i, n, d }));
+    }
+    return true;
+  }
+
+  // 선·되돌리기·지우기·다시 보기. 정지 화면과 같은 채널로 보내 순서가 지켜지게 한다
+  sendDraw(cmd: DrawCommand): boolean {
+    if (!this.dcOpen()) return false;
+    this.dc!.send(JSON.stringify(cmd));
+    return true;
   }
 
   private receivePointer(msg: unknown) {
@@ -283,6 +355,7 @@ export class CallSession {
     this.pc?.close();
     this.pc = null;
     this.dc = null;
+    this.incomingFreeze = null;
     this.pendingIce = [];
     if (!this.closed) this.opts.onState("waiting");
   }

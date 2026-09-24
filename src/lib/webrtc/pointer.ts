@@ -5,17 +5,22 @@ export interface PointerPos {
   y: number;
 }
 
-// object-fit: contain으로 그려진 영상이 요소 안에서 실제로 차지하는 영역(px)
-function containRect(video: HTMLVideoElement) {
-  const elW = video.clientWidth;
-  const elH = video.clientHeight;
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-  if (!elW || !elH || !vw || !vh) return null;
-  const scale = Math.min(elW / vw, elH / vh);
-  const width = vw * scale;
-  const height = vh * scale;
+// object-fit: contain으로 그린 원본(srcW×srcH)이 요소(elW×elH) 안에서 실제로 차지하는 영역(px)
+export function containRect(elW: number, elH: number, srcW: number, srcH: number) {
+  if (!elW || !elH || !srcW || !srcH) return null;
+  const scale = Math.min(elW / srcW, elH / srcH);
+  const width = srcW * scale;
+  const height = srcH * scale;
   return { left: (elW - width) / 2, top: (elH - height) / 2, width, height };
+}
+
+function videoRect(video: HTMLVideoElement) {
+  return containRect(
+    video.clientWidth,
+    video.clientHeight,
+    video.videoWidth,
+    video.videoHeight,
+  );
 }
 
 // 탭 위치(요소 기준 px) → 영상 좌표. 위아래·좌우 검은 여백을 누르면 null
@@ -24,7 +29,7 @@ export function toVideoPos(
   offsetX: number,
   offsetY: number,
 ): PointerPos | null {
-  const r = containRect(video);
+  const r = videoRect(video);
   if (!r) return null;
   const x = (offsetX - r.left) / r.width;
   const y = (offsetY - r.top) / r.height;
@@ -34,7 +39,7 @@ export function toVideoPos(
 
 // 영상 좌표 → 요소 기준 px (영상이 object-fit: contain일 때)
 export function toElementPx(video: HTMLVideoElement, pos: PointerPos) {
-  const r = containRect(video);
+  const r = videoRect(video);
   if (!r) return null;
   return { left: r.left + pos.x * r.width, top: r.top + pos.y * r.height };
 }

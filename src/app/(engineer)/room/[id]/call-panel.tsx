@@ -5,9 +5,16 @@ import { useRouter } from "next/navigation";
 import { CallSession, sendBye, type CallState } from "@/lib/webrtc/call";
 import { fetchIceServers } from "@/lib/webrtc/ice";
 import { toVideoPos } from "@/lib/webrtc/pointer";
+import {
+  applyDrawCommand,
+  captureFrame,
+  type Point,
+  type Stroke,
+} from "@/lib/webrtc/draw";
 import { keepScreenOn } from "@/lib/wake-lock";
 import { PointerMarker, usePointerMarker } from "@/components/pointer-marker";
-import { endRoom, logPointerUsed, markRoomActive } from "./actions";
+import { FreezeCanvas, type DrawHandlers } from "@/components/freeze-canvas";
+import { endRoom, logToolUsed, markRoomActive } from "./actions";
 
 type PanelState =
   | { phase: "idle" }
@@ -50,7 +57,13 @@ export function CallPanel({
   const lastCallRef = useRef<CallState>("waiting");
   const confirmShownAtRef = useRef(0);
   const releaseWakeLockRef = useRef<(() => void) | null>(null);
-  const pointerLoggedRef = useRef(false);
+  const toolsLoggedRef = useRef(new Set<"pointer_used" | "freeze_used">());
+  // 화면 멈춤 + 그리기 (CALL-09)
+  const [frozen, setFrozen] = useState<string | null>(null);
+  const [strokes, setStrokes] = useState<Stroke[]>([]);
+  const [freezeError, setFreezeError] = useState(false);
+  const strokeRef = useRef<{ id: string; pending: Point[] } | null>(null);
+  const flushFrameRef = useRef<number | null>(null);
   const { marker, show: showMarker } = usePointerMarker();
 
   useEffect(() => {
@@ -103,6 +116,11 @@ export function CallPanel({
       localStream: mic,
       onState: (call) => {
         lastCallRef.current = call;
+        // 연결이 바뀌면 고객 쪽 정지 화면도 사라지므로 이쪽도 풀어 둔다
+        if (call !== "connected") {
+          setFrozen(null);
+          setStrokes([]);
+        }
         if (call === "connected") {
           setEverConnected(true);
           setConfirmClose(false);
@@ -167,11 +185,87 @@ export function CallPanel({
     if (!pos) return;
     session.sendPointer(pos);
     showMarker(video, pos);
-    if (!pointerLoggedRef.current) {
-      pointerLoggedRef.current = true;
-      logPointerUsed(roomId).catch(() => {});
+    logToolOnce("pointer_used");
+  }
+
+  function logToolOnce(name: "pointer_used" | "freeze_used") {
+    if (toolsLoggedRef.current.has(name)) return;
+    toolsLoggedRef.current.add(name);
+    logToolUsed(roomId, name).catch(() => {});
+  }
+
+  // 지금 보이는 장면을 떠서 고객 화면에도 같은 정지 화면을 띄운다
+  function freeze() {
+    const video = videoRef.current;
+    const session = sessionRef.current;
+    if (!video || !session || lastCallRef.current !== "connected") return;
+    const image = captureFrame(video);
+    if (!image || !session.sendFreeze(image)) {
+      setFreezeError(true);
+      return;
+    }
+    setFreezeError(false);
+    setFrozen(image);
+    setStrokes([]);
+    logToolOnce("freeze_used");
+  }
+
+  function resume() {
+    flushStroke();
+    sessionRef.current?.sendDraw({ t: "resume" });
+    setFrozen(null);
+    setStrokes([]);
+  }
+
+  function undo() {
+    const last = strokes[strokes.length - 1];
+    if (!last) return;
+    sessionRef.current?.sendDraw({ t: "undo", id: last.id });
+    setStrokes((s) => applyDrawCommand(s, { t: "undo", id: last.id }));
+  }
+
+  function clearDrawing() {
+    sessionRef.current?.sendDraw({ t: "clear" });
+    setStrokes([]);
+  }
+
+  // 그리는 중인 선은 화면 갱신 주기마다 모아서 보낸다
+  function flushStroke() {
+    if (flushFrameRef.current !== null) {
+      cancelAnimationFrame(flushFrameRef.current);
+      flushFrameRef.current = null;
+    }
+    const st = strokeRef.current;
+    if (!st || !st.pending.length) return;
+    sessionRef.current?.sendDraw({ t: "stroke", id: st.id, pts: st.pending });
+    st.pending = [];
+  }
+
+  function addPoint(p: Point) {
+    const st = strokeRef.current;
+    if (!st) return;
+    st.pending.push(p);
+    setStrokes((s) => applyDrawCommand(s, { t: "stroke", id: st.id, pts: [p] }));
+    if (flushFrameRef.current === null) {
+      flushFrameRef.current = requestAnimationFrame(() => {
+        flushFrameRef.current = null;
+        flushStroke();
+      });
     }
   }
+
+  const drawHandlers: DrawHandlers = {
+    start: (p) => {
+      flushStroke();
+      strokeRef.current = { id: crypto.randomUUID(), pending: [] };
+      addPoint(p);
+    },
+    move: addPoint,
+    end: () => {
+      flushStroke();
+      strokeRef.current = null;
+    },
+  };
 
   // 고객에게 종료를 알리고 이쪽 연결·마이크를 정리한다.
   // 세션이 없어도(연결 준비 전, 새로고침 후) 기다리던 고객 화면이 '상담이 끝났습니다'로 바뀌어야 한다
@@ -384,7 +478,7 @@ export function CallPanel({
       <section className="mt-2 flex flex-1 flex-col gap-3">
         {turnWarning}
         <div
-          onPointerDown={pointAt}
+          onPointerDown={frozen ? undefined : pointAt}
           className="relative min-h-[50vh] flex-1 touch-none overflow-hidden rounded-2xl bg-black"
         >
           <video
@@ -393,7 +487,16 @@ export function CallPanel({
             playsInline
             className="absolute inset-0 h-full w-full object-contain"
           />
-          <PointerMarker marker={marker} size={56} />
+          {frozen ? (
+            <FreezeCanvas
+              image={frozen}
+              strokes={strokes}
+              lineWidth={6}
+              draw={drawHandlers}
+            />
+          ) : (
+            <PointerMarker marker={marker} size={56} />
+          )}
           {call !== "connected" && (
             <p className="absolute inset-0 flex items-center justify-center text-white/70">
               연결 중…
@@ -402,13 +505,52 @@ export function CallPanel({
         </div>
         {call === "connected" && (
           <p className="text-center text-sm text-gray-400">
-            영상을 누르면 고객님 화면에 빨간 동그라미가 표시돼요
+            {frozen
+              ? "손가락으로 그리면 고객님 화면에도 보여요"
+              : "영상을 누르면 고객님 화면에 빨간 동그라미가 표시돼요"}
+          </p>
+        )}
+        {freezeError && !frozen && (
+          <p role="alert" className="text-center text-sm text-red-600">
+            연결이 불안정해 화면을 멈추지 못했어요. 다시 눌러주세요.
           </p>
         )}
         {confirmClose ? (
           closeConfirm
         ) : (
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {call === "connected" &&
+              (frozen ? (
+                <>
+                  <button
+                    onClick={resume}
+                    className="h-14 rounded-xl bg-blue-600 px-4 text-base font-semibold text-white active:opacity-80"
+                  >
+                    ▶ 다시 보기
+                  </button>
+                  <button
+                    onClick={undo}
+                    disabled={!strokes.length}
+                    className="h-14 rounded-xl border border-gray-300 px-3 text-base text-gray-700 disabled:opacity-40"
+                  >
+                    ↶ 되돌리기
+                  </button>
+                  <button
+                    onClick={clearDrawing}
+                    disabled={!strokes.length}
+                    className="h-14 rounded-xl border border-gray-300 px-3 text-base text-gray-700 disabled:opacity-40"
+                  >
+                    지우기
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={freeze}
+                  className="h-14 rounded-xl bg-gray-800 px-4 text-base font-semibold text-white active:opacity-80"
+                >
+                  ⏸ 멈추고 그리기
+                </button>
+              ))}
             {!micOn && (
               <span className="text-sm text-amber-600">
                 마이크 꺼짐(보기만)
