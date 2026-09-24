@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isJoinToken } from "@/lib/join-token";
 
 // ICE 서버 목록 발급. TURN 자격증명은 서버에서만 다루고
 // 클라이언트엔 단기(2h) 토큰만 내려준다.
@@ -25,15 +26,15 @@ function dropPort53(server: RTCIceServer): RTCIceServer {
 }
 
 export async function GET(request: Request) {
-  const code = new URL(request.url).searchParams.get("code")?.toUpperCase();
-  if (!code) {
-    return NextResponse.json({ error: "code required" }, { status: 400 });
+  const token = new URL(request.url).searchParams.get("t");
+  if (!isJoinToken(token)) {
+    return NextResponse.json({ error: "token required" }, { status: 400 });
   }
 
   const { data: room, error } = await createAdminClient()
     .from("rooms")
     .select("id, status, expires_at")
-    .eq("code", code)
+    .eq("join_token", token)
     .maybeSingle();
 
   // 404는 '세션이 끝났다'는 뜻으로 쓰이므로(고객 화면이 종료 안내로 바뀜) 조회 오류와 구분한다

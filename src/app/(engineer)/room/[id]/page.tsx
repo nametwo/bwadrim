@@ -22,7 +22,7 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
   // RLS가 자기 방만 돌려준다
   const { data: room } = await supabase
     .from("rooms")
-    .select("id, code, status, created_at, expires_at")
+    .select("id, code, join_token, status, created_at, expires_at")
     .eq("id", id)
     .single();
 
@@ -54,7 +54,7 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
   const h = await headers();
   const host = h.get("host") ?? "localhost:3000";
   const proto = h.get("x-forwarded-proto") ?? "http";
-  const joinUrl = `${proto}://${host}/join/${room.code}`;
+  const joinUrl = `${proto}://${host}/join/${room.join_token}`;
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-sm flex-col gap-6 px-6 py-8">
@@ -84,7 +84,7 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
 
       <CallPanel
         roomId={room.id}
-        code={room.code}
+        joinToken={room.join_token}
         everConnected={room.status === "active"}
       />
     </main>

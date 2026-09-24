@@ -30,11 +30,12 @@ const CONFIRM_ARM_MS = 600;
 // 엔지니어 통화 패널. 폰 한 손 조작 기준: 버튼 크게, 도구 최소.
 export function CallPanel({
   roomId,
-  code,
+  joinToken,
   everConnected: initialEverConnected,
 }: {
   roomId: string;
-  code: string;
+  // 고객 링크 토큰. TURN 자격증명 발급에 쓴다
+  joinToken: string;
   // 이미 '연결됨'인 세션인지. 한 번도 연결 안 된 세션은 원격 해결 여부를 묻지 않는다
   everConnected: boolean;
 }) {
@@ -106,7 +107,7 @@ export function CallPanel({
     } catch {
       // 마이크 거부/없음 — 영상 보기만이라도 진행
     }
-    const ice = await fetchIceServers(code);
+    const ice = await fetchIceServers(joinToken);
     if (unmountedRef.current) {
       mic?.getTracks().forEach((t) => t.stop());
       releaseWakeLockRef.current?.();

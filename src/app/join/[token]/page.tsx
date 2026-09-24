@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logEvent } from "@/lib/events";
 import { detectInApp } from "@/lib/in-app-browser";
+import { isJoinToken } from "@/lib/join-token";
 import { CameraStart } from "./camera-start";
 import { OpenInBrowser } from "./open-in-browser";
 
@@ -11,24 +12,26 @@ export const metadata: Metadata = {
 };
 
 // 고객 진입. 로그인·설치 없음 — 링크 클릭 → 버튼 한 번 → 카메라.
-export default async function JoinPage({ params }: PageProps<"/join/[code]">) {
-  const { code } = await params;
-  const normalized = code.toUpperCase();
+export default async function JoinPage({ params }: PageProps<"/join/[token]">) {
+  const { token } = await params;
 
   let room: { id: string; status: string; expires_at: string } | null = null;
   let lookupFailed = false;
 
-  try {
-    const { data, error } = await createAdminClient()
-      .from("rooms")
-      .select("id, status, expires_at")
-      .eq("code", normalized)
-      .maybeSingle();
-    if (error) throw error;
-    room = data;
-  } catch (e) {
-    console.error("[join] 방 조회 실패:", e);
-    lookupFailed = true;
+  // 형식이 틀리면(예전 6자리 링크 포함) DB에 묻지 않고 '주소를 확인해 주세요'
+  if (isJoinToken(token)) {
+    try {
+      const { data, error } = await createAdminClient()
+        .from("rooms")
+        .select("id, status, expires_at")
+        .eq("join_token", token)
+        .maybeSingle();
+      if (error) throw error;
+      room = data;
+    } catch (e) {
+      console.error("[join] 방 조회 실패:", e);
+      lookupFailed = true;
+    }
   }
 
   if (lookupFailed) {
@@ -63,9 +66,9 @@ export default async function JoinPage({ params }: PageProps<"/join/[code]">) {
   await logEvent(room.id, "customer", "link_opened", { ua, inapp: inApp });
 
   if (inApp) {
-    return <OpenInBrowser kind={inApp} roomId={room.id} code={normalized} />;
+    return <OpenInBrowser kind={inApp} roomId={room.id} token={token} />;
   }
-  return <CameraStart roomId={room.id} code={normalized} />;
+  return <CameraStart roomId={room.id} token={token} />;
 }
 
 function Notice({

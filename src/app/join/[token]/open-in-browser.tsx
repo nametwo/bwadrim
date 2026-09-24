@@ -13,11 +13,11 @@ import { CameraStart } from "./camera-start";
 export function OpenInBrowser({
   kind,
   roomId,
-  code,
+  token,
 }: {
   kind: InAppKind;
   roomId: string;
-  code: string;
+  token: string;
 }) {
   const [stay, setStay] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -48,7 +48,7 @@ export function OpenInBrowser({
     }
   }
 
-  if (stay) return <CameraStart roomId={roomId} code={code} />;
+  if (stay) return <CameraStart roomId={roomId} token={token} />;
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-5 px-8 text-center">

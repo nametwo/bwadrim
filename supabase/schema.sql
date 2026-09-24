@@ -6,7 +6,7 @@ create extension if not exists "pgcrypto";
 -- 방(세션). 엔지니어만 생성. 고객은 code로 접근.
 create table if not exists rooms (
   id          uuid primary key default gen_random_uuid(),
-  code        text unique not null,                 -- 초대 URL용 짧은 코드
+  code        text unique not null,                 -- 화면 표시용 6자리 코드 (링크는 join_token)
   engineer_id uuid not null references auth.users(id) on delete cascade,
   customer_name  text,
   customer_phone text,
@@ -19,6 +19,11 @@ create table if not exists rooms (
 );
 
 create index if not exists rooms_engineer_idx on rooms(engineer_id, created_at desc);
+
+-- 고객 링크(/join/{join_token})용 추측 불가능한 값 (32자리 16진수, 약 122비트).
+-- 6자리 code는 화면 표시용으로만 쓴다. 기존 행에도 각각 새 값이 채워진다
+alter table rooms add column if not exists join_token text not null unique
+  default replace(gen_random_uuid()::text, '-', '');
 
 -- 지표 이벤트. 나중에 과금/최적화 근거.
 create table if not exists events (

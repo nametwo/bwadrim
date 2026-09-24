@@ -9,9 +9,10 @@ export interface IceConfig {
 const STUN_ONLY: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
 
 // 클라이언트에서 ICE 서버 목록을 받아온다 (TURN 단기 자격증명 포함)
-export async function fetchIceServers(code: string): Promise<IceConfig> {
+// joinToken: 고객 링크의 토큰. 유효한(종료·만료 전) 세션에만 발급된다
+export async function fetchIceServers(joinToken: string): Promise<IceConfig> {
   try {
-    const res = await fetch(`/api/turn?code=${encodeURIComponent(code)}`, {
+    const res = await fetch(`/api/turn?t=${encodeURIComponent(joinToken)}`, {
       cache: "no-store",
     });
     if (res.status === 404) {

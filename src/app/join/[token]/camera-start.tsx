@@ -21,10 +21,10 @@ type Phase = "ready" | "starting" | "call" | "denied" | "gone";
 // getUserMedia는 반드시 버튼 탭(사용자 제스처) 이후 호출 (iOS 정책)
 export function CameraStart({
   roomId,
-  code,
+  token,
 }: {
   roomId: string;
-  code: string;
+  token: string;
 }) {
   const [phase, setPhase] = useState<Phase>("ready");
   const [callState, setCallState] = useState<CallState>("waiting");
@@ -75,7 +75,7 @@ export function CameraStart({
     fetch("/api/events", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, name, props }),
+      body: JSON.stringify({ token, name, props }),
       keepalive: true,
     }).catch(() => {});
   }
@@ -100,7 +100,7 @@ export function CameraStart({
     streamRef.current = stream;
     postEvent("camera_granted");
 
-    const ice = await fetchIceServers(code);
+    const ice = await fetchIceServers(token);
     // 링크를 연 뒤 세션이 닫혔거나 만료됐다 — 종료 알림(bye)은 채널에 들어오기 전이라 받지 못했다
     if (ice.roomGone) {
       stream.getTracks().forEach((t) => t.stop());
