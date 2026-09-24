@@ -30,11 +30,17 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "code required" }, { status: 400 });
   }
 
-  const { data: room } = await createAdminClient()
+  const { data: room, error } = await createAdminClient()
     .from("rooms")
     .select("id, status, expires_at")
     .eq("code", code)
     .maybeSingle();
+
+  // 404는 '세션이 끝났다'는 뜻으로 쓰이므로(고객 화면이 종료 안내로 바뀜) 조회 오류와 구분한다
+  if (error) {
+    console.error("[turn] 방 조회 실패:", error);
+    return NextResponse.json({ error: "lookup failed" }, { status: 503 });
+  }
 
   if (
     !room ||

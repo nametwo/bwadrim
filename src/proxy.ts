@@ -35,15 +35,22 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const { pathname } = request.nextUrl;
+  // 서버 액션 요청은 돌려보내지 않는다. 리다이렉트되면 액션이 알 수 없는 응답으로 실패해
+  // '로그인 필요'를 알릴 수 없다. 로그인 확인은 각 액션이 한다
+  const isServerAction = request.headers.has("next-action");
 
-  if (!user && PROTECTED_PREFIXES.some((p) => pathname.startsWith(p))) {
+  if (
+    !user &&
+    !isServerAction &&
+    PROTECTED_PREFIXES.some((p) => pathname.startsWith(p))
+  ) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("next", pathname);
     return NextResponse.redirect(url);
   }
 
-  if (user && pathname === "/login") {
+  if (user && !isServerAction && pathname === "/login") {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     url.search = "";

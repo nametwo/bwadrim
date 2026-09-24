@@ -12,6 +12,10 @@ type PanelState =
   // 종료 후 확인. by: 누가 끝냈는지
   | { phase: "confirm-end"; by: "engineer" | "customer" };
 
+// 확인 화면이 뜬 직후의 탭은 무시한다. 종료 버튼을 두 번 누르면 두 번째 탭이
+// 같은 자리에 뜬 답 버튼('아니요, 출장 필요')에 떨어져 핵심 지표가 잘못 저장된다
+const CONFIRM_ARM_MS = 600;
+
 // 엔지니어 통화 패널. 폰 한 손 조작 기준: 버튼 크게, 도구 최소.
 export function CallPanel({
   roomId,
@@ -36,8 +40,12 @@ export function CallPanel({
   const micStreamRef = useRef<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
-  // 화면을 떠난 뒤 늦게 끝난 start()가 세션을 만들지 않게 한다
+  // 화면을 떠난 뒤 늦게 끝난 start()·finish()가 세션을 만들거나 화면을 옮기지 않게 한다
   const unmountedRef = useRef(false);
+  // 저장 중에는 고객이 다시 들어와도 확인 화면에 머문다
+  const endingRef = useRef(false);
+  const lastCallRef = useRef<CallState>("waiting");
+  const confirmShownAtRef = useRef(0);
 
   useEffect(() => {
     unmountedRef.current = false;
@@ -84,15 +92,21 @@ export function CallPanel({
       iceServers: ice.iceServers,
       localStream: mic,
       onState: (call) => {
+        lastCallRef.current = call;
         if (call === "connected") {
           setEverConnected(true);
           setConfirmClose(false);
           markRoomActive(roomId);
         }
+        if (call === "ended") {
+          confirmShownAtRef.current = Date.now();
+          setSaveError(false);
+        }
         setState((prev) => {
           if (prev.phase === "confirm-end") {
             // 고객이 종료한 뒤 링크를 다시 열고 들어오면 통화로 돌아간다
             return prev.by === "customer" &&
+              !endingRef.current &&
               (call === "connecting" || call === "connected")
               ? { phase: "call", call, peerPresent: true }
               : prev;
@@ -136,47 +150,80 @@ export function CallPanel({
     stopSession();
   }
 
+  function showConfirm() {
+    confirmShownAtRef.current = Date.now();
+    setSaveError(false);
+  }
+
+  function justShown() {
+    return Date.now() - confirmShownAtRef.current < CONFIRM_ARM_MS;
+  }
+
   // 통화를 끊고 '출장 없이 해결됐나요?'로
   function endCall() {
     hangupAndStop();
+    showConfirm();
     setConfirmClose(false);
     setState({ phase: "confirm-end", by: "engineer" });
   }
 
   // 연결된 적 있으면 해결 여부를 묻고, 없으면 닫을지만 확인한다
   function requestEnd() {
-    if (everConnected) endCall();
-    else setConfirmClose(true);
+    if (everConnected) {
+      endCall();
+    } else {
+      showConfirm();
+      setConfirmClose(true);
+    }
   }
 
   // 연결은 저장이 성공해 화면을 떠날 때 정리된다(언마운트). 그래야 저장에 실패해도
   // 고객이 먼저 끊은 경우 계속 기다렸다가 이어받을 수 있다
   async function finish(resolvedRemotely: boolean | null) {
+    if (justShown() || endingRef.current) return;
+    endingRef.current = true;
     setEnding(true);
     setSaveError(false);
+    let result: Awaited<ReturnType<typeof endRoom>> | null = null;
     try {
-      const result = await endRoom(roomId, resolvedRemotely);
-      if (result.ok) {
-        router.replace("/dashboard");
-        return;
-      }
-      if (result.reason === "auth") {
-        router.replace("/login");
-        return;
-      }
+      result = await endRoom(roomId, resolvedRemotely);
     } catch {
       // 네트워크 오류 — 아래에서 안내
     }
+    if (unmountedRef.current) return;
+    if (result?.ok) {
+      // 저장 중에 고객이 다시 들어왔을 수 있다 — 떠나기 전에 종료를 알린다
+      sessionRef.current?.hangup();
+      stopSession();
+      router.replace("/dashboard");
+      return;
+    }
+    if (result?.reason === "auth") {
+      router.replace("/login");
+      return;
+    }
+    endingRef.current = false;
     setEnding(false);
     setSaveError(true);
+    // 저장 중 고객이 다시 들어와 연결됐으면 통화 화면으로 돌아간다
+    const last = lastCallRef.current;
+    if (sessionRef.current && (last === "connecting" || last === "connected")) {
+      setState((prev) =>
+        prev.phase === "confirm-end" && prev.by === "customer"
+          ? { phase: "call", call: last, peerPresent: true }
+          : prev,
+      );
+    }
   }
 
   // 한 번도 연결되지 않은 세션 닫기. 고객에게 이미 알렸으므로 되돌릴 수 없고,
   // 저장이 실패하면 확인 화면에서 다시 누르게 한다
   function closeSession() {
+    if (justShown()) return;
     hangupAndStop();
     setConfirmClose(false);
     setState({ phase: "confirm-end", by: "engineer" });
+    confirmShownAtRef.current = 0; // 방금 확인한 결정이므로 대기 없이 저장
     finish(null);
   }
 

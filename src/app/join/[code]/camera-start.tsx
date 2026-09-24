@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { CallSession, type CallState } from "@/lib/webrtc/call";
 import { fetchIceServers } from "@/lib/webrtc/ice";
 
-type Phase = "ready" | "starting" | "call" | "denied";
+type Phase = "ready" | "starting" | "call" | "denied" | "gone";
 
 // 고객 화면: 한 화면에 한 가지 행동. 큰 버튼 하나 → 카메라 → 자동 연결.
 // getUserMedia는 반드시 버튼 탭(사용자 제스처) 이후 호출 (iOS 정책)
@@ -52,6 +52,12 @@ export function CameraStart({
     postEvent("camera_granted");
 
     const ice = await fetchIceServers(code);
+    // 링크를 연 뒤 세션이 닫혔거나 만료됐다 — 종료 알림(bye)은 채널에 들어오기 전이라 받지 못했다
+    if (ice.roomGone) {
+      stream.getTracks().forEach((t) => t.stop());
+      setPhase("gone");
+      return;
+    }
     const session = new CallSession({
       roomId,
       role: "customer",
@@ -130,6 +136,17 @@ export function CameraStart({
       streamRef.current?.getTracks().forEach((t) => t.stop());
     };
   }, []);
+
+  if (phase === "gone") {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-8 text-center">
+        <h1 className="text-2xl font-bold">종료된 연결이에요</h1>
+        <p className="text-lg text-gray-600">
+          기사님께 새 링크를 보내달라고 말씀해 주세요.
+        </p>
+      </main>
+    );
+  }
 
   if (phase === "denied") {
     return (
