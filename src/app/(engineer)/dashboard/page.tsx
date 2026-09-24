@@ -13,7 +13,16 @@ const STATUS_LABEL: Record<string, string> = {
   waiting: "대기 중",
   active: "연결됨",
   ended: "종료",
+  expired: "만료",
 };
+
+// 종료 처리 안 한 채 24시간이 지난 세션은 고객 링크가 막혔으므로 '만료'로 보여 준다 (DB 상태는 그대로)
+function displayStatus(room: { status: string; expires_at: string }) {
+  if (room.status !== "ended" && new Date(room.expires_at) < new Date()) {
+    return "expired";
+  }
+  return room.status;
+}
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -26,7 +35,7 @@ export default async function DashboardPage() {
 
   const { data: rooms } = await supabase
     .from("rooms")
-    .select("id, code, status, resolved_remotely, created_at")
+    .select("id, code, status, resolved_remotely, created_at, expires_at")
     .order("created_at", { ascending: false })
     .limit(20);
 
@@ -72,7 +81,9 @@ export default async function DashboardPage() {
                       {room.code}
                     </span>
                     <span className="text-sm text-gray-400">
+                      {/* 서버(Vercel)는 UTC라서 시간대를 지정하지 않으면 9시간 이르게 보인다 */}
                       {new Date(room.created_at).toLocaleString("ko-KR", {
+                        timeZone: "Asia/Seoul",
                         month: "short",
                         day: "numeric",
                         hour: "2-digit",
@@ -81,17 +92,22 @@ export default async function DashboardPage() {
                       {room.resolved_remotely && " · 원격 해결"}
                     </span>
                   </div>
-                  <span
-                    className={`rounded-full px-3 py-1 text-sm ${
-                      room.status === "active"
-                        ? "bg-green-100 text-green-700"
-                        : room.status === "waiting"
-                          ? "bg-amber-100 text-amber-700"
-                          : "bg-gray-100 text-gray-500"
-                    }`}
-                  >
-                    {STATUS_LABEL[room.status] ?? room.status}
-                  </span>
+                  {(() => {
+                    const status = displayStatus(room);
+                    return (
+                      <span
+                        className={`rounded-full px-3 py-1 text-sm ${
+                          status === "active"
+                            ? "bg-green-100 text-green-700"
+                            : status === "waiting"
+                              ? "bg-amber-100 text-amber-700"
+                              : "bg-gray-100 text-gray-500"
+                        }`}
+                      >
+                        {STATUS_LABEL[status] ?? status}
+                      </span>
+                    );
+                  })()}
                 </Link>
               </li>
             ))}

@@ -28,7 +28,10 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
 
   if (!room) notFound();
 
-  if (room.status === "ended") {
+  const expired = new Date(room.expires_at) < new Date();
+
+  // 종료됐거나, 종료 처리 없이 24시간이 지나 고객 링크가 막힌 세션
+  if (room.status === "ended" || expired) {
     return (
       <main className="mx-auto flex min-h-screen w-full max-w-sm flex-col gap-6 px-6 py-8">
         <header className="flex items-center gap-3">
@@ -38,7 +41,11 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
           <h1 className="text-xl font-bold">원격 A/S</h1>
         </header>
         <p className="py-16 text-center text-gray-400">
-          종료된 세션입니다. 새 세션은 대시보드에서 시작하세요.
+          {room.status === "ended"
+            ? "종료된 세션입니다."
+            : "만료된 세션입니다. 만든 지 24시간이 지나 고객 링크가 더 이상 열리지 않아요."}
+          <br />
+          새 세션은 대시보드에서 시작하세요.
         </p>
       </main>
     );
