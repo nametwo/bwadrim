@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CallSession, type CallState } from "@/lib/webrtc/call";
+import { useRouter } from "next/navigation";
+import { CallSession, sendBye, type CallState } from "@/lib/webrtc/call";
 import { fetchIceServers } from "@/lib/webrtc/ice";
 import { endRoom, markRoomActive } from "./actions";
 
@@ -22,6 +23,7 @@ export function CallPanel({
   // 이미 '연결됨'인 세션인지. 한 번도 연결 안 된 세션은 원격 해결 여부를 묻지 않는다
   everConnected: boolean;
 }) {
+  const router = useRouter();
   const [state, setState] = useState<PanelState>({ phase: "idle" });
   const [everConnected, setEverConnected] = useState(initialEverConnected);
   const [micOn, setMicOn] = useState(false);
@@ -34,9 +36,13 @@ export function CallPanel({
   const micStreamRef = useRef<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+  // 화면을 떠난 뒤 늦게 끝난 start()가 세션을 만들지 않게 한다
+  const unmountedRef = useRef(false);
 
   useEffect(() => {
+    unmountedRef.current = false;
     return () => {
+      unmountedRef.current = true;
       sessionRef.current?.destroy();
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
     };
@@ -61,14 +67,16 @@ export function CallPanel({
     let mic: MediaStream | null = null;
     try {
       mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-      micStreamRef.current = mic;
-      setMicOn(true);
     } catch {
       // 마이크 거부/없음 — 영상 보기만이라도 진행
-      setMicOn(false);
     }
-
     const ice = await fetchIceServers(code);
+    if (unmountedRef.current) {
+      mic?.getTracks().forEach((t) => t.stop());
+      return;
+    }
+    micStreamRef.current = mic;
+    setMicOn(!!mic);
     setTurnError(ice.turnError);
     const session = new CallSession({
       roomId,
@@ -120,10 +128,17 @@ export function CallPanel({
     micStreamRef.current = null;
   }
 
+  // 고객에게 종료를 알리고 이쪽 연결·마이크를 정리한다.
+  // 세션이 없어도(연결 준비 전, 새로고침 후) 기다리던 고객 화면이 '상담이 끝났습니다'로 바뀌어야 한다
+  function hangupAndStop() {
+    if (sessionRef.current) sessionRef.current.hangup();
+    else sendBye(roomId, "engineer").catch(() => {});
+    stopSession();
+  }
+
   // 통화를 끊고 '출장 없이 해결됐나요?'로
   function endCall() {
-    sessionRef.current?.hangup();
-    stopSession();
+    hangupAndStop();
     setConfirmClose(false);
     setState({ phase: "confirm-end", by: "engineer" });
   }
@@ -134,21 +149,34 @@ export function CallPanel({
     else setConfirmClose(true);
   }
 
+  // 연결은 저장이 성공해 화면을 떠날 때 정리된다(언마운트). 그래야 저장에 실패해도
+  // 고객이 먼저 끊은 경우 계속 기다렸다가 이어받을 수 있다
   async function finish(resolvedRemotely: boolean | null) {
-    stopSession();
     setEnding(true);
     setSaveError(false);
     try {
-      await endRoom(roomId, resolvedRemotely); // 성공 시 대시보드로 redirect
+      const result = await endRoom(roomId, resolvedRemotely);
+      if (result.ok) {
+        router.replace("/dashboard");
+        return;
+      }
+      if (result.reason === "auth") {
+        router.replace("/login");
+        return;
+      }
     } catch {
-      setEnding(false);
-      setSaveError(true);
+      // 네트워크 오류 — 아래에서 안내
     }
+    setEnding(false);
+    setSaveError(true);
   }
 
-  // 한 번도 연결되지 않은 세션 닫기. 기다리던 고객 화면도 '상담이 끝났습니다'로 바뀐다
+  // 한 번도 연결되지 않은 세션 닫기. 고객에게 이미 알렸으므로 되돌릴 수 없고,
+  // 저장이 실패하면 확인 화면에서 다시 누르게 한다
   function closeSession() {
-    sessionRef.current?.hangup();
+    hangupAndStop();
+    setConfirmClose(false);
+    setState({ phase: "confirm-end", by: "engineer" });
     finish(null);
   }
 
@@ -202,7 +230,8 @@ export function CallPanel({
         </p>
         <button
           onClick={requestEnd}
-          className="mx-auto mt-2 px-4 py-2 text-sm text-gray-500 underline"
+          disabled={starting}
+          className="mx-auto mt-2 px-4 py-2 text-sm text-gray-500 underline disabled:opacity-40"
         >
           {endLabel}
         </button>

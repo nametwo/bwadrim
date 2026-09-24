@@ -26,6 +26,21 @@ export interface CallSessionOptions {
   onPeerPresent?: (present: boolean) => void;
 }
 
+// 통화 세션 없이(연결 준비 전, 새로고침 후) 상대에게 종료를 알린다.
+// 채널에 들어가지 않고 REST로 보낸다. 세션이 살아 있으면 CallSession.hangup()을 쓸 것 —
+// 같은 토픽의 채널을 재사용하므로 여기서 지우면 살아 있는 세션의 채널까지 지워진다.
+export async function sendBye(roomId: string, from: Role) {
+  const supabase = createClient();
+  const channel = supabase.channel(`room:${roomId}`);
+  try {
+    await channel.httpSend("bye", { from });
+  } catch {
+    await channel.send({ type: "broadcast", event: "bye", payload: { from } });
+  } finally {
+    supabase.removeChannel(channel).catch(() => {});
+  }
+}
+
 export class CallSession {
   private supabase = createClient();
   private channel: RealtimeChannel | null = null;
