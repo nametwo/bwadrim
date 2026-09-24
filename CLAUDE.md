@@ -4,6 +4,16 @@
 
 원격 화상 A/S 웹 서비스. 엔지니어(폰+PC 웹) ↔ 고객(폰 카메라). README.md에 범위·제약·지표가 정리되어 있으니 먼저 읽을 것.
 
+## 기능 요구사항 문서 (필수)
+
+`docs/requirements.md`가 제품 동작의 기준 문서다. 제품 담당자는 코드를 보지 않고 이 문서의 요구사항 ID(예: `CALL-03`)로 소통한다.
+
+- 기능을 추가·수정·삭제하면 **같은 커밋에서** 해당 요구사항을 갱신한다: 문구, 상태(✅/🚧/⬜), 확인 방법, 제약, 관련 코드
+- 새 요구사항은 영역의 다음 번호를 쓴다. 삭제된 기능의 ID는 재사용하지 않고 `폐기`로 표시한다
+- 문서 맨 아래 변경 이력에 날짜와 바뀐 ID를 한 줄로 남긴다
+- 요청이 기존 요구사항과 충돌하면 구현 전에 어느 ID가 어떻게 바뀌는지 먼저 말한다
+- 코드로 확인하지 않은 동작은 ✅로 적지 않는다
+
 ## 원칙
 
 - 고객 쪽은 **로그인·설치·앱 없음**. 링크 클릭 → 버튼 한 번 → 카메라. 탭 두 번 이하
@@ -16,15 +26,18 @@
 ## 구조
 
 ```
+src/proxy.ts                                     # 세션 갱신 + 엔지니어 라우트 보호 (Next 16: middleware → proxy)
 src/app/
-  (engineer)/login, /dashboard, /room/[id]      # 로그인 필요
+  (engineer)/login, /dashboard, /room/[id]      # 로그인 필요. 방 생성·종료는 서버 액션
   join/[code]                                    # 고객 진입, 공개
-  api/rooms                                      # 방 생성, 코드 발급
+  api/turn                                       # 방 코드 검증 후 Cloudflare TURN 단기 자격증명 발급
+  api/events                                     # 고객(비로그인) 쪽 지표 이벤트 수집
 src/lib/
-  supabase/{client,server}.ts
+  supabase/{client,server,admin}.ts              # admin = service role, 서버 전용
   webrtc/                                        # peer 연결, ICE 설정, 시그널링
   events.ts                                      # 지표 이벤트 기록
 supabase/schema.sql
+docs/requirements.md                             # 기능 요구사항 (기준 문서)
 ```
 
 ## 시그널링
