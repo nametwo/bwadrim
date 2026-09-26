@@ -30,17 +30,19 @@ src/proxy.ts                                     # 세션 갱신 + 엔지니어 
 src/app/
   (engineer)/login, /dashboard, /room/[id], /stats  # 로그인 필요. 방 생성·종료는 서버 액션. stats = 핵심 지표(DATA-06)
   join/[token]                                   # 고객 진입, 공개. 32자리 링크 토큰(ROOM-12)
+  lab/track                                      # 추적 실험실(CALL-14), 공개·검색 제외. AR 핀을 폰에서 시험하는 임시 페이지
   api/turn                                       # 링크 토큰 검증 후 Cloudflare TURN 단기 자격증명 발급
   api/events                                     # 고객(비로그인) 쪽 지표 이벤트 수집
 src/lib/
   supabase/{client,server,admin}.ts              # admin = service role, 서버 전용
-  webrtc/                                        # peer 연결, ICE 설정, 시그널링, 포인터 좌표(pointer.ts), 화면 멈춤·그리기(draw.ts), 카메라 전환·손전등(camera.ts)
+  webrtc/                                        # peer 연결, ICE 설정, 시그널링, 포인터 좌표(pointer.ts), 화면 멈춤·그리기(draw.ts), 카메라 전환·손전등(camera.ts), DataChannel 래퍼(data-link.ts)
+  tracking/                                      # 평면 앵커 추적(AR 핀, CALL-14). 설계는 tracking/README.md, 벤치는 scripts/tracking-bench
   join-token.ts                                  # 고객 링크 토큰 형식 검사
   wake-lock.ts                                   # 통화 중 화면 꺼짐 방지
   in-app-browser.ts                              # 카톡 등 인앱 브라우저 감지·외부 브라우저로 열기
   events.ts                                      # 지표 이벤트 기록
   metrics.ts                                     # 핵심 지표 계산 (통계 화면)
-src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기)
+src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기). call/·anchor-overlay는 AR 핀용(아직 /lab/track에서만 씀)
 supabase/schema.sql
 docs/requirements.md                             # 기능 요구사항 (기준 문서)
 ```

@@ -1,0 +1,32 @@
+{
+  "$comment": "E2E 가짜 Supabase 고정 데이터 (e2e/mock-supabase.mjs와 테스트가 함께 읽는다). 진짜 키가 아니다.",
+  "supabasePort": 54329,
+  "anonKey": "e2e-anon-key",
+  "serviceKey": "e2e-service-key",
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJlMmUwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwicm9sZSI6ImF1dGhlbnRpY2F0ZWQiLCJlbWFpbCI6ImVuZ2luZWVyQGUyZS50ZXN0IiwiZXhwIjo0MTAyNDQ0ODAwLCJpYXQiOjE3NjcyMjU2MDAsInNlc3Npb25faWQiOiJlMmUtc2Vzc2lvbiJ9.ZTJlLXNpZ25hdHVyZQ",
+  "refreshToken": "e2e-refresh-token",
+  "user": {
+    "id": "e2e00000-0000-4000-8000-000000000001",
+    "aud": "authenticated",
+    "role": "authenticated",
+    "email": "engineer@e2e.test",
+    "app_metadata": {
+      "provider": "email"
+    },
+    "user_metadata": {},
+    "created_at": "2026-01-01T00:00:00Z"
+  },
+  "rooms": [
+    {
+      "id": "e2e00000-0000-4000-8000-00000000a001",
+      "code": "E2EAAA",
+      "status": "waiting"
+    },
+    {
+      "id": "e2e00000-0000-4000-8000-00000000a002",
+      "code": "E2EEXP",
+      "status": "waiting",
+      "expired": true
+    }
+  ]
+}
