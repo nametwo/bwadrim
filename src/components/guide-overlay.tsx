@@ -149,7 +149,13 @@ export function GuideOverlay({ view }: { view: GuideView }) {
         </div>
       )}
       {view && text && (
-        <div key={`b${view.key}`} className={s.band} aria-hidden="true">
+        <div
+          key={`b${view.key}`}
+          className={s.band}
+          aria-hidden="true"
+          data-testid="guide-band"
+          data-cmd={view.kind === "cmd" ? view.cmd : "still"}
+        >
           <div className={s.main}>{text.main}</div>
           <div className={s.sub}>{text.sub}</div>
         </div>

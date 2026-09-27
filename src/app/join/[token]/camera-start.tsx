@@ -12,6 +12,8 @@ import {
   CustomerAnchorLayer,
   type CustomerAnchorBanner,
 } from "@/components/anchor/customer-anchor";
+import { GuideOverlay, useGuideReceiver } from "@/components/guide-overlay";
+import { isGuideMsg } from "@/lib/webrtc/guide";
 import {
   setTorch,
   switchCamera,
@@ -56,6 +58,9 @@ export function CameraStart({
   // 기사님이 길게 눌러 꽂은 AR 핀 (CALL-14). 핀 안내(카드·화살표)가 뜨면 상태 문구는 숨긴다
   const [anchorLink, setAnchorLink] = useState<DataLink | null>(null);
   const [anchorBanner, setAnchorBanner] = useState<CustomerAnchorBanner>(null);
+  // 기사님이 십자키를 누르고 있는 동안의 방향 지시 (CALL-15, 전용 채널 'guide')
+  const [guideLink, setGuideLink] = useState<DataLink | null>(null);
+  const { view: guideView, receive: receiveGuide, reset: resetGuide } = useGuideReceiver();
 
   function releaseWakeLock() {
     releaseWakeLockRef.current?.();
@@ -127,6 +132,7 @@ export function CameraStart({
         if (s !== "connected") {
           setFrozen(null);
           setStrokes([]);
+          resetGuide();
         }
         if (s === "connected") {
           reportCamera();
@@ -164,6 +170,7 @@ export function CameraStart({
     });
     sessionRef.current = session;
     setAnchorLink(session.anchorLink);
+    setGuideLink(session.guideLink);
     session.join();
     setPhase("call");
   }
@@ -216,6 +223,27 @@ export function CameraStart({
     releaseWakeLock();
     setCallState("ended");
   }
+
+  // 방향 지시 수신. 채널이 닫히면(재연결) 바로 지운다 — 다시 누르면 새 hold가 온다
+  useEffect(() => {
+    if (!guideLink) return;
+    const offMsg = guideLink.onMessage((data) => {
+      if (typeof data !== "string") return;
+      try {
+        const m: unknown = JSON.parse(data);
+        if (isGuideMsg(m)) receiveGuide(m);
+      } catch {
+        // 형식이 틀린 메시지는 버린다
+      }
+    });
+    const offOpen = guideLink.onOpenChange((open) => {
+      if (!open) resetGuide();
+    });
+    return () => {
+      offMsg();
+      offOpen();
+    };
+  }, [guideLink, receiveGuide, resetGuide]);
 
   // 로컬 미리보기 연결
   useEffect(() => {
@@ -327,6 +355,8 @@ export function CameraStart({
       );
     }
 
+    // 방향 지시가 떠 있는 동안은 그것만 보여 준다: AR 핀·화살표·카드와 상태 문구를 잠시 숨김 (추적은 계속)
+    const guideShown = !frozen && guideView !== null;
     const statusText =
       anchorBanner === "pin" && !frozen
         ? "빨간 동그라미를 봐주세요"
@@ -339,7 +369,7 @@ export function CameraStart({
           : "기사님을 기다리는 중…";
 
     return (
-      <main className="relative flex min-h-screen flex-col bg-black">
+      <main className="relative flex min-h-screen flex-col bg-black [--guide-bottom:64px]">
         <video
           ref={videoRef}
           data-testid="cust-video"
@@ -352,7 +382,7 @@ export function CameraStart({
           <CustomerAnchorLayer
             video={videoRef}
             link={anchorLink}
-            hidden={!!frozen}
+            hidden={!!frozen || guideShown}
             onBanner={setAnchorBanner}
           />
         )}
@@ -362,11 +392,12 @@ export function CameraStart({
         ) : (
           <PointerMarker marker={marker} size={88} />
         )}
+        <GuideOverlay view={frozen ? null : guideView} />
         <audio ref={audioRef} autoPlay />
 
         <div
           className={`relative mt-4 flex justify-center ${
-            anchorBanner === "card" || anchorBanner === "arrow" ? "invisible" : ""
+            anchorBanner === "card" || anchorBanner === "arrow" || guideShown ? "invisible" : ""
           }`}
         >
           <span

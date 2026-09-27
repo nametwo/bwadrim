@@ -73,10 +73,10 @@ export async function markRoomActive(roomId: string) {
     .eq("status", "waiting");
 }
 
-// 레이저 포인터·화면 멈춤 첫 사용 기록 (세션 화면을 열 때마다 1번씩). 자기 방인지는 RLS로 확인
+// 레이저 포인터·화면 멈춤·AR 핀·방향 지시 첫 사용 기록 (세션 화면을 열 때마다 1번씩). 자기 방인지는 RLS로 확인
 export async function logToolUsed(
   roomId: string,
-  name: "pointer_used" | "freeze_used" | "anchor_used",
+  name: "pointer_used" | "freeze_used" | "anchor_used" | "guide_used",
 ) {
   const supabase = await createClient();
   const {

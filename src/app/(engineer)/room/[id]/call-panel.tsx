@@ -20,6 +20,8 @@ import {
   type EngineerAnchorApi,
 } from "@/components/anchor/engineer-anchor";
 import { LongPressRing } from "@/components/anchor/long-press-ring";
+import { GuideDpad } from "@/components/guide-dpad";
+import type { GuideMsg } from "@/lib/webrtc/guide";
 import { endRoom, logToolUsed, markRoomActive } from "./actions";
 
 type PanelState =
@@ -72,7 +74,7 @@ export function CallPanel({
   const lastCallRef = useRef<CallState>("waiting");
   const confirmShownAtRef = useRef(0);
   const releaseWakeLockRef = useRef<(() => void) | null>(null);
-  const toolsLoggedRef = useRef(new Set<"pointer_used" | "freeze_used" | "anchor_used">());
+  const toolsLoggedRef = useRef(new Set<"pointer_used" | "freeze_used" | "anchor_used" | "guide_used">());
   // 화면 멈춤 + 그리기 (CALL-09)
   const [frozen, setFrozen] = useState<string | null>(null);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
@@ -95,6 +97,8 @@ export function CallPanel({
     done: boolean;
   } | null>(null);
   const [press, setPress] = useState<{ x: number; y: number } | null>(null);
+  // 방향 지시 (CALL-15): 연결마다 같은 전송로(guideLink, 전용 채널 'guide')
+  const [guideLink, setGuideLink] = useState<CallSession["guideLink"] | null>(null);
 
   useEffect(() => {
     unmountedRef.current = false;
@@ -217,6 +221,7 @@ export function CallPanel({
     });
     sessionRef.current = session;
     setAnchorLink(session.anchorLink);
+    setGuideLink(session.guideLink);
     session.join();
     setState({ phase: "call", call: "waiting", peerPresent: false });
     setStarting(false);
@@ -226,6 +231,7 @@ export function CallPanel({
     sessionRef.current?.destroy();
     sessionRef.current = null;
     setAnchorLink(null);
+    setGuideLink(null);
     micStreamRef.current?.getTracks().forEach((t) => t.stop());
     micStreamRef.current = null;
     releaseWakeLockRef.current?.();
@@ -298,7 +304,13 @@ export function CallPanel({
     camTimerRef.current = setTimeout(() => setCamPending(false), 6000);
   }
 
-  function logToolOnce(name: "pointer_used" | "freeze_used" | "anchor_used") {
+  // 방향 지시(CALL-15): 누르는 동안 십자키가 0.4초마다 hold를 보낸다. 닫혀 있으면 send가 false(버림)
+  function sendGuide(msg: GuideMsg) {
+    if (!guideLink || lastCallRef.current !== "connected") return;
+    if (guideLink.send(JSON.stringify(msg)) && msg.kind === "hold") logToolOnce("guide_used");
+  }
+
+  function logToolOnce(name: "pointer_used" | "freeze_used" | "anchor_used" | "guide_used") {
     if (toolsLoggedRef.current.has(name)) return;
     toolsLoggedRef.current.add(name);
     logToolUsed(roomId, name).catch(() => {});
@@ -667,6 +679,16 @@ export function CallPanel({
           <p role="alert" className="text-center text-sm text-red-600">
             연결이 불안정해 화면을 멈추지 못했어요. 다시 눌러주세요.
           </p>
+        )}
+        {call === "connected" && guideLink && (
+          <div className="flex flex-col items-center gap-2 py-1">
+            <GuideDpad onSend={sendGuide} disabled={!!frozen} />
+            <p className="text-center text-sm text-gray-400">
+              {frozen
+                ? "멈춘 화면에서는 방향을 알려 줄 수 없어요"
+                : "누르고 있는 동안 고객님 화면에 방향이 떠요"}
+            </p>
+          </div>
         )}
         {confirmClose ? (
           closeConfirm

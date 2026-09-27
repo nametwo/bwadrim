@@ -11,6 +11,7 @@ export type EventName =
   | "pointer_used"
   | "freeze_used"
   | "anchor_used"
+  | "guide_used"
   | "ended"
   | "resolved_remotely";
 
