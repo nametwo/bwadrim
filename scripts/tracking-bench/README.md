@@ -95,7 +95,7 @@ HTML/CSS/SVG ─Playwright Chromium→ 텍스처 PNG (.cache/textures, 캐시)  
   - 엔지니어 쪽: 기준 = 탭한 프레임 그대로(압축된 영상), `initialH = I`, 30fps.
   - 고객 쪽: 기준 = 엔지니어 화면의 그 프레임(압축 영상) → 긴 변 640 → JPEG q80(DataChannel 전송과 같음) → 작업 해상도.
     앵커는 0.3초 늦게 도착(`latency`)하고 `initialH` 없이 시작, 처리 20fps(카메라 30fps 중 최신 프레임).
-  - ROI = 기준 작업 해상도에서 핀 중심, 한 변 `0.5·min(w,h)`, 화면 안으로 자름.
+  - ROI = 기준 작업 해상도에서 핀 중심, 한 변 `TAP_ROI_FRACTION·min(w,h)`(운영 탭과 같은 값, 지금 0.3), 화면 안으로 자름.
   - JPEG은 기본으로 **DCT 양자화 시뮬레이터**(`jpegSimGray`, 표준 휘도 양자화표·libjpeg 품질 배율)를 쓴다. jpeg-js 왕복과 평균 차이 < 0.1 (테스트로 확인), 6배 빠르다.
     `--exact-jpeg`면 프레임마다 jpeg-js. 고객 쪽 기준 이미지는 항상 jpeg-js.
   - **작업 해상도 리샘플**(`resampleGray`/`downscaleArea`/`toWorking`)은 런타임 `src/lib/tracking/frame-source.ts`의 `resamplePlane`(VideoFrame 경로)과

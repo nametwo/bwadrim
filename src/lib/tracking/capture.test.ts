@@ -7,6 +7,7 @@ import {
   readJpegSize,
   roiFromStroke,
   roiFromTap,
+  TAP_ROI_FRACTION,
 } from "./capture";
 import type { CanvasLike } from "./frame-source";
 import type { Rect } from "./types";
@@ -14,19 +15,24 @@ import type { Rect } from "./types";
 const center = (r: Rect) => ({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
 
 describe("roiFromTap", () => {
-  it("square of half the short side centred on the tap", () => {
+  it("square of TAP_ROI_FRACTION of the short side centred on the tap", () => {
     const r = roiFromTap({ x: 160, y: 120 }, 320, 240);
-    expect(r).toEqual({ x: 100, y: 60, width: 120, height: 120 });
+    const side = 240 * TAP_ROI_FRACTION;
+    expect(r.width).toBeCloseTo(side, 9);
+    expect(r.height).toBeCloseTo(side, 9);
+    expect(center(r).x).toBeCloseTo(160, 9);
+    expect(center(r).y).toBeCloseTo(120, 9);
   });
 
   it("keeps the centre on the tap near edges (shrinks symmetrically)", () => {
-    const r = roiFromTap({ x: 40, y: 200 }, 320, 240);
-    expect(center(r).x).toBeCloseTo(40, 9);
-    expect(center(r).y).toBeCloseTo(200, 9);
+    // 축마다 가장자리까지 거리로 줄인다: 왼쪽 30px → 반폭 30, 아래 25px → 반높이 25 (최소 24보다 크다)
+    const r = roiFromTap({ x: 30, y: 215 }, 320, 240);
+    expect(center(r).x).toBeCloseTo(30, 9);
+    expect(center(r).y).toBeCloseTo(215, 9);
     expect(r.x).toBeGreaterThanOrEqual(0);
     expect(r.y + r.height).toBeLessThanOrEqual(240);
-    expect(r.width).toBe(80);
-    expect(r.height).toBe(80);
+    expect(r.width).toBeCloseTo(60, 9);
+    expect(r.height).toBeCloseTo(50, 9);
   });
 
   it("never degenerates at the very edge (min half = 10% of short side)", () => {
@@ -45,7 +51,8 @@ describe("roiFromTap", () => {
 
   it("portrait frames use the short side", () => {
     const r = roiFromTap({ x: 120, y: 160 }, 240, 320);
-    expect(r).toEqual({ x: 60, y: 100, width: 120, height: 120 });
+    expect(r.width).toBeCloseTo(240 * TAP_ROI_FRACTION, 9);
+    expect(r.height).toBeCloseTo(240 * TAP_ROI_FRACTION, 9);
   });
 });
 

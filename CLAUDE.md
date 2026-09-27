@@ -30,7 +30,6 @@ src/proxy.ts                                     # 세션 갱신 + 엔지니어 
 src/app/
   (engineer)/login, /dashboard, /room/[id], /stats  # 로그인 필요. 방 생성·종료는 서버 액션. stats = 핵심 지표(DATA-06)
   join/[token]                                   # 고객 진입, 공개. 32자리 링크 토큰(ROOM-12)
-  lab/track                                      # 추적 실험실(CALL-14), 공개·검색 제외. AR 핀을 폰에서 시험하는 임시 페이지
   api/turn                                       # 링크 토큰 검증 후 Cloudflare TURN 단기 자격증명 발급
   api/events                                     # 고객(비로그인) 쪽 지표 이벤트 수집
 src/lib/
@@ -42,7 +41,7 @@ src/lib/
   in-app-browser.ts                              # 카톡 등 인앱 브라우저 감지·외부 브라우저로 열기
   events.ts                                      # 지표 이벤트 기록
   metrics.ts                                     # 핵심 지표 계산 (통계 화면)
-src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기). call/·anchor-overlay는 AR 핀용(아직 /lab/track에서만 씀)
+src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기). anchor/·anchor-overlay = AR 핀 층(CALL-14)
 supabase/schema.sql
 docs/requirements.md                             # 기능 요구사항 (기준 문서)
 ```
@@ -55,6 +54,7 @@ Supabase Realtime **비공개** broadcast 채널, 역할별 일방통행 두 개
 
 각자 자기 채널로 보내고 상대 채널만 듣는다. 고객은 `:e`에서 온 신호만 믿을 것 (엔지니어 사칭 차단). 공개 채널로 되돌리지 말 것.
 메시지 타입: `offer` / `answer` / `ice` / `pointer` / `cam` / `bye`.
+AR 핀(CALL-14)은 전용 DataChannel `anchor`(고객이 offer에 포함). 기준 사진 조각이 'draw'의 포인터·그리기를 막지 않게 따로 연다. 엔지니어 영상 제스처: 짧게 탭 = 레이저 포인터(CALL-08), 0.5초 길게 누름 = AR 핀.
 포인터·드로잉은 연결 후 DataChannel로 옮길 것 (지연 최소화). 좌표는 0~1 정규화.
 방향 지시(CALL-15, `src/lib/webrtc/guide.ts`)도 DataChannel(순서 보장). 엔지니어가 십자키(`src/components/guide-dpad.tsx`, 상하좌우 + 가운데 가까이/멀리)를 누르는 동안 `hold`를 0.4초마다 재전송하고 떼면 `release`. 고객 쪽(`guide-overlay.tsx`)은 1.5초간 `hold`가 없으면 스스로 지운다. 아직 통화 화면에 연결 전이고 실험실 `/lab/guide`에서만 쓴다. 통화 화면에 붙일 때는 전용 채널(`guide`)을 따로 열 것 — 'draw' 채널에 섞으면 정지 사진 조각 뒤에 막혀 1.5초가 지나 화살표가 저절로 사라진다(고객에겐 '멈춤'으로 보임).
 
@@ -68,7 +68,7 @@ Supabase Realtime **비공개** broadcast 채널, 역할별 일방통행 두 개
 
 ## 이벤트 이름 (events 테이블)
 
-`room_created`, `link_opened`, `camera_granted`, `camera_denied`, `connected`, `relay_used`, `pointer_used`, `freeze_used`, `ended`, `resolved_remotely`
+`room_created`, `link_opened`, `camera_granted`, `camera_denied`, `connected`, `relay_used`, `pointer_used`, `freeze_used`, `anchor_used`, `ended`, `resolved_remotely`
 
 ## 환경 변수
 

@@ -634,9 +634,11 @@ export class PlanarTracker implements PlanarTrackerApi {
       minIters: 30,
       loIters: 3,
     };
+    // 면적 비 한도: 1/16..16(= 4배 확대)이면 가까이 다가갈 때 멀쩡히 추적하다가 4배에서 한 프레임에 놓쳤다.
+    // 1/256..256(16배)으로 넓혀도 벤치 43개 시나리오(4928프레임)에서 틀린 표시가 늘지 않았다 (2026-09-26 측정)
     this.sanity = {
-      minAreaRatio: 1 / 16,
-      maxAreaRatio: 16,
+      minAreaRatio: 1 / 256,
+      maxAreaRatio: 256,
       minAngleDeg: 25,
       maxEdgeRatio: 6,
       maxWRatio: 3,

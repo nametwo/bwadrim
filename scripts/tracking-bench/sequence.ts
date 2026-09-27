@@ -6,6 +6,7 @@
 //   고객 쪽 기준 = 엔지니어 화면의 그 프레임 → 긴 변 640 → JPEG q80 (DataChannel 전송) → 작업 해상도
 import type { GrayImage, Mat3, Point, Rect } from "../../src/lib/tracking/types";
 import { clampRect, mul3 } from "../../src/lib/tracking/geometry";
+import { TAP_ROI_FRACTION } from "../../src/lib/tracking/capture";
 import {
   HandJitter,
   type Intrinsics,
@@ -611,8 +612,8 @@ export function buildSequence(sc: Scenario): Sequence {
   if (pinRef.x < 0 || pinRef.y < 0 || pinRef.x > refP.w - 1 || pinRef.y > refP.h - 1) {
     throw new Error(`${sc.id}: pin not inside reference frame (${pinRef.x.toFixed(1)}, ${pinRef.y.toFixed(1)})`);
   }
-  // ROI: 핀 중심, 한 변 0.5·min(w,h), 화면 안으로 자름
-  const side2 = 0.5 * Math.min(refP.w, refP.h);
+  // ROI: 핀 중심, 한 변 TAP_ROI_FRACTION·min(w,h) (운영 탭과 같게), 화면 안으로 자름
+  const side2 = TAP_ROI_FRACTION * Math.min(refP.w, refP.h);
   const roi = clampRect({ x: pinRef.x - side2 / 2, y: pinRef.y - side2 / 2, width: side2, height: side2 }, refP.w, refP.h);
   const refInv = invertOrThrow(refP.M);
 

@@ -18,8 +18,13 @@ import { PROTOCOL_LIMITS } from "./protocol";
 
 export const REFERENCE_JPEG_SCALE = 2;
 export const REFERENCE_JPEG_QUALITY = 0.8;
-/** 탭 ROI: 짧은 변의 이 비율을 한 변으로 하는 정사각형 */
-export const TAP_ROI_FRACTION = 0.5;
+/**
+ * 탭 ROI: 짧은 변의 이 비율을 한 변으로 하는 정사각형 (무늬가 모자라면 setReference가 넓힌다).
+ * 0.5(30cm에서 약 16cm)면 안에 높이가 다른 물건이 섞여 옆으로 4cm만 움직여도 시차로 핀을 숨겼다.
+ * 0.3으로 줄이면 합성 실험에서 3cm 돌출 물체 좌우 이동 표시율 39% → 100% (2026-09-26 측정).
+ * 대신 아주 빠르게 흔들 때(초당 60cm 이상)는 조금 더 일찍 놓친다.
+ */
+export const TAP_ROI_FRACTION = 0.3;
 /** 선 ROI: 선의 외접 사각형을 짧은 변의 이 비율만큼 넓힌다 */
 export const STROKE_ROI_PAD_FRACTION = 0.15;
 /** ROI가 가장자리에서 줄어들 때의 최소 반폭 (짧은 변 비율) */

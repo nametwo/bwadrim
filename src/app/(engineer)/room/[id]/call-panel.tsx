@@ -15,6 +15,11 @@ import { keepScreenOn } from "@/lib/wake-lock";
 import type { CameraState } from "@/lib/webrtc/camera";
 import { PointerMarker, usePointerMarker } from "@/components/pointer-marker";
 import { FreezeCanvas, type DrawHandlers } from "@/components/freeze-canvas";
+import {
+  EngineerAnchorLayer,
+  type EngineerAnchorApi,
+} from "@/components/anchor/engineer-anchor";
+import { LongPressRing } from "@/components/anchor/long-press-ring";
 import { endRoom, logToolUsed, markRoomActive } from "./actions";
 
 type PanelState =
@@ -26,6 +31,11 @@ type PanelState =
 // 확인 화면이 뜬 직후의 탭은 무시한다. 종료 버튼을 두 번 누르면 두 번째 탭이
 // 같은 자리에 뜬 답 버튼('아니요, 출장 필요')에 떨어져 핵심 지표가 잘못 저장된다
 const CONFIRM_ARM_MS = 600;
+
+// 길게 누르기(AR 핀, CALL-14) 판정: 이 시간 이상 누르고, 그동안 손가락이 이 거리 안에 있으면 핀.
+// 그보다 짧게 떼면 레이저 포인터(CALL-08). 움직이면 둘 다 아님(스크롤·실수 방지)
+const LONG_PRESS_MS = 500;
+const PRESS_SLOP_PX = 12;
 
 // 엔지니어 통화 패널. 폰 한 손 조작 기준: 버튼 크게, 도구 최소.
 export function CallPanel({
@@ -62,7 +72,7 @@ export function CallPanel({
   const lastCallRef = useRef<CallState>("waiting");
   const confirmShownAtRef = useRef(0);
   const releaseWakeLockRef = useRef<(() => void) | null>(null);
-  const toolsLoggedRef = useRef(new Set<"pointer_used" | "freeze_used">());
+  const toolsLoggedRef = useRef(new Set<"pointer_used" | "freeze_used" | "anchor_used">());
   // 화면 멈춤 + 그리기 (CALL-09)
   const [frozen, setFrozen] = useState<string | null>(null);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
@@ -74,6 +84,17 @@ export function CallPanel({
   const [camPending, setCamPending] = useState(false);
   const camTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const { marker, show: showMarker } = usePointerMarker();
+  // AR 핀 (CALL-14): 연결마다 같은 전송로(anchorLink), 누르는 중인 손가락
+  const [anchorLink, setAnchorLink] = useState<CallSession["anchorLink"] | null>(null);
+  const anchorApiRef = useRef<EngineerAnchorApi | null>(null);
+  const pressRef = useRef<{
+    id: number;
+    x: number;
+    y: number;
+    timer: ReturnType<typeof setTimeout>;
+    done: boolean;
+  } | null>(null);
+  const [press, setPress] = useState<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     unmountedRef.current = false;
@@ -81,6 +102,7 @@ export function CallPanel({
       unmountedRef.current = true;
       clearTimeout(camTimerRef.current);
       clearTimeout(peerChangedTimerRef.current);
+      if (pressRef.current) clearTimeout(pressRef.current.timer);
       sessionRef.current?.destroy();
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
       releaseWakeLockRef.current?.();
@@ -194,6 +216,7 @@ export function CallPanel({
       },
     });
     sessionRef.current = session;
+    setAnchorLink(session.anchorLink);
     session.join();
     setState({ phase: "call", call: "waiting", peerPresent: false });
     setStarting(false);
@@ -202,6 +225,7 @@ export function CallPanel({
   function stopSession() {
     sessionRef.current?.destroy();
     sessionRef.current = null;
+    setAnchorLink(null);
     micStreamRef.current?.getTracks().forEach((t) => t.stop());
     micStreamRef.current = null;
     releaseWakeLockRef.current?.();
@@ -209,16 +233,57 @@ export function CallPanel({
   }
 
   // 영상을 탭한 곳을 고객 화면에 표시한다. 영상 밖 검은 여백은 무시
-  function pointAt(e: React.PointerEvent<HTMLDivElement>) {
+  function pointAt(clientX: number, clientY: number) {
     const video = videoRef.current;
     const session = sessionRef.current;
     if (!video || !session || lastCallRef.current !== "connected") return;
     const rect = video.getBoundingClientRect();
-    const pos = toVideoPos(video, e.clientX - rect.left, e.clientY - rect.top);
+    const pos = toVideoPos(video, clientX - rect.left, clientY - rect.top);
     if (!pos) return;
     session.sendPointer(pos);
     showMarker(video, pos);
     logToolOnce("pointer_used");
+  }
+
+  // 짧게 탭 = 레이저 포인터(CALL-08), 길게 누름 = 물체에 붙는 핀(CALL-14)
+  function endPress() {
+    const p = pressRef.current;
+    if (p) clearTimeout(p.timer);
+    pressRef.current = null;
+    setPress(null);
+  }
+
+  function onPressDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (!e.isPrimary || (e.pointerType === "mouse" && e.button !== 0)) return;
+    if (lastCallRef.current !== "connected" || pressRef.current) return;
+    const box = e.currentTarget.getBoundingClientRect();
+    const { clientX: x, clientY: y, pointerId: id } = e;
+    const timer = setTimeout(() => {
+      const p = pressRef.current;
+      if (!p || p.id !== id) return;
+      p.done = true;
+      setPress(null);
+      if (anchorApiRef.current?.pinAt(x, y)) {
+        navigator.vibrate?.(15);
+        logToolOnce("anchor_used");
+      }
+    }, LONG_PRESS_MS);
+    pressRef.current = { id, x, y, timer, done: false };
+    setPress({ x: x - box.left, y: y - box.top });
+  }
+
+  function onPressMove(e: React.PointerEvent<HTMLDivElement>) {
+    const p = pressRef.current;
+    if (!p || p.id !== e.pointerId || p.done) return;
+    if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > PRESS_SLOP_PX) endPress();
+  }
+
+  function onPressUp(e: React.PointerEvent<HTMLDivElement>) {
+    const p = pressRef.current;
+    if (!p || p.id !== e.pointerId) return;
+    const tap = !p.done;
+    endPress();
+    if (tap) pointAt(p.x, p.y);
   }
 
   function sendCamera(cmd: "flip" | "torch") {
@@ -233,7 +298,7 @@ export function CallPanel({
     camTimerRef.current = setTimeout(() => setCamPending(false), 6000);
   }
 
-  function logToolOnce(name: "pointer_used" | "freeze_used") {
+  function logToolOnce(name: "pointer_used" | "freeze_used" | "anchor_used") {
     if (toolsLoggedRef.current.has(name)) return;
     toolsLoggedRef.current.add(name);
     logToolUsed(roomId, name).catch(() => {});
@@ -249,6 +314,7 @@ export function CallPanel({
       setFreezeError(true);
       return;
     }
+    endPress();
     setFreezeError(false);
     setFrozen(image);
     setStrokes([]);
@@ -531,15 +597,32 @@ export function CallPanel({
         {turnWarning}
         {peerNotice}
         <div
-          onPointerDown={frozen ? undefined : pointAt}
-          className="relative min-h-[50vh] flex-1 touch-none overflow-hidden rounded-2xl bg-black"
+          data-testid="eng-stage"
+          onPointerDown={frozen ? undefined : onPressDown}
+          onPointerMove={frozen ? undefined : onPressMove}
+          onPointerUp={frozen ? undefined : onPressUp}
+          onPointerCancel={endPress}
+          onContextMenu={(e) => e.preventDefault()}
+          className="relative min-h-[50vh] flex-1 touch-none overflow-hidden rounded-2xl bg-black select-none [-webkit-touch-callout:none]"
         >
           <video
             ref={videoRef}
+            data-testid="eng-video"
             autoPlay
             playsInline
             className="absolute inset-0 h-full w-full object-contain"
           />
+          {anchorLink && (
+            <EngineerAnchorLayer
+              video={videoRef}
+              link={anchorLink}
+              apiRef={anchorApiRef}
+              hidden={!!frozen}
+            />
+          )}
+          {press && !frozen && (
+            <LongPressRing x={press.x} y={press.y} durationMs={LONG_PRESS_MS} />
+          )}
           {frozen ? (
             <FreezeCanvas
               image={frozen}
@@ -560,7 +643,7 @@ export function CallPanel({
           <p className="text-center text-sm text-gray-400">
             {frozen
               ? "손가락으로 그리면 고객님 화면에도 보여요"
-              : "영상을 누르면 고객님 화면에 빨간 동그라미가 표시돼요"}
+              : "짧게 누르면 빨간 동그라미(3초), 길게 누르면 물체에 붙는 핀이 고객님 화면에 표시돼요"}
           </p>
         )}
         {call === "connected" && camState && !frozen && (

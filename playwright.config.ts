@@ -42,7 +42,7 @@ export default defineConfig({
       : [
           {
             command: `npx next dev -p ${PORT}`,
-            url: `${BASE_URL}/lab/track`,
+            url: `${BASE_URL}/login`,
             reuseExistingServer: !process.env.CI,
             timeout: 180_000,
             env: {

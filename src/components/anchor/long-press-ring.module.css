@@ -1,0 +1,30 @@
+.ring {
+  position: absolute;
+  pointer-events: none;
+  transform: rotate(-90deg);
+}
+
+.track {
+  fill: none;
+  stroke: var(--color-black-50);
+  stroke-width: 6;
+}
+
+.fill {
+  fill: none;
+  stroke: var(--color-gray-0);
+  stroke-width: 6;
+  stroke-linecap: round;
+  animation-name: fill;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+@keyframes fill {
+  from {
+    stroke-dashoffset: var(--c);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}

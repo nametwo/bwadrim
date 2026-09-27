@@ -7,6 +7,11 @@ import { keepScreenOn } from "@/lib/wake-lock";
 import { PointerMarker, usePointerMarker } from "@/components/pointer-marker";
 import { FreezeCanvas } from "@/components/freeze-canvas";
 import { applyDrawCommand, type Stroke } from "@/lib/webrtc/draw";
+import type { DataLink } from "@/lib/webrtc/data-link";
+import {
+  CustomerAnchorLayer,
+  type CustomerAnchorBanner,
+} from "@/components/anchor/customer-anchor";
 import {
   setTorch,
   switchCamera,
@@ -48,6 +53,9 @@ export function CameraStart({
   // 기사님이 멈춘 화면과 그 위의 선 (CALL-09)
   const [frozen, setFrozen] = useState<string | null>(null);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
+  // 기사님이 길게 눌러 꽂은 AR 핀 (CALL-14). 핀 안내(카드·화살표)가 뜨면 상태 문구는 숨긴다
+  const [anchorLink, setAnchorLink] = useState<DataLink | null>(null);
+  const [anchorBanner, setAnchorBanner] = useState<CustomerAnchorBanner>(null);
 
   function releaseWakeLock() {
     releaseWakeLockRef.current?.();
@@ -155,6 +163,7 @@ export function CameraStart({
       },
     });
     sessionRef.current = session;
+    setAnchorLink(session.anchorLink);
     session.join();
     setPhase("call");
   }
@@ -319,7 +328,9 @@ export function CameraStart({
     }
 
     const statusText =
-      frozen
+      anchorBanner === "pin" && !frozen
+        ? "빨간 동그라미를 봐주세요"
+        : frozen
         ? "기사님이 화면을 멈추고 설명 중이에요"
         : callState === "connected"
         ? "기사님이 보고 있어요"
@@ -331,11 +342,20 @@ export function CameraStart({
       <main className="relative flex min-h-screen flex-col bg-black">
         <video
           ref={videoRef}
+          data-testid="cust-video"
           autoPlay
           playsInline
           muted
           className="absolute inset-0 h-full w-full object-contain"
         />
+        {anchorLink && (
+          <CustomerAnchorLayer
+            video={videoRef}
+            link={anchorLink}
+            hidden={!!frozen}
+            onBanner={setAnchorBanner}
+          />
+        )}
         {/* 잘림 없이 전체를 보여 줘야 기사님이 가리킨 곳이 항상 화면 안에 있다 */}
         {frozen ? (
           <FreezeCanvas image={frozen} strokes={strokes} lineWidth={8} />
@@ -344,8 +364,13 @@ export function CameraStart({
         )}
         <audio ref={audioRef} autoPlay />
 
-        <div className="relative mt-4 flex justify-center">
+        <div
+          className={`relative mt-4 flex justify-center ${
+            anchorBanner === "card" || anchorBanner === "arrow" ? "invisible" : ""
+          }`}
+        >
           <span
+            data-testid="cust-status"
             className={`rounded-full px-4 py-2 text-sm font-medium text-white ${
               frozen
                 ? "bg-amber-500/90"

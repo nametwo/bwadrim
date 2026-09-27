@@ -46,6 +46,7 @@ export function PointerMarker({
   return (
     <div
       key={marker.id}
+      data-testid="pointer-marker"
       className="pointer-events-none absolute animate-[pointer-fade_3s_ease-in_forwards]"
       style={{
         left: marker.left,

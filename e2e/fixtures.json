@@ -20,13 +20,15 @@
     {
       "id": "e2e00000-0000-4000-8000-00000000a001",
       "code": "E2EAAA",
-      "status": "waiting"
+      "status": "waiting",
+      "join_token": "e2e0aaaaaaaaaaaaaaaaaaaaaaaaaaa1"
     },
     {
       "id": "e2e00000-0000-4000-8000-00000000a002",
       "code": "E2EEXP",
       "status": "waiting",
-      "expired": true
+      "expired": true,
+      "join_token": "e2e0bbbbbbbbbbbbbbbbbbbbbbbbbbb2"
     }
   ]
 }

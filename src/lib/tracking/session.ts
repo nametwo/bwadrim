@@ -575,6 +575,24 @@ export class EngineerAnchorSession {
     return detach;
   }
 
+  /**
+   * 화면 좌표(clientX/Y)에 바로 핀 하나 (누름+뗌을 한 번에). 통화 화면처럼 제스처 판정(짧게 탭 = 레이저 포인터,
+   * 길게 누름 = 핀)을 UI가 하고 핀만 세션에 맡길 때 쓴다. 영상 밖(레터박스)이거나 아직 프레임이 없으면 false.
+   */
+  pinAt(clientX: number, clientY: number, fit: ObjectFit = "contain"): boolean {
+    if (this.destroyed || this.gesture) return false;
+    const fs = this.tracker.frameSize();
+    const m = mappingForVideo(this.video, fit);
+    if (!fs || !m) return false;
+    const r = this.video.getBoundingClientRect();
+    const css = { x: clientX - r.left, y: clientY - r.top };
+    const s: PointerSample = { pointerId: -1, css, frame: cssToFrame(m, css, fs), t: this.clock.now() };
+    this.handlePointer("down", s);
+    if (!this.gesture) return false;
+    this.handlePointer("up", s);
+    return true;
+  }
+
   destroy(): void {
     if (this.destroyed) return;
     this.dropGesture(false);

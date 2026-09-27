@@ -12,6 +12,7 @@ import { buildSequence } from "./sequence";
 import { HOLDOUT_TARGET_IDS, ensureTextures } from "./textures";
 import { getTracker } from "./trackers";
 import { rgbaToGray } from "../../src/lib/tracking/cv/color";
+import { TAP_ROI_FRACTION } from "../../src/lib/tracking/capture";
 import { decodeMarker, exportY4m, markerBits } from "./y4m";
 
 beforeAll(async () => {
@@ -34,7 +35,7 @@ describe("scenario ground truth sanity", () => {
     () => {
       for (const sc of SCENARIOS) {
         const seq = buildSequence(sc); // 핀이 기준 프레임 밖이면 여기서 throw
-        const nominal = 0.5 * Math.min(seq.ref.width, seq.ref.height);
+        const nominal = TAP_ROI_FRACTION * Math.min(seq.ref.width, seq.ref.height);
         expect(seq.roi.width * seq.roi.height, sc.id).toBeGreaterThan(0.55 * nominal * nominal);
         expect(seq.gt.length, sc.id).toBeGreaterThan(20);
         expect(seq.gt.every((g) => g.pin !== null), `${sc.id}: pin behind camera`).toBe(true);
