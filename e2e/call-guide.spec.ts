@@ -9,7 +9,7 @@ import { RealtimeHub, describeHub } from "./realtime-mock";
 test.use({ launchOptions: fakeCamera(CLIPS.jitter) });
 test.describe.configure({ mode: "serial" });
 
-const ROOM = FIXTURE.rooms[0];
+const ROOM = FIXTURE.rooms[3]; // 다른 통화 테스트와 동시에 돌아도 서로의 방·기록을 건드리지 않게 방을 따로 쓴다
 const PHONE: BrowserContextOptions = {
   viewport: { width: 390, height: 844 },
   deviceScaleFactor: 2,
@@ -38,7 +38,7 @@ async function finger(page: Page): Promise<Touch> {
 }
 
 test.beforeEach(async () => {
-  await mockReset();
+  await mockReset(ROOM.id);
 });
 
 test("통화: 십자키를 누르는 동안만 고객 화면에 방향 · 굴리면 방향 전환 · 가까이 · 방향키 · AR 핀 잠시 숨김 · 멈춤 중 비활성 (guide_used 기록)", async ({
@@ -65,7 +65,7 @@ test("통화: 십자키를 누르는 동안만 고객 화면에 방향 · 굴리
   try {
     await ep.goto(`/room/${ROOM.id}`);
     await ep.getByRole("button", { name: /연결 준비/ }).click();
-    await expect(ep.getByText("고객님 접속 대기 중…")).toBeVisible();
+    await expect(ep.getByTestId("eng-wait-title")).toHaveText("고객님을 기다리고 있어요");
 
     await cp.goto(`/join/${ROOM.join_token}`);
     await cp.getByRole("button", { name: /카메라 켜기/ }).click();

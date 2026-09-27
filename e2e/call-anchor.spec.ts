@@ -29,7 +29,7 @@ async function holdAt(page: Page, x: number, y: number, ms: number) {
 }
 
 test.beforeEach(async () => {
-  await mockReset();
+  await mockReset(ROOM.id);
 });
 
 test("통화: 짧게 탭 = 빨간 동그라미, 길게 누름 = 고객 화면에 붙는 핀 · 핀 지우기 (anchor_used 기록)", async ({
@@ -56,7 +56,7 @@ test("통화: 짧게 탭 = 빨간 동그라미, 길게 누름 = 고객 화면에
   try {
     await ep.goto(`/room/${ROOM.id}`);
     await ep.getByRole("button", { name: /연결 준비/ }).click();
-    await expect(ep.getByText("고객님 접속 대기 중…")).toBeVisible();
+    await expect(ep.getByTestId("eng-wait-title")).toHaveText("고객님을 기다리고 있어요");
 
     await cp.goto(`/join/${ROOM.join_token}`);
     await cp.getByRole("button", { name: /카메라 켜기/ }).click();

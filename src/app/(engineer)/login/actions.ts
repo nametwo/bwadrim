@@ -3,7 +3,8 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 
-export type LoginState = { error: string | null };
+// email: 실패해도 입력한 이메일을 다시 채워 둔다 (폼 액션이 끝나면 입력칸이 비워지므로)
+export type LoginState = { error: string | null; email?: string };
 
 // 로그인 후 이동할 곳. 같은 사이트 안의 경로만 허용한다 (BUG-08).
 // 브라우저는 '\'를 '/'로 읽어 '/\evil.com'을 외부 주소로 여기므로 문자 검사만으로는 부족하다 —
@@ -31,14 +32,14 @@ export async function login(
   const password = String(formData.get("password") ?? "");
 
   if (!email || !password) {
-    return { error: "이메일과 비밀번호를 입력해 주세요." };
+    return { error: "이메일과 비밀번호를 입력해 주세요.", email };
   }
 
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error) {
-    return { error: "이메일 또는 비밀번호가 올바르지 않습니다." };
+    return { error: "이메일 또는 비밀번호가 올바르지 않아요.", email };
   }
 
   redirect(safeNext(String(formData.get("next") ?? "")));

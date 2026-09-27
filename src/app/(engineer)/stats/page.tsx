@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { ChevronLeftIcon } from "@/components/ui/icons";
 import {
   computeMetrics,
   type MetricEvent,
@@ -83,7 +84,7 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
       title: "원격 해결률",
       value: percent(m.resolvedRemotely),
       detail: `답한 ${m.resolvedRemotely.of}건 중 ${m.resolvedRemotely.hit}건 출장 없이 해결`,
-      note: "연결 없이 닫았거나 답하지 않은 세션은 빼고 셉니다",
+      note: "연결 없이 닫았거나 답하지 않은 상담은 빼고 셉니다",
     },
     {
       title: "링크 → 카메라 허용",
@@ -103,10 +104,10 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
       note: "비용 계산 근거. 5G끼리 등 직접 연결이 안 될 때 중계합니다",
     },
     {
-      title: "세션당 평균 시간",
+      title: "상담당 평균 시간",
       value: m.avgDurationSec === null ? "—" : minutes(m.avgDurationSec),
       detail: `답한 ${m.durationCount}건 기준`,
-      note: "통화 시간이 아니라 세션을 만든 때부터 잽니다",
+      note: "통화 시간이 아니라 상담을 만든 때부터 잽니다",
     },
     {
       title: "도구 사용",
@@ -116,23 +117,35 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
   ];
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-sm flex-col gap-5 px-6 py-8">
-      <header className="flex items-center gap-3">
-        <Link href="/dashboard" className="text-2xl text-gray-400">
-          ←
+    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-5 px-5 pt-[max(8px,env(safe-area-inset-top))] pb-[max(24px,env(safe-area-inset-bottom))]">
+      <header className="flex min-h-14 items-center">
+        <Link
+          href="/dashboard"
+          className="-ml-2 flex h-touch items-center gap-0.5 rounded-xl pr-3 pl-1 text-body-m text-text-secondary active:bg-bg-muted"
+        >
+          <ChevronLeftIcon className="size-6" />
+          상담 목록
         </Link>
-        <h1 className="text-xl font-bold">통계</h1>
       </header>
 
-      <nav className="flex gap-2">
+      <div className="flex flex-col gap-1">
+        <h1 className="text-title-l">통계</h1>
+        <p className="text-body-m text-text-secondary">
+          {period.days ? `최근 ${period.days}일` : "전체 기간"}에 만든 상담 {m.sessions}건
+        </p>
+      </div>
+
+      {/* 기간 고르기. 선택 상태는 중립색(파랑은 '지금 누를 것'에만) */}
+      <nav aria-label="기간" className="grid grid-cols-3 gap-1 rounded-2xl bg-bg-muted p-1">
         {PERIODS.map((p) => (
           <Link
             key={p.key}
             href={`/stats?period=${p.key}`}
-            className={`rounded-full px-4 py-2 text-sm ${
+            aria-current={p.key === period.key ? "page" : undefined}
+            className={`flex h-11 items-center justify-center rounded-xl text-label-m ${
               p.key === period.key
-                ? "bg-black text-white"
-                : "bg-gray-100 text-gray-600"
+                ? "bg-bg-page text-text-primary shadow-card"
+                : "text-text-secondary"
             }`}
           >
             {p.label}
@@ -140,22 +153,23 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
         ))}
       </nav>
 
-      <p className="text-sm text-gray-500">
-        {period.days ? `최근 ${period.days}일` : "전체 기간"}에 만든 세션 {m.sessions}건
-      </p>
-
       {m.sessions === 0 ? (
-        <p className="py-12 text-center text-gray-400">
-          이 기간에 만든 세션이 없어요.
+        <p className="rounded-2xl bg-bg-subtle py-12 text-center text-body-m text-text-secondary">
+          이 기간에 만든 상담이 없어요.
         </p>
       ) : (
         <ul className="flex flex-col gap-3">
-          {cards.map((c) => (
-            <li key={c.title} className="rounded-2xl bg-gray-50 p-4">
-              <p className="text-sm font-medium text-gray-500">{c.title}</p>
-              <p className="mt-1 text-3xl font-bold">{c.value}</p>
-              <p className="mt-1 text-sm text-gray-600">{c.detail}</p>
-              {c.note && <p className="mt-1 text-xs text-gray-400">{c.note}</p>}
+          {cards.map((c, i) => (
+            <li
+              key={c.title}
+              className={`rounded-2xl p-4 ${i === 0 ? "bg-success-tint" : "bg-bg-subtle"}`}
+            >
+              <p className="text-label-m text-text-secondary">{c.title}</p>
+              <p className={`mt-1 text-display-l ${i === 0 ? "text-text-success" : "text-text-primary"}`}>
+                {c.value}
+              </p>
+              <p className="mt-1 text-body-m text-text-secondary">{c.detail}</p>
+              {c.note && <p className="mt-1 text-body-s text-text-tertiary">{c.note}</p>}
             </li>
           ))}
         </ul>

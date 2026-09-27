@@ -5,8 +5,8 @@
 //   GET  /auth/v1/user                 Bearer 토큰이 FIXTURE.accessToken이면 사용자, 아니면 401
 //   GET  /rest/v1/rooms?code=eq.X      (id=eq.X, select=… 지원) Accept가 vnd.pgrst.object+json이면 객체 1개
 //   PATCH /rest/v1/rooms?id=eq.X…      상태 갱신 (status=eq.X 조건 지원)
-//   POST /rest/v1/events               기록 (본문 객체 또는 배열)
-//   GET  /__events  ·  POST /__reset  ·  GET /__health   (테스트용)
+//   POST /rest/v1/events               기록 (본문 객체 또는 배열) · GET은 통계 화면용(필터 무시)
+//   GET  /__events  ·  GET /__rooms  ·  POST /__reset[?room=ID]  ·  GET /__health   (테스트용)
 //
 // 고정 데이터는 e2e/fixtures.json과 같다 (테스트도 같은 파일을 읽는다).
 import http from "node:http";
@@ -21,9 +21,8 @@ const PORT = Number(process.env.E2E_SUPABASE_PORT ?? FIXTURE.supabasePort);
 let rooms = [];
 let events = [];
 
-function reset() {
-  const now = Date.now();
-  rooms = FIXTURE.rooms.map((r) => ({
+function freshRoom(r, now) {
+  return {
     engineer_id: FIXTURE.user.id,
     customer_name: null,
     customer_phone: null,
@@ -32,7 +31,19 @@ function reset() {
     ...r,
     created_at: new Date(now - 60_000).toISOString(),
     expires_at: new Date(now + (r.expired ? -1 : 1) * 24 * 3600_000).toISOString(),
-  }));
+  };
+}
+
+// roomId를 주면 그 방과 그 방의 기록만 되돌린다 — 동시에 도는 다른 테스트의 방을 건드리지 않게
+function reset(roomId) {
+  const now = Date.now();
+  if (roomId) {
+    const r = FIXTURE.rooms.find((x) => x.id === roomId);
+    if (r) rooms = rooms.map((x) => (x.id === roomId ? freshRoom(r, now) : x));
+    events = events.filter((e) => e.room_id !== roomId);
+    return;
+  }
+  rooms = FIXTURE.rooms.map((r) => freshRoom(r, now));
   events = [];
 }
 reset();
@@ -89,7 +100,7 @@ const server = http.createServer(async (req, res) => {
     if (p === "/__events") return send(res, 200, events);
     if (p === "/__rooms") return send(res, 200, rooms);
     if (p === "/__reset" && req.method === "POST") {
-      reset();
+      reset(url.searchParams.get("room") ?? undefined);
       return send(res, 200, { ok: true });
     }
 
@@ -125,6 +136,14 @@ const server = http.createServer(async (req, res) => {
         }
         return send(res, 204);
       }
+    }
+
+    // 통계 화면(/stats)용 읽기. 필터는 무시하고 자기 방 기록을 준다 (RLS 흉내)
+    if (p === "/rest/v1/events" && req.method === "GET") {
+      if (!authed(req)) return send(res, 200, []);
+      const mine = new Set(rooms.filter((r) => r.engineer_id === FIXTURE.user.id).map((r) => r.id));
+      const select = url.searchParams.get("select");
+      return send(res, 200, events.filter((e) => mine.has(e.room_id)).map((e) => project(e, select)));
     }
 
     if (p === "/rest/v1/events" && req.method === "POST") {

@@ -6,6 +6,9 @@ import {
   IN_APP_LABEL,
   type InAppKind,
 } from "@/lib/in-app-browser";
+import { NoticeScreen } from "@/components/ui/notice-screen";
+import { Button } from "@/components/ui/button";
+import { AlertIcon, CheckIcon, CopyIcon } from "@/components/ui/icons";
 import { CameraStart } from "./camera-start";
 
 // 인앱 브라우저로 열렸을 때 (JOIN-10). 카카오톡·라인은 자동으로 기본 브라우저로 넘기고,
@@ -50,49 +53,85 @@ export function OpenInBrowser({
 
   if (stay) return <CameraStart roomId={roomId} token={token} />;
 
-  return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-5 px-8 text-center">
-      <h1 className="text-2xl font-bold">
-        {canOpen ? "인터넷 앱으로 여는 중이에요" : "인터넷 앱으로 열어 주세요"}
-      </h1>
-      <p className="text-lg text-gray-600">
+  const stayButton = (
+    <Button variant="ghost" size="m" block onClick={() => setStay(true)} className="underline underline-offset-4">
+      이대로 계속하기
+    </Button>
+  );
+
+  if (canOpen) {
+    return (
+      <NoticeScreen
+        tone="brand"
+        icon={<AlertIcon className="size-10" />}
+        title="인터넷 앱으로 여는 중이에요"
+        actions={
+          <>
+            <Button size="xl" block onClick={openExternal}>
+              인터넷 앱으로 열기
+            </Button>
+            {stayButton}
+          </>
+        }
+      >
         {app} 안에서는 카메라가
         <br />
         켜지지 않을 수 있어요.
-      </p>
+      </NoticeScreen>
+    );
+  }
 
-      {canOpen ? (
-        <button
-          onClick={openExternal}
-          className="h-16 w-full max-w-xs rounded-2xl bg-black text-xl font-bold text-white active:opacity-80"
-        >
-          인터넷 앱으로 열기
-        </button>
-      ) : (
+  return (
+    <NoticeScreen
+      tone="warning"
+      icon={<AlertIcon className="size-10" />}
+      title="인터넷 앱으로 열어 주세요"
+      actions={
         <>
-          <p className="text-lg text-gray-700">
-            화면 오른쪽 위나 아래의 <b>⋯</b> 또는 <b>공유</b> 버튼을 누르고
-            <br />
-            <b>&ldquo;다른 브라우저로 열기&rdquo;</b>를 눌러 주세요.
-          </p>
-          <button
+          <Button
+            size="xl"
+            block
             onClick={copy}
-            className="h-16 w-full max-w-xs rounded-2xl bg-black text-xl font-bold text-white active:opacity-80"
+            icon={copied ? <CheckIcon className="size-6" /> : <CopyIcon className="size-6" />}
           >
-            {copied ? "복사됐어요 ✓" : "링크 복사"}
-          </button>
-          <p className="text-sm text-gray-400">
-            복사한 링크를 사파리나 크롬 주소창에 붙여 넣어도 돼요.
-          </p>
+            {copied ? "복사됐어요" : "링크 복사"}
+          </Button>
+          {stayButton}
         </>
-      )}
+      }
+      footer="복사한 링크를 사파리·크롬·삼성 인터넷 주소창에 붙여 넣어도 돼요."
+    >
+      <p>
+        {app} 안에서는 카메라가 켜지지 않을 수 있어요.
+      </p>
+      <div className="mt-4 flex flex-col gap-3 rounded-3xl bg-bg-subtle p-4 text-left text-text-primary">
+        <p className="flex gap-3">
+          <StepNo n={1} />
+          <span>
+            화면 위나 아래의 <b className="inline-flex h-7 items-center rounded-md bg-bg-page px-2 align-middle text-title-s leading-none ring-1 ring-border">
+              ⋯
+            </b> 또는{" "}
+            <b>공유</b> 버튼을 누르세요
+          </span>
+        </p>
+        <p className="flex gap-3">
+          <StepNo n={2} />
+          <span>
+            <b>다른 브라우저로 열기</b>(또는 외부 브라우저로 열기)를 누르세요
+          </span>
+        </p>
+      </div>
+    </NoticeScreen>
+  );
+}
 
-      <button
-        onClick={() => setStay(true)}
-        className="mt-4 px-4 py-2 text-base text-gray-500 underline"
-      >
-        이대로 계속하기
-      </button>
-    </main>
+function StepNo({ n }: { n: number }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="grid size-7 flex-none place-items-center rounded-full bg-bg-page text-label-m text-text-secondary ring-1 ring-border"
+    >
+      {n}
+    </span>
   );
 }

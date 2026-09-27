@@ -4,11 +4,21 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { logEvent } from "@/lib/events";
 import { detectInApp } from "@/lib/in-app-browser";
 import { isJoinToken } from "@/lib/join-token";
+import { NoticeScreen } from "@/components/ui/notice-screen";
+import { buttonClass } from "@/components/ui/button";
+import { ClockIcon, LinkIcon, RefreshIcon, WifiOffIcon } from "@/components/ui/icons";
 import { CameraStart } from "./camera-start";
 import { OpenInBrowser } from "./open-in-browser";
 
+// 문자·카톡 미리보기에 뜨는 제목과 설명 — 모르는 링크로 보이지 않게 무엇인지 밝힌다. 검색에는 안 나오게
 export const metadata: Metadata = {
-  title: "봐드림",
+  title: "봐드림 원격 A/S",
+  description: "링크를 누르고 카메라를 켜면 기사님이 화면을 보며 도와드려요. 앱 설치 없이 바로 돼요.",
+  robots: { index: false, follow: false },
+  openGraph: {
+    title: "봐드림 원격 A/S",
+    description: "링크를 누르고 카메라를 켜면 기사님이 화면을 보며 도와드려요. 앱 설치 없이 바로 돼요.",
+  },
 };
 
 // 고객 진입. 로그인·설치 없음 — 링크 클릭 → 버튼 한 번 → 카메라.
@@ -36,17 +46,30 @@ export default async function JoinPage({ params }: PageProps<"/join/[token]">) {
 
   if (lookupFailed) {
     return (
-      <Notice title="잠시 연결이 원활하지 않아요">
-        화면을 아래로 당겨 새로고침하거나, 잠시 후 다시 눌러주세요.
-      </Notice>
+      <NoticeScreen
+        tone="warning"
+        icon={<WifiOffIcon className="size-10" />}
+        title="잠시 연결이 원활하지 않아요"
+        actions={
+          // 같은 주소를 다시 연다 (새로고침)
+          <a href={`/join/${token}`} className={buttonClass({ size: "xl", block: true })}>
+            <RefreshIcon className="size-6" />
+            다시 열기
+          </a>
+        }
+      >
+        잠시 후 아래 버튼을 눌러 주세요.
+      </NoticeScreen>
     );
   }
 
   if (!room) {
     return (
-      <Notice title="주소를 확인해 주세요">
-        문자로 받으신 링크를 다시 한 번 눌러주세요.
-      </Notice>
+      <NoticeScreen tone="neutral" icon={<LinkIcon className="size-10" />} title="주소를 확인해 주세요">
+        문자로 받으신 링크를 다시 한 번 눌러 주세요.
+        <br />
+        그래도 안 되면 기사님께 새 링크를 보내 달라고 말씀해 주세요.
+      </NoticeScreen>
     );
   }
 
@@ -55,9 +78,11 @@ export default async function JoinPage({ params }: PageProps<"/join/[token]">) {
 
   if (expired) {
     return (
-      <Notice title="종료된 연결이에요">
-        기사님께 새 링크를 보내달라고 말씀해 주세요.
-      </Notice>
+      <NoticeScreen tone="neutral" icon={<ClockIcon className="size-10" />} title="이미 끝난 상담 링크예요">
+        다시 도움이 필요하면
+        <br />
+        기사님께 새 링크를 보내 달라고 말씀해 주세요.
+      </NoticeScreen>
     );
   }
 
@@ -69,19 +94,4 @@ export default async function JoinPage({ params }: PageProps<"/join/[token]">) {
     return <OpenInBrowser kind={inApp} roomId={room.id} token={token} />;
   }
   return <CameraStart roomId={room.id} token={token} />;
-}
-
-function Notice({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-8 text-center">
-      <h1 className="text-2xl font-bold">{title}</h1>
-      <p className="text-lg text-gray-600">{children}</p>
-    </main>
-  );
 }

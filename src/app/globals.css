@@ -122,6 +122,59 @@
   --spacing-touch: 48px;
   --spacing-button-l: 56px;
   --spacing-button-xl: 64px;
+
+  /*
+   * 글자 — 피그마 텍스트 스타일과 같은 이름 (Display/L → text-display-l). 크기·줄 간격·자간·굵기를 한 번에 정한다.
+   * rem이라 폰의 '글자 크기' 설정을 따라 커진다. 16px(Body/M)보다 작은 글자는 보조 정보에만
+   */
+  --text-display-l: 2rem; /* 32/40 Black — 고객 화면 큰 제목 */
+  --text-display-l--line-height: 2.5rem;
+  --text-display-l--letter-spacing: -0.03em;
+  --text-display-l--font-weight: 900;
+  --text-title-l: 1.625rem; /* 26/34 Bold — 화면 제목 */
+  --text-title-l--line-height: 2.125rem;
+  --text-title-l--letter-spacing: -0.035em;
+  --text-title-l--font-weight: 700;
+  --text-title-m: 1.375rem; /* 22/30 Bold — 질문·시트 제목 */
+  --text-title-m--line-height: 1.875rem;
+  --text-title-m--letter-spacing: -0.02em;
+  --text-title-m--font-weight: 700;
+  --text-title-s: 1.125rem; /* 18/26 Bold — 구역 제목 */
+  --text-title-s--line-height: 1.625rem;
+  --text-title-s--font-weight: 700;
+  --text-body-l: 1.125rem; /* 18/28 — 고객 화면 본문 */
+  --text-body-l--line-height: 1.75rem;
+  --text-body-m: 1rem; /* 16/24 — 엔지니어 화면 본문 */
+  --text-body-m--line-height: 1.5rem;
+  --text-body-s: 0.875rem; /* 14/20 — 보조 설명 */
+  --text-body-s--line-height: 1.25rem;
+  --text-label-xl: 1.25rem; /* 20/26 Bold — 큰 버튼 */
+  --text-label-xl--line-height: 1.625rem;
+  --text-label-xl--font-weight: 700;
+  --text-label-l: 1.0625rem; /* 17/24 Bold — 버튼 */
+  --text-label-l--line-height: 1.5rem;
+  --text-label-l--font-weight: 700;
+  --text-label-m: 0.9375rem; /* 15/20 Bold — 작은 버튼 */
+  --text-label-m--line-height: 1.25rem;
+  --text-label-m--font-weight: 700;
+  --text-label-s: 0.8125rem; /* 13/18 Medium — 상태 칩 */
+  --text-label-s--line-height: 1.125rem;
+  --text-label-s--font-weight: 500;
+  --text-caption: 0.75rem; /* 12/16 Medium */
+  --text-caption--line-height: 1rem;
+  --text-caption--font-weight: 500;
+  --text-guide-main: 2.5rem; /* 40/46 Black — 방향 지시 */
+  --text-guide-main--line-height: 2.875rem;
+  --text-guide-main--letter-spacing: -0.05em;
+  --text-guide-main--font-weight: 900;
+  --text-guide-sub: 1.3125rem; /* 21/28 Bold */
+  --text-guide-sub--line-height: 1.75rem;
+  --text-guide-sub--font-weight: 700;
+
+  /* 그림자 — 피그마 효과 스타일 Shadow/Card · Float · Sheet */
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.06), 0 4px 12px rgb(0 0 0 / 0.06);
+  --shadow-float: 0 2px 6px rgb(0 0 0 / 0.08), 0 8px 24px rgb(0 0 0 / 0.18);
+  --shadow-sheet: 0 -8px 24px rgb(0 0 0 / 0.12);
 }
 
 body {
@@ -131,6 +184,50 @@ body {
   word-break: keep-all;
   overflow-wrap: anywhere;
   font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Malgun Gothic", sans-serif;
+}
+
+/* 키보드로 움직일 때만 초점 테두리 (터치에는 안 보임) */
+:focus-visible {
+  outline: 3px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
+/* 눌렀을 때 파란 네모가 번쩍이지 않게 — 버튼마다 눌림 색을 따로 준다 */
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 대기 중 표시: 가운데 점 둘레로 퍼지는 고리 */
+@keyframes ripple {
+  from {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  to {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+/* 시트·안내가 아래에서 올라온다 */
+@keyframes sheet-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* 장식용 움직임만 줄인다. 포인터가 사라지는 효과·길게 누르기 원은 정보라서 그대로 둔다 */
+@media (prefers-reduced-motion: reduce) {
+  .motion-decor {
+    animation: none !important;
+  }
 }
 
 /* 레이저 포인터: 보이다가 끝에서 서서히 사라진다 (pointer-marker.tsx의 SHOW_MS와 맞출 것) */

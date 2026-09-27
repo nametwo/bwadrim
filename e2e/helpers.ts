@@ -101,8 +101,14 @@ export async function mockEvents(): Promise<MockEvent[]> {
   return (await r.json()) as MockEvent[];
 }
 
-export async function mockReset(): Promise<void> {
-  await fetch(`${SUPABASE_URL}/__reset`, { method: "POST" });
+/** roomId를 주면 그 방만 되돌린다 (다른 테스트 파일과 동시에 돌 때 서로의 방·기록을 지우지 않게) */
+export async function mockReset(roomId?: string): Promise<void> {
+  await fetch(`${SUPABASE_URL}/__reset${roomId ? `?room=${roomId}` : ""}`, { method: "POST" });
+}
+
+export async function mockRooms(): Promise<{ id: string; status: string; resolved_remotely: boolean | null }[]> {
+  const r = await fetch(`${SUPABASE_URL}/__rooms`);
+  return (await r.json()) as { id: string; status: string; resolved_remotely: boolean | null }[];
 }
 
 /** 엔지니어 로그인 세션 쿠키 (@supabase/ssr 형식: base64- + base64url(JSON)) */

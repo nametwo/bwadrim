@@ -29,6 +29,18 @@
       "status": "waiting",
       "expired": true,
       "join_token": "e2e0bbbbbbbbbbbbbbbbbbbbbbbbbbb2"
+    },
+    {
+      "id": "e2e00000-0000-4000-8000-00000000a003",
+      "code": "E2ECCC",
+      "status": "waiting",
+      "join_token": "e2e0ccccccccccccccccccccccccccc3"
+    },
+    {
+      "id": "e2e00000-0000-4000-8000-00000000a004",
+      "code": "E2EDDD",
+      "status": "waiting",
+      "join_token": "e2e0ddddddddddddddddddddddddddd4"
     }
   ]
 }
