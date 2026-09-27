@@ -1,0 +1,199 @@
+// 렌더된 작업 해상도 프레임 캐시 (.cache/frames/). 렌더가 벤치 시간의 대부분이라, 두 번째 실행부터는
+// 추적기만 돈다. 키(지문)는 "장면 함수들을 모든 프레임 시각에서 평가한 값 + 렌더 코드 해시"라서
+// 궤적·조명·코드가 조금이라도 바뀌면 자동으로 다시 렌더한다.
+import fs from "node:fs";
+import path from "node:path";
+import zlib from "node:zlib";
+import type { GrayImage } from "../../src/lib/tracking/types";
+import { BASE_SOURCES, REALISM_SOURCES, probeRealism, probeScene, sourceHash } from "./codehash";
+import { hashString } from "./rng";
+import { type Sequence, pipelineOptions } from "./sequence";
+import { CACHE_DIR, TEXTURES, readTextureMeta, writeFileAtomic } from "./textures";
+
+export const FRAME_DIR = path.join(CACHE_DIR, "frames");
+
+/** 시퀀스 지문: 처리 시각마다 자세·광원·손·그림자·스트림 크기 + 기준 설정 + 텍스처·코드 해시 (+ 실감 설정) */
+export function sequenceFingerprint(seq: Sequence): string {
+  const sc = seq.scenario;
+  const sn = seq.scene;
+  const parts: (string | number)[] = [
+    sourceHash(BASE_SOURCES),
+    sc.id,
+    sc.side,
+    sc.target,
+    sc.pin,
+    JSON.stringify(sc.transport ?? null),
+    JSON.stringify(pipelineOptions),
+    sn.exposureMs,
+    sn.readoutMs,
+    JSON.stringify(sn.noise),
+    sn.seed,
+    JSON.stringify(sn.flicker ?? null),
+    seq.refTime,
+    readTextureMeta(sc.target)?.hash ?? "?",
+  ];
+  const bgId = sc.background ?? TEXTURES[sc.target].background ?? "wall";
+  parts.push(readTextureMeta(bgId)?.hash ?? "?");
+  if (sc.realism) {
+    parts.push(sourceHash(REALISM_SOURCES), JSON.stringify(sc.realism), seq.codec?.contentHash ?? "-", seq.codecKey, seq.pinZ);
+  }
+  const probe = (t: number) => {
+    probeScene(sn, t, parts, seq.qualityAt(t));
+    if (sc.realism) probeRealism(sn, t, parts);
+  };
+  probe(seq.refTime);
+  for (const t of seq.times) probe(t);
+  return hashString(parts.join(",")).toString(16).padStart(8, "0");
+}
+
+/** 파일 이름 앞부분: 시나리오 id + 길이 (게이트용 짧은 버전과 전체 버전이 서로의 캐시를 지우지 않게) */
+function cachePrefix(seq: Sequence): string {
+  return `${seq.scenario.id.replace(/[^a-zA-Z0-9_-]+/g, "_")}.d${Math.round(seq.scenario.duration * 1000)}.`;
+}
+
+export function cacheFile(seq: Sequence, fp = sequenceFingerprint(seq)): string {
+  return path.join(FRAME_DIR, `${cachePrefix(seq)}${fp}.bin`);
+}
+
+const MAGIC = 0x31464254; // "TBF1"
+
+/** 압축된 프레임 목록을 캐시 파일로 (원자적). 같은 시나리오의 옛 캐시는 지운다 */
+export function writeFrameCache(seq: Sequence, frames: Buffer[], fp = sequenceFingerprint(seq)): void {
+  const header = Buffer.from(
+    JSON.stringify({ id: seq.scenario.id, fp, count: frames.length, dims: seq.gt.map((g) => [g.width, g.height]) }),
+  );
+  const parts: Buffer[] = [];
+  const h = Buffer.alloc(8);
+  h.writeUInt32LE(MAGIC, 0);
+  h.writeUInt32LE(header.length, 4);
+  parts.push(h, header);
+  for (const f of frames) {
+    const l = Buffer.alloc(4);
+    l.writeUInt32LE(f.length, 0);
+    parts.push(l, f);
+  }
+  const file = cacheFile(seq, fp);
+  const prefix = cachePrefix(seq);
+  try {
+    for (const old of fs.readdirSync(FRAME_DIR)) {
+      if (old.startsWith(prefix) && old.endsWith(".bin") && path.join(FRAME_DIR, old) !== file) {
+        fs.rmSync(path.join(FRAME_DIR, old), { force: true });
+      }
+    }
+  } catch {
+    // 디렉터리가 아직 없음
+  }
+  writeFileAtomic(file, Buffer.concat(parts));
+}
+
+export function compressFrame(img: GrayImage): Buffer {
+  return zlib.deflateRawSync(Buffer.from(img.data.buffer, img.data.byteOffset, img.data.length), { level: 1 });
+}
+
+/** 캐시에서 읽은 프레임 모음. 없거나 손상됐으면 null */
+export interface CachedFrames {
+  count: number;
+  frame(k: number): GrayImage;
+}
+
+export function readFrameCache(seq: Sequence, fp = sequenceFingerprint(seq)): CachedFrames | null {
+  const file = cacheFile(seq, fp);
+  let buf: Buffer;
+  try {
+    buf = fs.readFileSync(file);
+  } catch {
+    return null;
+  }
+  try {
+    if (buf.readUInt32LE(0) !== MAGIC) return null;
+    const hl = buf.readUInt32LE(4);
+    const header = JSON.parse(buf.subarray(8, 8 + hl).toString("utf8")) as { count: number; dims: [number, number][] };
+    if (header.count !== seq.times.length) return null;
+    const offs: number[] = [];
+    let p = 8 + hl;
+    for (let k = 0; k < header.count; k++) {
+      const len = buf.readUInt32LE(p);
+      offs.push(p + 4, len);
+      p += 4 + len;
+    }
+    if (p !== buf.length) return null;
+    return {
+      count: header.count,
+      frame(k: number): GrayImage {
+        const [w, h] = header.dims[k];
+        const raw = zlib.inflateRawSync(buf.subarray(offs[2 * k], offs[2 * k] + offs[2 * k + 1]));
+        if (raw.length !== w * h) throw new Error(`frame cache corrupt: ${seq.scenario.id} #${k}`);
+        return { width: w, height: h, data: new Uint8Array(raw.buffer, raw.byteOffset, raw.length) };
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function hasFrameCache(seq: Sequence): boolean {
+  return fs.existsSync(cacheFile(seq));
+}
+
+// ───────────── 기준 이미지 캐시 (.cache/refs/) ─────────────
+// 기준 이미지는 프레임과 따로 렌더된다(기준 시각 + 고객 쪽이면 JPEG q80 왕복). 실감 시나리오는 한 장에 ~1초라
+// 캐시가 없으면 매 실행마다 전체 벤치에 ~17초가 더 든다. 키는 프레임 캐시와 같은 지문(기준 시각·설정 포함).
+
+export const REF_DIR = path.join(CACHE_DIR, "refs");
+const REF_MAGIC = 0x31464252; // "RBF1"
+
+function refFile(seq: Sequence, fp: string): string {
+  return path.join(REF_DIR, `${cachePrefix(seq)}${fp}.bin`);
+}
+
+export function readRefCache(seq: Sequence, fp = sequenceFingerprint(seq)): GrayImage | null {
+  try {
+    const buf = fs.readFileSync(refFile(seq, fp));
+    if (buf.readUInt32LE(0) !== REF_MAGIC) return null;
+    const w = buf.readUInt32LE(4);
+    const h = buf.readUInt32LE(8);
+    const raw = zlib.inflateRawSync(buf.subarray(12));
+    if (raw.length !== w * h) return null;
+    return { width: w, height: h, data: new Uint8Array(raw.buffer, raw.byteOffset, raw.length) };
+  } catch {
+    return null;
+  }
+}
+
+export function writeRefCache(seq: Sequence, img: GrayImage, fp = sequenceFingerprint(seq)): void {
+  const h = Buffer.alloc(12);
+  h.writeUInt32LE(REF_MAGIC, 0);
+  h.writeUInt32LE(img.width, 4);
+  h.writeUInt32LE(img.height, 8);
+  const file = refFile(seq, fp);
+  const prefix = cachePrefix(seq);
+  try {
+    for (const old of fs.readdirSync(REF_DIR)) {
+      if (old.startsWith(prefix) && old.endsWith(".bin") && path.join(REF_DIR, old) !== file) fs.rmSync(path.join(REF_DIR, old), { force: true });
+    }
+  } catch {
+    // 디렉터리가 아직 없음
+  }
+  writeFileAtomic(file, Buffer.concat([h, compressFrame(img)]));
+}
+
+/**
+ * 기준 이미지: 캐시에 있으면 읽어 seq에 넣고, 없으면 렌더해서 캐시에 쓴다 (바이트 단위로 같은 결과 — 렌더는 결정적).
+ * 이미 렌더된 seq면 그대로.
+ */
+export function cachedRef(seq: Sequence, fp?: string): GrayImage {
+  if (seq.hasRef()) return seq.ref;
+  const key = fp ?? sequenceFingerprint(seq);
+  const hit = readRefCache(seq, key);
+  if (hit) {
+    seq.provideRef(hit);
+    if (seq.hasRef()) return hit;
+  }
+  const img = seq.ref;
+  try {
+    writeRefCache(seq, img, key);
+  } catch {
+    // 캐시 쓰기 실패는 무시 (읽기 전용 등)
+  }
+  return img;
+}

@@ -40,3 +40,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# tracking bench / e2e outputs
+/scripts/tracking-bench/.cache/
+/scripts/tracking-bench/out/
+/test-results/
+/playwright-report/

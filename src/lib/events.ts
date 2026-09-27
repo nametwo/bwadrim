@@ -10,6 +10,7 @@ export type EventName =
   | "relay_used"
   | "pointer_used"
   | "freeze_used"
+  | "anchor_used"
   | "ended"
   | "resolved_remotely";
 

@@ -11,6 +11,7 @@ import {
   type CameraCommand,
   type CameraState,
 } from "./camera";
+import { fromRTCDataChannel, type ChannelDataLink, type DataLink } from "./data-link";
 
 // 정지 화면(JPEG data URL)은 DataChannel 메시지 크기 제한 때문에 조각내 보낸다
 const FREEZE_CHUNK = 12_000;
@@ -27,6 +28,8 @@ const FREEZE_MAX_CHUNKS = 400;
 // 순서는 서버 시각 기준(clockOffsetMs)이라 기기 시계가 틀려도 대체로 맞다.
 // 역할 고정: customer(카메라 보유)가 offer, engineer가 answer.
 // 포인터·드로잉용 DataChannel('draw')은 offer에 미리 포함해 둔다.
+// AR 핀(CALL-14)은 전용 DataChannel('anchor')을 따로 연다 — 기준 사진 조각이 'draw'의 포인터·그리기를 막지 않게.
+// 연결이 바뀌어도(재연결·이어받기) 같은 anchorLink 객체에 새 채널을 붙이므로 쓰는 쪽은 한 번만 받으면 된다.
 // 포인터는 연결 후 DataChannel로, 아직 열리지 않았으면 시그널링 broadcast로 보낸다.
 
 export type Role = "engineer" | "customer";
@@ -127,6 +130,7 @@ export class CallSession {
   private pc: RTCPeerConnection | null = null;
   private pendingIce: { from: string; candidate: RTCIceCandidateInit }[] = [];
   private dc: RTCDataChannel | null = null;
+  private readonly anchorChannel: ChannelDataLink = fromRTCDataChannel(null);
   private incomingFreeze: { id: string; parts: string[]; got: number } | null =
     null;
   private negotiating = false;
@@ -320,6 +324,7 @@ export class CallSession {
       pc = this.createPeer(peerId);
 
       this.attachDataChannel(pc.createDataChannel("draw"));
+      this.anchorChannel.attach(pc.createDataChannel("anchor"));
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -355,7 +360,10 @@ export class CallSession {
       if (this.pc) this.resetPeer(); // 고객이 재시도한 경우 이전 연결 폐기
       pc = this.createPeer(peerId);
 
-      pc.ondatachannel = (e) => this.attachDataChannel(e.channel);
+      pc.ondatachannel = (e) => {
+        if (e.channel.label === "anchor") this.anchorChannel.attach(e.channel);
+        else this.attachDataChannel(e.channel);
+      };
 
       await pc.setRemoteDescription(sdp);
       if (this.pc !== pc) return;
@@ -445,6 +453,11 @@ export class CallSession {
         if (cmd && !this.closed) this.opts.onDraw?.(cmd);
       }
     };
+  }
+
+  // AR 핀 추적 프로토콜용 전송로 (src/lib/tracking). 세션이 살아 있는 동안 같은 객체
+  get anchorLink(): DataLink {
+    return this.anchorChannel;
   }
 
   private receiveFreezeChunk(msg: unknown) {
@@ -592,6 +605,7 @@ export class CallSession {
     this.pc = null;
     this.pcPeer = null;
     this.dc = null;
+    this.anchorChannel.attach(null);
     this.incomingFreeze = null;
     // 이전 기기의 후보만 버린다 — 새 기기 후보가 먼저 와 있을 수 있다
     this.pendingIce = this.pendingIce.filter((q) => q.from !== old);
@@ -612,6 +626,7 @@ export class CallSession {
     this.pc?.close();
     this.pc = null;
     this.pcPeer = null;
+    this.anchorChannel.attach(null);
     this.opts.onState("ended");
     if (this.opts.role === "customer") this.destroy();
   }
@@ -627,6 +642,7 @@ export class CallSession {
   // 언마운트 시에도 호출. 여러 번 불러도 된다. 로컬 트랙 정지는 호출측 책임.
   destroy() {
     this.closed = true;
+    this.anchorChannel.dispose();
     this.pc?.close();
     this.pc = null;
     this.pcPeer = null;
