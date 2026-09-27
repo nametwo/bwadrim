@@ -13,6 +13,117 @@
   --color-foreground: var(--foreground);
 }
 
+/*
+ * 디자인 토큰 — 피그마 디자인 시스템 v1과 같은 이름 (https://www.figma.com/design/Hqnz1fYrJJAhO7nDGNKRwn)
+ * 피그마 변수 a/b → --color-a-b, a/default → --color-a
+ */
+@theme {
+  /* 브랜드 블루. 600이 메인(흰 글씨 대비 5.6:1), 700이 눌림 상태 */
+  --color-brand-50: #eaf0ff;
+  --color-brand-100: #d6e2ff;
+  --color-brand-200: #b3c8ff;
+  --color-brand-300: #86a6fb;
+  --color-brand-400: #5a82f2;
+  --color-brand-500: #3a67eb;
+  --color-brand-600: #2456e6;
+  --color-brand-700: #1a3fb0;
+  --color-brand-800: #15338a;
+  --color-brand-900: #102766;
+
+  /* 회색 (브랜드 쪽으로 살짝 푸른 기) */
+  --color-gray-0: #ffffff;
+  --color-gray-50: #f6f7f9;
+  --color-gray-100: #eef0f3;
+  --color-gray-200: #dde1e7;
+  --color-gray-300: #c3c9d2;
+  --color-gray-400: #9aa3b0;
+  --color-gray-500: #646e7e; /* 흰·gray-50·gray-100 배경 위 글씨 대비 4.5:1 이상 */
+  --color-gray-600: #515a68;
+  --color-gray-700: #3a414c;
+  --color-gray-800: #252a32;
+  --color-gray-900: #161a20;
+  --color-gray-950: #0c0e12;
+
+  --color-red-50: #fff1f1;
+  --color-red-500: #e5484d;
+  --color-red-600: #c62f35;
+  --color-red-700: #a8262b;
+  --color-green-50: #e8f7ee;
+  --color-green-500: #1e9e5a;
+  --color-green-600: #177a46;
+  --color-amber-50: #fff5db;
+  --color-amber-500: #f2a100;
+  --color-amber-700: #8a5a00;
+  --color-yellow-400: #ffd400;
+  --color-black-80: rgb(0 0 0 / 0.8);
+  --color-black-50: rgb(0 0 0 / 0.5);
+
+  /* 지금 누를 것 — 파란색은 한 화면에 하나만 */
+  --color-primary: var(--color-brand-600);
+  --color-primary-pressed: var(--color-brand-700);
+  --color-primary-tint: var(--color-brand-50);
+  --color-on-primary: var(--color-gray-0);
+
+  /* 밝은 화면 */
+  --color-bg-page: var(--color-gray-0);
+  --color-bg-subtle: var(--color-gray-50);
+  --color-bg-muted: var(--color-gray-100);
+  --color-text-primary: var(--color-gray-900);
+  --color-text-secondary: var(--color-gray-600);
+  --color-text-tertiary: var(--color-gray-400);
+  --color-text-brand: var(--color-brand-700);
+  --color-text-danger: var(--color-red-600);
+  --color-text-success: var(--color-green-600);
+  --color-text-warning: var(--color-amber-700);
+  --color-border: var(--color-gray-200);
+  --color-border-strong: var(--color-gray-300);
+  --color-border-focus: var(--color-brand-600);
+  --color-icon: var(--color-gray-900);
+  --color-icon-secondary: var(--color-gray-500);
+  --color-icon-on-primary: var(--color-gray-0);
+  --color-icon-brand: var(--color-brand-600);
+
+  /* 상태 — 빨강은 통화 종료와 오류에만. danger 위 흰 글씨 대비 5.4:1 */
+  --color-danger: var(--color-red-600);
+  --color-danger-pressed: var(--color-red-700);
+  --color-danger-tint: var(--color-red-50);
+  --color-success: var(--color-green-500);
+  --color-success-tint: var(--color-green-50);
+  --color-warning: var(--color-amber-500);
+  --color-warning-tint: var(--color-amber-50);
+
+  /* 통화 화면은 어두운 표면 */
+  --color-call-bg: var(--color-gray-950);
+  --color-call-surface: var(--color-gray-900);
+  --color-call-control: var(--color-gray-800);
+  --color-call-control-pressed: var(--color-gray-700);
+  --color-call-border: var(--color-gray-700);
+  --color-call-text: var(--color-gray-50);
+  --color-call-text-secondary: var(--color-gray-400);
+  --color-call-icon: var(--color-gray-50);
+
+  /* 방향 지시(CALL-15) — 노랑은 여기에만. 카메라 영상 위 어떤 배경에서도 보이게 */
+  --color-guide-signal: var(--color-yellow-400);
+  --color-guide-on-signal: var(--color-gray-950);
+  --color-guide-band: var(--color-black-80);
+  --color-guide-on-band: var(--color-gray-0);
+  --color-guide-outline: var(--color-gray-950);
+
+  /* 가리키기 — 디자인 시스템은 브랜드 블루. 지금 CALL-08·09는 빨강(red-500)이라 바꿀지 결정 필요 */
+  --color-pointer: var(--color-brand-500);
+  --color-pointer-halo: var(--color-gray-0);
+
+  --color-overlay-scrim: var(--color-black-50);
+
+  /* 모서리: sm 8 = rounded-lg, md 12 = rounded-xl, lg 16 = rounded-2xl, xl 24 = rounded-3xl */
+  --radius-full: 9999px;
+
+  /* 누르는 크기 — spacing 이름이라 h-touch, min-h-button-l, size-button-xl 모두 된다 */
+  --spacing-touch: 48px;
+  --spacing-button-l: 56px;
+  --spacing-button-xl: 64px;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);

@@ -62,5 +62,7 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   // 정적 파일·이미지 최적화는 제외. 세션 갱신을 위해 나머지 페이지는 통과시킨다.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|webp|ico)$).*)"],
+  // 추적 실험실(/lab/*, CALL-14)은 로그인·Supabase가 필요 없어 제외한다 —
+  // Supabase 환경 변수가 없는 Preview 배포에서도 폰으로 열 수 있게.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|lab(?:/|$)|.*\\.(?:svg|png|jpg|jpeg|webp|ico)$).*)"],
 };
