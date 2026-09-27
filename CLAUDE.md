@@ -56,6 +56,15 @@ Supabase Realtime **비공개** broadcast 채널, 역할별 일방통행 두 개
 각자 자기 채널로 보내고 상대 채널만 듣는다. 고객은 `:e`에서 온 신호만 믿을 것 (엔지니어 사칭 차단). 공개 채널로 되돌리지 말 것.
 메시지 타입: `offer` / `answer` / `ice` / `pointer` / `cam` / `bye`.
 포인터·드로잉은 연결 후 DataChannel로 옮길 것 (지연 최소화). 좌표는 0~1 정규화.
+방향 지시(CALL-15, `src/lib/webrtc/guide.ts`)도 DataChannel(순서 보장). 엔지니어가 십자키(`src/components/guide-dpad.tsx`, 상하좌우 + 가운데 가까이/멀리)를 누르는 동안 `hold`를 0.4초마다 재전송하고 떼면 `release`. 고객 쪽(`guide-overlay.tsx`)은 1.5초간 `hold`가 없으면 스스로 지운다. 아직 통화 화면에 연결 전이고 실험실 `/lab/guide`에서만 쓴다. 통화 화면에 붙일 때는 전용 채널(`guide`)을 따로 열 것 — 'draw' 채널에 섞으면 정지 사진 조각 뒤에 막혀 1.5초가 지나 화살표가 저절로 사라진다(고객에겐 '멈춤'으로 보임).
+
+## 디자인 토큰
+
+색·모서리·크기는 `src/app/globals.css`의 `@theme` 토큰을 쓸 것 (hex 직접 쓰지 말 것). 이름은 피그마 변수와 같음: https://www.figma.com/design/Hqnz1fYrJJAhO7nDGNKRwn (`a/b` → `--color-a-b`, `a/default` → `--color-a`)
+- 파랑(`primary`)은 "지금 누를 것" 하나에만. 보조 동작·선택 상태는 중립색
+- 노랑(`guide-signal`)은 방향 지시에만. 통화 화면은 `call-*`, 빨강(`danger`)은 종료·오류에만
+- 가리키기(`pointer`)는 디자인 시스템상 브랜드 블루지만, 지금 CALL-08·09 구현은 빨강이다. 바꾸려면 요구사항부터 고칠 것
+- 지금 코드의 다른 예외(바꾸려면 요구사항부터): 카톡 공유 버튼 노랑(카카오 색), CALL-11 손전등 켜짐 노랑, '지금 누를 것' 버튼은 아직 검정. 작업 중인 AR(CALL-14)도 빨강 화살표·amber 정지 표시를 쓴다
 
 ## 이벤트 이름 (events 테이블)
 
