@@ -4,9 +4,9 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { formatDuration, formatKstDateTime, kstMonthStartIso } from "@/lib/format";
 import { engineerNameOf } from "@/lib/engineer-name";
+import { BottomCta } from "@/components/ui/bottom-cta";
 import { Brand } from "@/components/ui/brand";
-import { ChartIcon, ChevronRightIcon, LogoutIcon, MessageIcon, UserIcon } from "@/components/ui/icons";
-import { StatCard } from "@/components/ui/stat-card";
+import { ChartIcon, ChevronRightIcon, ClockIcon, LogoutIcon, MessageIcon, PencilIcon } from "@/components/ui/icons";
 import { StatusChip, type ChipTone } from "@/components/ui/status-chip";
 import { logout } from "../login/actions";
 import { createRoom } from "./actions";
@@ -43,7 +43,8 @@ function durationSec(room: { created_at: string; ended_at: string | null }) {
   return room.ended_at ? (new Date(room.ended_at).getTime() - new Date(room.created_at).getTime()) / 1000 : null;
 }
 
-// 대시보드 (피그마 E02): 파란 버튼은 '새 A/S 시작' 하나, 원격 해결률이 맨 위(영업 자료가 되는 핵심 지표)
+// 대시보드 (피그마 E02). 회색 바탕에 흰 카드 세 장 — 이번 달(원격 해결률이 가장 큰 숫자, 영업 자료가 되는 핵심 지표),
+// 진행 중(내가 이어서 할 일), 최근 상담. 파란 버튼은 '새 A/S 시작' 하나, 한 손으로 누르게 화면 아래에 붙인다.
 export default async function DashboardPage() {
   const supabase = await createClient();
   const {
@@ -81,14 +82,14 @@ export default async function DashboardPage() {
   const avg = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null;
 
   return (
-    <div className="flex min-h-dvh flex-col bg-bg-subtle">
-      <main className="mx-auto flex w-full max-w-md flex-col gap-5 px-4 pt-[max(8px,env(safe-area-inset-top))] pb-[max(24px,env(safe-area-inset-bottom))]">
+    <div className="flex min-h-dvh flex-col bg-bg-muted">
+      <main className="mx-auto flex w-full max-w-md flex-1 flex-col px-5 pt-[max(8px,env(safe-area-inset-top))]">
         <header className="flex min-h-14 items-center justify-between">
           <Brand />
           <div className="-mr-2 flex items-center">
             <Link
               href="/stats"
-              className="flex h-touch items-center gap-1.5 rounded-xl px-3 text-label-m text-text-secondary active:bg-bg-muted"
+              className="flex h-touch items-center gap-1.5 rounded-xl px-3 text-label-m text-text-secondary active:bg-border"
             >
               <ChartIcon className="size-5" />
               통계
@@ -96,7 +97,7 @@ export default async function DashboardPage() {
             <form action={logout}>
               <button
                 type="submit"
-                className="flex h-touch items-center gap-1.5 rounded-xl px-3 text-label-m text-text-secondary active:bg-bg-muted"
+                className="flex h-touch items-center gap-1.5 rounded-xl px-3 text-label-m text-text-secondary active:bg-border"
               >
                 <LogoutIcon className="size-5" />
                 로그아웃
@@ -105,113 +106,132 @@ export default async function DashboardPage() {
           </div>
         </header>
 
-        {name && <h1 className="text-title-m">안녕하세요, {name}님</h1>}
+        <h1 className="pt-3 pb-5 text-title-l">{name ? `${name}님, 안녕하세요` : "안녕하세요"}</h1>
 
-        <form action={createRoom}>
-          <NewRoomButton />
-        </form>
-
-        <Link href="/stats" aria-label="이번 달 통계 자세히 보기" className="grid grid-cols-2 gap-3">
-          <StatCard
-            label="이번 달 원격 해결률"
-            value={rate === null ? "—" : `${rate}%`}
-            sub={rate === null ? "아직 기록이 없어요" : `출장 ${resolved}건 줄였어요`}
-            subTone={rate === null ? "secondary" : "success"}
-          />
-          <StatCard
-            label="이번 달 상담"
-            value={`${monthRooms.length}건`}
-            sub={avg === null ? "평균 시간 —" : `평균 ${formatDuration(avg)}`}
-          />
-        </Link>
-
-        {open.length > 0 && (
-          <section className="flex flex-col gap-2">
-            <h2 className="px-1 text-title-s">진행 중인 상담</h2>
-            <ul className="flex flex-col gap-2">
-              {open.map((room) => {
-                const waiting = room.status === "waiting";
-                const hoursLeft = Math.max(
-                  1,
-                  Math.floor((new Date(room.expires_at).getTime() - now.getTime()) / 3_600_000),
-                );
-                return (
-                  <li key={room.id}>
-                    <MicAheadLink
-                      roomId={room.id}
-                      href={`/room/${room.id}`}
-                      className="flex items-center gap-3 rounded-xl bg-bg-page px-4 py-3 ring-1 ring-border active:bg-bg-muted"
-                    >
-                      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                        <span className="flex items-center gap-2">
-                          <span className="text-label-l">{formatKstDateTime(new Date(room.created_at), now)}</span>
-                          <StatusChip tone={waiting ? "waiting" : "call"}>{waiting ? "대기 중" : "기록 전"}</StatusChip>
-                        </span>
-                        <span className="text-body-s text-text-secondary">
-                          {waiting
-                            ? `고객님이 아직 안 들어왔어요 · 링크 ${hoursLeft}시간 남음`
-                            : "통화했지만 결과를 아직 안 남겼어요"}
-                        </span>
-                      </div>
-                      <span className="flex flex-none items-center text-label-m text-text-brand">
-                        이어하기
-                        <ChevronRightIcon className="size-5" />
-                      </span>
-                    </MicAheadLink>
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-        )}
-
-        <section className="flex flex-col gap-2">
-          <h2 className="px-1 text-title-s">최근 상담</h2>
-          {list.length === 0 ? (
-            <div className="flex flex-col items-center gap-3 rounded-2xl bg-bg-page px-6 py-10 text-center">
-              <span className="grid size-14 place-items-center rounded-full bg-bg-muted text-icon-secondary">
-                <MessageIcon className="size-7" />
+        <div className="flex flex-col gap-3">
+          {/* 이번 달: 원격 해결률 한 숫자를 가장 크게, 나머지는 아래 한 줄. 누르면 통계 (DATA-06) */}
+          <Link
+            href="/stats"
+            aria-label="이번 달 통계 자세히 보기"
+            className="flex flex-col rounded-3xl bg-bg-page p-5 transition-colors active:bg-bg-subtle"
+          >
+            <span className="flex items-center justify-between text-label-m text-text-secondary">
+              이번 달 원격 해결률
+              <ChevronRightIcon className="size-5 text-icon-secondary" />
+            </span>
+            <span className="mt-1 flex items-baseline gap-2">
+              <span className="text-display-l text-text-primary">{rate === null ? "—" : `${rate}%`}</span>
+              <span className={`text-label-m ${rate === null ? "text-text-secondary" : "text-text-success"}`}>
+                {rate === null ? "아직 기록이 없어요" : `출장 ${resolved}건 줄였어요`}
               </span>
-              <p className="text-label-l">아직 상담이 없어요</p>
-              <p className="text-body-m text-text-secondary">
-                위의 &lsquo;새 A/S 시작&rsquo;을 누르고
-                <br />
-                고객님께 문자로 링크를 보내 보세요.
-              </p>
-            </div>
-          ) : past.length === 0 ? (
-            <p className="rounded-2xl bg-bg-page py-6 text-center text-body-m text-text-secondary">끝난 상담이 아직 없어요.</p>
-          ) : (
-            <ul className="flex flex-col gap-2">
-              {past.map((room) => {
-                const result = resultOf(room);
-                const d = room.status === "ended" && room.resolved_remotely !== null ? durationSec(room) : null;
-                return (
-                  <li key={room.id}>
-                    {/* 피그마 SessionRow: 고객 이름은 저장하지 않으므로(NFR-07) 시각으로 구분한다 */}
-                    <Link
-                      href={`/room/${room.id}`}
-                      className="flex items-center gap-3 rounded-xl bg-bg-page px-4 py-3 active:bg-bg-muted"
-                    >
-                      <span className="grid size-11 flex-none place-items-center rounded-full bg-bg-muted text-icon-secondary">
-                        <UserIcon className="size-[22px]" />
-                      </span>
-                      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                        {/* 서버(Vercel)는 UTC라서 한국 시간으로 고정해 보여 준다 (BUG-06) */}
-                        <span className="truncate text-label-l">{formatKstDateTime(new Date(room.created_at), now)}</span>
-                        <span className="text-body-s text-text-secondary">
-                          {d !== null ? `${formatDuration(d)} 걸림` : result.tone === "ended" ? "기록 없음" : ""}
+            </span>
+            {rate !== null && (
+              <span aria-hidden="true" className="mt-3 h-2 overflow-hidden rounded-full bg-bg-muted">
+                <span className="block h-full rounded-full bg-success" style={{ width: `${rate}%` }} />
+              </span>
+            )}
+            <span className="mt-4 grid grid-cols-2 border-t border-border pt-4">
+              <MiniStat label="상담" value={`${monthRooms.length}건`} />
+              <MiniStat label="평균 시간" value={avg === null ? "—" : formatDuration(avg)} />
+            </span>
+          </Link>
+
+          {open.length > 0 && (
+            <section className="rounded-3xl bg-bg-page py-2">
+              <h2 className="px-5 pt-3 pb-1 text-title-s">
+                진행 중 <span className="text-text-secondary">{open.length}</span>
+              </h2>
+              <ul>
+                {open.map((room) => {
+                  const waiting = room.status === "waiting";
+                  const hoursLeft = Math.max(
+                    1,
+                    Math.floor((new Date(room.expires_at).getTime() - now.getTime()) / 3_600_000),
+                  );
+                  return (
+                    <li key={room.id}>
+                      {/* 무엇을 이어서 할지(상태)가 먼저, 시각은 보조 */}
+                      <MicAheadLink
+                        roomId={room.id}
+                        href={`/room/${room.id}`}
+                        className="flex items-center gap-3 px-5 py-3 active:bg-bg-subtle"
+                      >
+                        <span
+                          className={`grid size-11 flex-none place-items-center rounded-full ${
+                            waiting ? "bg-warning-tint text-text-warning" : "bg-primary-tint text-icon-brand"
+                          }`}
+                        >
+                          {waiting ? <ClockIcon className="size-[22px]" /> : <PencilIcon className="size-[22px]" />}
                         </span>
-                      </span>
-                      <StatusChip tone={result.tone}>{result.text}</StatusChip>
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          <span className="text-label-l">{waiting ? "고객님 기다리는 중" : "결과 기록 전"}</span>
+                          <span className="truncate text-body-s text-text-secondary">
+                            {formatKstDateTime(new Date(room.created_at), now)}
+                            {waiting && ` · 링크 ${hoursLeft}시간 남음`}
+                          </span>
+                        </span>
+                        <ChevronRightIcon aria-label="이어하기" className="size-5 flex-none text-icon-secondary" />
+                      </MicAheadLink>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
           )}
-        </section>
+
+          <section className="rounded-3xl bg-bg-page py-2">
+            <h2 className="px-5 pt-3 pb-1 text-title-s">최근 상담</h2>
+            {list.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 px-6 pt-6 pb-8 text-center">
+                <span className="mb-2 grid size-14 place-items-center rounded-full bg-bg-muted text-icon-secondary">
+                  <MessageIcon className="size-7" />
+                </span>
+                <p className="text-label-l">아직 상담이 없어요</p>
+                <p className="text-body-m text-text-secondary">아래 &lsquo;새 A/S 시작&rsquo;으로 시작해 보세요</p>
+              </div>
+            ) : past.length === 0 ? (
+              <p className="px-5 pt-2 pb-5 text-body-m text-text-secondary">끝난 상담이 아직 없어요.</p>
+            ) : (
+              <ul>
+                {past.map((room) => {
+                  const result = resultOf(room);
+                  const d = room.status === "ended" && room.resolved_remotely !== null ? durationSec(room) : null;
+                  return (
+                    <li key={room.id}>
+                      {/* 피그마 SessionRow: 고객 이름은 저장하지 않으므로(NFR-07) 시각으로 구분한다 */}
+                      <Link href={`/room/${room.id}`} className="flex items-center gap-3 px-5 py-3 active:bg-bg-subtle">
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          {/* 서버(Vercel)는 UTC라서 한국 시간으로 고정해 보여 준다 (BUG-06) */}
+                          <span className="truncate text-label-l">{formatKstDateTime(new Date(room.created_at), now)}</span>
+                          <span className="text-body-s text-text-secondary">
+                            {d !== null ? `${formatDuration(d)} 걸림` : "기록 없음"}
+                          </span>
+                        </span>
+                        <StatusChip tone={result.tone}>{result.text}</StatusChip>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+        </div>
+
+        <BottomCta bg="muted">
+          <form action={createRoom}>
+            <NewRoomButton />
+          </form>
+        </BottomCta>
       </main>
     </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="flex flex-col gap-0.5">
+      <span className="text-body-s text-text-secondary">{label}</span>
+      <span className="text-title-s text-text-primary">{value}</span>
+    </span>
   );
 }

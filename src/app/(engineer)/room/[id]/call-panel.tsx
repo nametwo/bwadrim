@@ -28,6 +28,7 @@ import { LongPressRing } from "@/components/anchor/long-press-ring";
 import { GuideDpad } from "@/components/guide-dpad";
 import { GuidePill } from "@/components/guide-pill";
 import { Banner } from "@/components/ui/banner";
+import { BottomCta } from "@/components/ui/bottom-cta";
 import { Brand } from "@/components/ui/brand";
 import { Button } from "@/components/ui/button";
 import { CallControl } from "@/components/ui/call-control";
@@ -50,7 +51,7 @@ import {
 } from "@/components/ui/icons";
 import { endRoom, getJoinProgress, logToolUsed, markRoomActive, type JoinProgress } from "./actions";
 import type { SentVia } from "./share-buttons";
-import { AppBar, CallTimer, QualityPill, ShortcutsBox } from "./call-ui";
+import { AppBar, AppBarAction, CallTimer, QualityPill, ShortcutsBox } from "./call-ui";
 import { WaitingView } from "./waiting-view";
 import { RecordView, type CallSummary } from "./record-view";
 
@@ -727,8 +728,8 @@ export function CallPanel({
 
   // TURN 없이 STUN만으로 동작 중 — 모바일망(5G/LTE)끼리는 연결이 실패할 수 있다
   const turnBanner = turnError && (
-    <Banner tone="warning" icon={<AlertIcon className="size-[22px]" />}>
-      TURN 서버 없이 연결 중 — 모바일망끼리는 실패할 수 있어요 ({turnError})
+    <Banner tone="warning" icon={<AlertIcon className="size-[22px]" />} sub={`모바일망끼리는 연결이 안 될 수 있어요 (${turnError})`}>
+      중계 서버(TURN) 없이 연결 중
     </Banner>
   );
 
@@ -776,36 +777,36 @@ export function CallPanel({
     return (
       <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pt-[max(8px,env(safe-area-inset-top))]">
         <AppBar
-          title={everConnected ? "원격 A/S" : "새 A/S 시작"}
           right={
-            <button
-              type="button"
-              onClick={requestEnd}
-              disabled={starting}
-              className="-mr-2 h-touch rounded-xl px-3 text-label-m text-text-secondary active:bg-bg-muted disabled:opacity-40"
-            >
+            <AppBarAction onClick={requestEnd} disabled={starting}>
               {endLabel}
-            </button>
+            </AppBarAction>
           }
         />
-        <section className="flex flex-1 flex-col justify-center gap-6 py-8">
-          <div className="grid size-20 place-items-center rounded-full bg-primary-tint text-icon-brand">
-            <MicIcon className="size-10" />
+        <section className="flex flex-col gap-2 pt-3">
+          <div className="mb-5 grid size-14 place-items-center rounded-full bg-primary-tint text-icon-brand">
+            <MicIcon className="size-7" />
           </div>
-          <div className="flex flex-col gap-2">
-            <h2 className="text-title-l">{everConnected ? "다시 연결할까요?" : "마이크를 켜고 시작해요"}</h2>
-            <p className="text-body-m text-text-secondary">
-              {everConnected
-                ? "고객님 화면이 열려 있으면 누르는 대로 바로 이어져요."
-                : "마이크를 켜면 고객님께 보낼 링크가 나와요. 고객님이 카메라를 켜는 대로 자동으로 연결돼요."}
-            </p>
-          </div>
+          <h1 className="text-title-l">
+            {everConnected ? (
+              "다시 연결할까요?"
+            ) : (
+              <>
+                마이크를 켜고
+                <br />
+                시작할게요
+              </>
+            )}
+          </h1>
+          <p className="text-body-m text-text-secondary">
+            {everConnected ? "고객님 화면이 열려 있으면 바로 이어져요" : "켜면 고객님께 보낼 링크가 나와요"}
+          </p>
         </section>
-        <div className="sticky bottom-0 -mx-5 mt-auto bg-bg-page/95 px-5 pt-3 pb-[max(16px,env(safe-area-inset-bottom))] backdrop-blur">
+        <BottomCta>
           <Button size="xl" block onClick={() => start()} loading={starting} icon={<MicIcon className="size-6" />}>
             {starting ? "준비 중…" : everConnected ? "마이크 켜고 다시 연결" : "마이크 켜고 연결 준비"}
           </Button>
-        </div>
+        </BottomCta>
         {endSheets(false)}
       </main>
     );

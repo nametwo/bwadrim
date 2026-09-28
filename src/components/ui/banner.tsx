@@ -26,6 +26,7 @@ export function Banner({
   children,
   sub,
   role,
+  flat = false,
   testId,
 }: {
   tone?: BannerTone;
@@ -34,14 +35,17 @@ export function Banner({
   /** 두 번째 줄 (Body/S) */
   sub?: ReactNode;
   role?: "alert" | "status";
+  /** 밝은 화면 안에 놓일 때: 그림자 없이 면으로만 (영상 위에 겹칠 때는 그림자가 있어야 보인다) */
+  flat?: boolean;
   testId?: string;
 }) {
   const t = TONE[tone];
+  const box = flat ? (tone === "info" ? "bg-bg-subtle" : t.box) : `${t.box} shadow-float`;
   return (
     <div
       role={role}
       data-testid={testId}
-      className={`flex items-start gap-3 rounded-xl px-4 py-3 text-text-primary shadow-float ${t.box}`}
+      className={`flex items-start gap-3 rounded-2xl px-4 py-3 text-text-primary ${box}`}
     >
       <span className={`mt-px flex-none ${t.icon}`}>{icon ?? DEFAULT_ICON[tone]}</span>
       <span className="flex min-w-0 flex-col">

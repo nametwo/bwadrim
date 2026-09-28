@@ -23,13 +23,13 @@ export function QualityPill({ quality, connecting }: { quality: CallQuality; con
   );
 }
 
-/** 밝은 화면 위쪽 바 — 피그마 AppBar: 뒤로가기 + 제목, 오른쪽 동작 */
+/** 밝은 화면 위쪽 바 — 피그마 AppBar: 뒤로가기, 오른쪽 동작. 화면 제목은 바가 아니라 본문 맨 위에 크게 쓴다(title 없이) */
 export function AppBar({
   title,
   back = true,
   right,
 }: {
-  title: ReactNode;
+  title?: ReactNode;
   back?: boolean;
   right?: ReactNode;
 }) {
@@ -44,9 +44,31 @@ export function AppBar({
           <ChevronLeftIcon className="size-6" />
         </Link>
       )}
-      <h1 className="min-w-0 flex-1 truncate text-title-s">{title}</h1>
+      {title ? <h1 className="min-w-0 flex-1 truncate text-title-s">{title}</h1> : <span className="flex-1" />}
       {right}
     </header>
+  );
+}
+
+/** 밝은 화면 위쪽 바 오른쪽의 작은 글자 버튼 ('상담 닫기' 등) */
+export function AppBarAction({
+  onClick,
+  disabled,
+  children,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="-mr-2 h-touch rounded-xl px-3 text-label-m text-text-secondary active:bg-bg-muted disabled:opacity-40"
+    >
+      {children}
+    </button>
   );
 }
 

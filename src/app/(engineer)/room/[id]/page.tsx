@@ -4,8 +4,9 @@ import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { formatDuration, formatKstDateTime } from "@/lib/format";
+import { BottomCta } from "@/components/ui/bottom-cta";
 import { buttonClass } from "@/components/ui/button";
-import { ChevronLeftIcon, ClockIcon } from "@/components/ui/icons";
+import { CarIcon, CheckIcon, ChevronLeftIcon, ClockIcon } from "@/components/ui/icons";
 import { NewRoomButton } from "../../dashboard/new-room-button";
 import { createRoom } from "../../dashboard/actions";
 import { CallPanel } from "./call-panel";
@@ -35,16 +36,17 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
   const expired = new Date(room.expires_at) < new Date();
   const createdAt = new Date(room.created_at);
 
-  // 종료됐거나, 종료 처리 없이 24시간이 지나 고객 링크가 막힌 세션 (ROOM-11)
+  // 종료됐거나, 종료 처리 없이 24시간이 지나 고객 링크가 막힌 세션 (ROOM-11).
+  // 제목이 곧 결과다('출장 없이 해결했어요'). 시각·걸린 시간은 아래 카드에
   if (room.status === "ended" || expired) {
     const ended = room.status === "ended";
     const result = !ended
-      ? { text: "만료 (답하지 않음)", cls: "text-text-secondary" }
+      ? { title: "만료된 상담이에요", icon: <ClockIcon />, tint: "bg-bg-muted text-icon-secondary" }
       : room.resolved_remotely === true
-        ? { text: "출장 없이 원격 해결", cls: "text-text-success" }
+        ? { title: "출장 없이 해결했어요", icon: <CheckIcon />, tint: "bg-success-tint text-text-success" }
         : room.resolved_remotely === false
-          ? { text: "방문 필요", cls: "text-text-danger" }
-          : { text: "고객님과 연결되지 않고 닫음", cls: "text-text-secondary" };
+          ? { title: "방문이 필요했어요", icon: <CarIcon />, tint: "bg-danger-tint text-text-danger" }
+          : { title: "연결 없이 닫은 상담이에요", icon: <ClockIcon />, tint: "bg-bg-muted text-icon-secondary" };
     const rows: [string, string][] = [["시작", formatKstDateTime(createdAt)]];
     if (ended && room.ended_at) {
       rows.push(["끝", formatKstDateTime(new Date(room.ended_at))]);
@@ -55,50 +57,42 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
     }
 
     return (
-      <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pt-[max(8px,env(safe-area-inset-top))] pb-[max(16px,env(safe-area-inset-bottom))]">
+      <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pt-[max(8px,env(safe-area-inset-top))]">
         <header className="flex min-h-14 items-center">
           <Link
             href="/dashboard"
-            className="-ml-2 flex h-touch items-center gap-0.5 rounded-xl pr-3 pl-1 text-body-m text-text-secondary active:bg-bg-muted"
+            className="-ml-2 flex h-touch items-center gap-0.5 rounded-xl pr-3 pl-1 text-label-m text-text-secondary active:bg-bg-muted"
           >
             <ChevronLeftIcon className="size-6" />
             상담 목록
           </Link>
         </header>
 
-        <section className="flex flex-col gap-2 py-6">
-          <div className="grid size-16 place-items-center rounded-full bg-bg-muted text-icon-secondary">
-            <ClockIcon className="size-8" />
-          </div>
-          <h1 className="mt-2 text-title-l">{ended ? "끝난 상담이에요" : "만료된 상담이에요"}</h1>
+        <section className="flex flex-col gap-2 pt-3">
+          <div className={`mb-5 grid size-14 place-items-center rounded-full [&>svg]:size-7 ${result.tint}`}>{result.icon}</div>
+          <h1 className="text-title-l">{result.title}</h1>
           <p className="text-body-m text-text-secondary">
-            {ended
-              ? "고객님께 보낸 링크는 더 이상 열리지 않아요."
-              : "만든 지 24시간이 지나 고객님 링크가 더 이상 열리지 않아요."}
+            {ended ? "고객님께 보낸 링크는 더 이상 열리지 않아요" : "만든 지 24시간이 지나 링크가 더 이상 열리지 않아요"}
           </p>
         </section>
 
-        <dl className="flex flex-col divide-y divide-border rounded-2xl bg-bg-subtle px-4">
-          <div className="flex items-center justify-between gap-4 py-3.5">
-            <dt className="text-body-m text-text-secondary">결과</dt>
-            <dd className={`text-label-l ${result.cls}`}>{result.text}</dd>
-          </div>
+        <dl className="mt-8 flex flex-col gap-3 rounded-3xl bg-bg-subtle px-5 py-4">
           {rows.map(([k, v]) => (
-            <div key={k} className="flex items-center justify-between gap-4 py-3.5">
+            <div key={k} className="flex items-center justify-between gap-4">
               <dt className="text-body-m text-text-secondary">{k}</dt>
-              <dd className="text-body-m text-text-primary">{v}</dd>
+              <dd className="text-label-l text-text-primary">{v}</dd>
             </div>
           ))}
         </dl>
 
-        <div className="mt-auto flex flex-col gap-2 pt-8">
+        <BottomCta>
           <form action={createRoom}>
             <NewRoomButton />
           </form>
           <Link href="/dashboard" className={buttonClass({ variant: "ghost", size: "m", block: true })}>
             상담 목록으로
           </Link>
-        </div>
+        </BottomCta>
       </main>
     );
   }

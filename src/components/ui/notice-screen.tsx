@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
+import { BottomCta } from "./bottom-cta";
 import { BrandMark } from "./brand";
 
-// 한 화면에 한 가지 안내 (고객 화면·오류 화면 공용). 큰 아이콘 → 제목 → 설명 → 버튼(아래쪽, 엄지 닿는 곳).
-// 나이 든 사장님 기준: 제목 26px 이상, 설명 18px, 버튼 64px.
+// 한 화면에 한 가지 안내 (고객 화면·오류 화면 공용). 큰 아이콘 → 제목 → 설명 한두 줄 → 버튼(아래쪽, 엄지 닿는 곳).
+// 나이 든 사장님 기준: 제목 26px 이상, 설명 18px, 버튼 64px. 설명은 짧게 — 할 일 하나만 말한다.
 
 export type NoticeTone = "brand" | "success" | "warning" | "danger" | "neutral";
 
@@ -39,22 +40,29 @@ export function NoticeScreen({
   return (
     <main
       data-testid={testId}
-      className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-6 pt-[max(20px,env(safe-area-inset-top))] pb-[max(24px,env(safe-area-inset-bottom))]"
+      className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pt-[max(12px,env(safe-area-inset-top))]"
     >
       {brand && (
-        <div className="flex items-center gap-2 text-text-secondary">
+        <header className="flex h-12 items-center gap-2">
           <BrandMark className="size-7" />
           <span className="text-label-l text-text-primary">봐드림</span>
-          <span className="text-body-s">원격 A/S</span>
-        </div>
+          <span className="text-body-s text-text-secondary">원격 A/S</span>
+        </header>
       )}
-      <div className="flex flex-1 flex-col items-center justify-center gap-5 py-10 text-center">
-        <div className={`grid size-20 place-items-center rounded-full ${TONE[tone]}`}>{icon}</div>
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 py-10 text-center">
+        {/* 아이콘 크기는 여기서 정한다 — 쓰는 쪽이 준 size-10은 덮어쓴다 */}
+        <div className={`mb-3 grid size-24 place-items-center rounded-full [&>svg]:size-12 ${TONE[tone]}`}>{icon}</div>
         <h1 className="text-title-l text-text-primary">{title}</h1>
-        {children && <div className="text-body-l text-text-secondary">{children}</div>}
+        {children && <div className="w-full text-body-l text-text-secondary">{children}</div>}
       </div>
-      {actions && <div className="flex flex-col gap-3">{actions}</div>}
-      {footer && <div className="mt-4 text-center text-body-s text-text-secondary">{footer}</div>}
+      {actions || footer ? (
+        <BottomCta>
+          {actions}
+          {footer && <p className="pt-1 text-center text-body-s text-text-secondary">{footer}</p>}
+        </BottomCta>
+      ) : (
+        <div className="pb-[max(24px,env(safe-area-inset-bottom))]" />
+      )}
     </main>
   );
 }

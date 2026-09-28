@@ -132,7 +132,13 @@ export function CameraHelp({ failure, onRetry }: { failure: CameraFailure; onRet
         testId="cust-camera-help"
         tone="warning"
         icon={<AlertIcon className="size-10" />}
-        title="이 화면에서는 카메라를 켤 수 없어요"
+        title={
+          <>
+            이 화면에서는
+            <br />
+            카메라를 켤 수 없어요
+          </>
+        }
         actions={
           <Button
             size="xl"
@@ -172,17 +178,13 @@ export function CameraHelp({ failure, onRetry }: { failure: CameraFailure; onRet
         </>
       }
     >
-      <p>
-        기사님이 화면을 보려면 카메라가 필요해요.
-        <br />
-        아래 순서대로 켜 주세요.
-      </p>
-      <ol className="mt-4 flex flex-col gap-3 rounded-3xl bg-bg-subtle p-4 text-left text-text-primary">
+      <p>아래 순서대로 켜 주세요.</p>
+      <ol className="mt-6 flex flex-col gap-4 rounded-3xl bg-bg-subtle p-5 text-left text-text-primary">
         {STEPS[platform].map((step, i) => (
           <li key={i} className="flex gap-3">
             <span
               aria-hidden="true"
-              className="grid size-7 flex-none place-items-center rounded-full bg-bg-page text-label-m text-text-secondary ring-1 ring-border"
+              className="grid size-8 flex-none place-items-center rounded-full bg-primary-tint text-label-l text-text-brand"
             >
               {i + 1}
             </span>
@@ -191,7 +193,7 @@ export function CameraHelp({ failure, onRetry }: { failure: CameraFailure; onRet
         ))}
       </ol>
       {platform === "ios" && (
-        <p className="mt-3 text-body-s">
+        <p className="mt-3 text-left text-body-s">
           그래도 안 되면 폰의 <b>설정 → Safari → 카메라</b>를 <b>허용</b>으로 바꿔 주세요.
         </p>
       )}

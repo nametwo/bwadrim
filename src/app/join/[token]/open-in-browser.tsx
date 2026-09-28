@@ -71,7 +71,13 @@ export function OpenInBrowser({
     <NoticeScreen
       tone="warning"
       icon={<ExternalIcon className="size-10" />}
-      title="이 화면에서는 카메라가 안 켜져요"
+      title={
+        <>
+          이 화면에서는
+          <br />
+          카메라가 안 켜져요
+        </>
+      }
       actions={
         <>
           {canOpen ? (
