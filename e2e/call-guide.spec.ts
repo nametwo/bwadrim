@@ -143,7 +143,7 @@ test("통화: 방향 링을 누르는 동안만 고객 화면에 방향 · 굴�
     await f5.down(vb.x + vb.width / 2, vb.y + vb.height / 2);
     await ep.waitForTimeout(800);
     await f5.up();
-    await expect(cp.getByTestId("cust-status")).toHaveText("빨간 동그라미를 봐주세요", { timeout: 20_000 });
+    await expect(cp.getByTestId("cust-status")).toHaveText("빨간 동그라미를 봐 주세요", { timeout: 20_000 });
     await expect.poll(() => redPixels(cp, null), { timeout: 10_000 }).toBeGreaterThan(50);
     await pad.scrollIntoViewIfNeeded();
     const box3 = (await pad.boundingBox())!;
@@ -154,7 +154,7 @@ test("통화: 방향 링을 누르는 동안만 고객 화면에 방향 · 굴�
     await expect(cp.getByTestId("cust-status")).toBeHidden();
     await f6.up();
     await expect(band).toHaveCount(0, { timeout: 5_000 });
-    await expect(cp.getByTestId("cust-status")).toHaveText("빨간 동그라미를 봐주세요", { timeout: 10_000 });
+    await expect(cp.getByTestId("cust-status")).toHaveText("빨간 동그라미를 봐 주세요", { timeout: 10_000 });
     await expect.poll(() => redPixels(cp, null), { timeout: 10_000 }).toBeGreaterThan(50);
 
     // 8) 화면을 멈추면 방향 링 자리에 파란 '라이브로'(피그마 E08) — 그 자리를 눌러도 고객 화면에 방향이 뜨지 않는다

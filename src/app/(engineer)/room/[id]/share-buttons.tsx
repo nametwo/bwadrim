@@ -10,12 +10,13 @@ export type SentVia = "sms" | "share" | "copy";
 
 // 고객에게 보내는 문자 (ROOM-06). 무엇인지·무엇을 누를지·설치가 없다는 것을 먼저 말한다 — 모르는 링크로 보이지 않게
 export function inviteMessage(joinUrl: string) {
-  return `[봐드림] 원격 A/S 링크예요.\n링크를 누르고 '카메라 켜고 시작하기'를 눌러 고장 난 곳을 비춰 주세요. (앱 설치 없음)\n${joinUrl}`;
+  return `[봐드림] 원격 A/S 링크입니다.\n링크를 열고 '카메라 켜고 시작하기'를 누른 다음, 고장 난 곳을 비춰 주세요. 앱은 따로 안 깔아도 됩니다.\n${joinUrl}`;
 }
 
 // 엔지니어 본인 폰의 문자/공유 시트를 연다 (피그마 E03·E04).
 // 본인 번호로 발송되므로 고객에게 아는 번호로 도착한다 — 별도 SMS API 불필요.
-// resend: 이미 보낸 뒤(E04)에는 '지금 누를 것'이 없으므로 파란 버튼 대신 흰 '문자 다시 보내기'
+// resend: 이미 보낸 뒤(E04)에는 '지금 누를 것'이 없으므로 파란 버튼 대신 회색 '문자 다시 보내기',
+// 카톡·복사는 글자 버튼으로 낮춰 화면 아래가 버튼 더미로 무거워지지 않게 한다
 export function ShareButtons({
   joinUrl,
   resend = false,
@@ -62,10 +63,11 @@ export function ShareButtons({
     }
   }
 
+  const small = resend || !canShare;
   const copyButton = (
     <Button
-      variant={canShare ? "secondary" : "ghost"}
-      size={canShare ? "l" : "m"}
+      variant={small ? "ghost" : "secondary"}
+      size={small ? "m" : "l"}
       className="whitespace-nowrap"
       onClick={copy}
       icon={copied === "ok" ? <CheckIcon className="size-5" /> : <CopyIcon className="size-5" />}
@@ -75,7 +77,7 @@ export function ShareButtons({
   );
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className={`flex flex-col ${resend ? "gap-1" : "gap-2"}`}>
       <Button
         variant={resend ? "secondary" : "primary"}
         size={resend ? "l" : "xl"}
@@ -92,8 +94,8 @@ export function ShareButtons({
         <div className="grid grid-cols-2 gap-2">
           {/* 기기 공유 창(카카오톡·밴드 등)으로 같은 문구를 보낸다 (ROOM-07) */}
           <Button
-            variant="kakao"
-            size="l"
+            variant={resend ? "ghost" : "kakao"}
+            size={resend ? "m" : "l"}
             icon={<ChatBubbleIcon className="size-5" />}
             onClick={share}
             className="whitespace-nowrap"

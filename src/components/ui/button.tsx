@@ -3,7 +3,8 @@ import type { ButtonHTMLAttributes, ComponentProps, ReactNode } from "react";
 import { Spinner } from "./icons";
 
 // 버튼 — 피그마 Components → Button(Style × Size × State)과 같은 값.
-//  - primary(파랑)는 "지금 누를 것" 한 화면에 하나. secondary·ghost는 중립색 보조 동작
+//  - primary(파랑)는 "지금 누를 것" 한 화면에 하나. secondary(옅은 회색 바탕)·ghost는 중립색 보조 동작
+//    테두리 없이 면으로 구분한다 — 테두리 상자가 여럿이면 화면이 서류처럼 딱딱해 보이고 위계가 흐려진다
 //  - danger(빨강)는 종료·오류에만
 //  - kakao(카톡 공유), call·call-danger·call-ghost(어두운 통화 화면)는 코드에서 더한 스타일 — 피그마에도 같은 이름
 // 크기: M 48 · L 56 · XL 64 (누르는 영역 최소 48px). 모서리 M·L 12, XL 16. 아이콘 20·22·24
@@ -23,7 +24,7 @@ export type ButtonSize = "m" | "l" | "xl";
 
 const VARIANT: Record<ButtonVariant, string> = {
   primary: "bg-primary text-on-primary active:bg-primary-pressed",
-  secondary: "border border-border-strong bg-bg-page text-text-primary active:bg-bg-muted",
+  secondary: "bg-bg-muted text-text-primary active:bg-border",
   danger: "bg-danger text-on-primary active:bg-danger-pressed",
   ghost: "text-text-primary active:bg-bg-muted",
   // 카카오톡 공유만 예외로 노랑(카카오 색) — CLAUDE.md 디자인 토큰 예외
@@ -36,7 +37,7 @@ const VARIANT: Record<ButtonVariant, string> = {
 // 피그마 State=Disabled
 const DISABLED: Record<ButtonVariant, string> = {
   primary: "disabled:bg-bg-muted disabled:text-text-tertiary",
-  secondary: "disabled:border-border disabled:text-text-tertiary",
+  secondary: "disabled:text-text-tertiary",
   danger: "disabled:bg-bg-muted disabled:text-text-tertiary",
   ghost: "disabled:text-text-tertiary",
   kakao: "disabled:bg-bg-muted disabled:text-text-tertiary",

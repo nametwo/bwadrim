@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "봐드림",
-  description: "설치 없이 링크 하나로, 폰 카메라로 비춰주는 원격 A/S",
+  description: "문자 링크로 여는 원격 A/S. 폰 카메라로 비추면 기사님이 보고 알려 드려요.",
 };
 
 export const viewport: Viewport = {

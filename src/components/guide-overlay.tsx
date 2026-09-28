@@ -19,7 +19,7 @@ export const GUIDE_TEXT: Record<GuideCmd, { main: string; sub: string }> = {
   right: { main: "오른쪽으로", sub: "휴대폰을 천천히 옮겨 주세요" },
   up: { main: "위쪽으로", sub: "화살표 쪽으로 천천히 옮겨 주세요" },
   down: { main: "아래쪽으로", sub: "화살표 쪽으로 천천히 옮겨 주세요" },
-  closer: { main: "가까이", sub: "휴대폰을 천천히 가까이 가져가 주세요" },
+  closer: { main: "가까이", sub: "휴대폰을 천천히 앞으로 내밀어 주세요" },
   farther: { main: "멀리", sub: "휴대폰을 천천히 뒤로 빼 주세요" },
 };
 

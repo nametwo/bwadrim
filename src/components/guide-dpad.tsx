@@ -46,7 +46,7 @@ const GLYPH = Object.fromEntries(GUIDE_DIRS.map((d) => [d, glyphTransform(DIR_AN
 /** 아무것도 보내지 않고 뗐을 때 잠깐 보여 주는 쓰는 법 */
 export const PAD_HINT = {
   ring: "방향을 누르고 있는 동안만 고객 화면에 보여요",
-  zoom: "멀리·가까이 중 한쪽을 누르고 있어 주세요",
+  zoom: "멀리나 가까이 한쪽을 꾹 누르고 있어 주세요",
 } as const;
 const HINT_MS = 1800;
 

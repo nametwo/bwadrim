@@ -23,13 +23,13 @@ export function QualityPill({ quality, connecting }: { quality: CallQuality; con
   );
 }
 
-/** 밝은 화면 위쪽 바 — 피그마 AppBar: 뒤로가기 + 제목, 오른쪽 동작 */
+/** 밝은 화면 위쪽 바 — 피그마 AppBar: 뒤로가기, 오른쪽 동작. 화면 제목은 바가 아니라 본문 맨 위에 크게 쓴다(title 없이) */
 export function AppBar({
   title,
   back = true,
   right,
 }: {
-  title: ReactNode;
+  title?: ReactNode;
   back?: boolean;
   right?: ReactNode;
 }) {
@@ -44,19 +44,41 @@ export function AppBar({
           <ChevronLeftIcon className="size-6" />
         </Link>
       )}
-      <h1 className="min-w-0 flex-1 truncate text-title-s">{title}</h1>
+      {title ? <h1 className="min-w-0 flex-1 truncate text-title-s">{title}</h1> : <span className="flex-1" />}
       {right}
     </header>
+  );
+}
+
+/** 밝은 화면 위쪽 바 오른쪽의 작은 글자 버튼 ('상담 닫기' 등) */
+export function AppBarAction({
+  onClick,
+  disabled,
+  children,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="-mr-2 h-touch rounded-xl px-3 text-label-m text-text-secondary active:bg-bg-muted disabled:opacity-40"
+    >
+      {children}
+    </button>
   );
 }
 
 /** PC 오른쪽 패널의 키보드 안내 — 피그마 P01 */
 export function ShortcutsBox() {
   const rows: [string, string][] = [
-    ["← → ↑ ↓", "방향 (누르고 있는 동안)"],
+    ["← → ↑ ↓", "누르는 동안 방향 지시"],
     ["=  /  -", "가까이 / 멀리"],
     ["F", "멈추고 그리기 / 라이브로"],
-    ["클릭", "빨간 동그라미 (3초)"],
+    ["클릭", "빨간 동그라미"],
     ["길게 클릭", "물체에 붙는 핀"],
   ];
   return (

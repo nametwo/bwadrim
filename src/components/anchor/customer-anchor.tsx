@@ -14,8 +14,8 @@ import { AnnotatedPhoto } from "./annotated-photo";
 
 // 고객 통화 화면의 AR 핀 층 (CALL-14). 고객은 아무것도 누르지 않는다 — 모두 자동, 터치를 받지 않는다.
 //  - 찾으면: 영상 위 빨간 핀 (물체에 붙어 움직임)
-//  - 핀이 화면 밖: 가장자리 빨간 화살표 + 큰 글씨 '화살표 쪽으로 폰을 돌려주세요'
-//  - 못 찾음(0.8초 이상, 또는 이 기준으로는 못 찾음): 기사님이 표시한 사진 카드 + '기사님이 표시한 곳을 비춰주세요'
+//  - 핀이 화면 밖: 가장자리 빨간 화살표 + 큰 글씨 '화살표 쪽으로 폰을 돌려 주세요'
+//  - 못 찾음(0.8초 이상, 또는 이 기준으로는 못 찾음): 기사님이 표시한 사진 카드 + '기사님이 표시한 곳을 비춰 주세요'
 // 영상은 잘림 없이 전체(object-contain, JOIN-06)라 fit도 contain.
 
 /** 화살표를 둘 안쪽 여백: 위 상태 문구·아래 버튼을 피한다 (CSS px) */
@@ -123,7 +123,7 @@ export function CustomerAnchorLayer({
               <p className="text-center text-[26px] leading-tight font-extrabold tracking-tight break-keep">
                 기사님이 표시한 곳을
                 <br />
-                비춰주세요
+                비춰 주세요
               </p>
               <AnnotatedPhoto
                 src={card.url}
@@ -140,7 +140,7 @@ export function CustomerAnchorLayer({
             >
               화살표 쪽으로
               <br />
-              폰을 돌려주세요
+              폰을 돌려 주세요
             </p>
           )}
         </div>

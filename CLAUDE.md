@@ -45,7 +45,7 @@ src/lib/
   events.ts                                      # 지표 이벤트 기록
   metrics.ts                                     # 핵심 지표 계산 (통계 화면)
 src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기). anchor/·anchor-overlay = AR 핀 층(CALL-14), guide-dpad(방향 링·가까이/멀리 알약)·guide-pad-geometry·guide-overlay(고객 노란 원 화살표·네 모서리)·guide-pill = 방향 지시(CALL-15)
-  ui/                                            # 디자인 시스템 부품(NFR-08, 피그마 컴포넌트와 같은 이름): button(Button·ButtonLink·buttonClass), icons(선 아이콘), sheet(아래 확인 창), notice-screen(한 화면 한 안내), brand(로고), status-chip, step-item, banner, call-control(통화 원형 버튼), stat-card, engineer-card, call-timer
+  ui/                                            # 디자인 시스템 부품(NFR-08, 피그마 컴포넌트와 같은 이름): button(Button·ButtonLink·buttonClass), icons(선 아이콘), sheet(아래 확인 창), notice-screen(한 화면 한 안내), bottom-cta(아래에 붙는 버튼 자리), brand(로고), status-chip, step-item, banner, call-control(통화 원형 버튼), stat-card, engineer-card, call-timer
 supabase/schema.sql
 docs/requirements.md                             # 기능 요구사항 (기준 문서)
 ```
@@ -67,13 +67,25 @@ AR 핀(CALL-14)은 전용 DataChannel `anchor`(고객이 offer에 포함). 기�
 
 색·모서리·크기·글자·그림자는 `src/app/globals.css`의 `@theme` 토큰을 쓸 것 (hex 직접 쓰지 말 것). 이름은 피그마 변수·스타일과 같음: https://www.figma.com/design/Hqnz1fYrJJAhO7nDGNKRwn (`a/b` → `--color-a-b`, `a/default` → `--color-a`, 텍스트 스타일 `Title/M` → `text-title-m`, 효과 `Shadow/Card` → `shadow-card`)
 - 버튼·확인 창·안내 화면·아이콘은 `src/components/ui`를 쓸 것. 새로 만들지 말고 variant를 늘릴 것. 버튼에 이모지 쓰지 말 것(폰마다 모양이 다름) — `ui/icons.tsx`
-- 파랑(`primary`)은 "지금 누를 것" 하나에만. 보조 동작·선택 상태는 흰 바탕·테두리(`secondary`)나 중립색. 통화 화면 버튼은 `call`·`call-danger`·`call-ghost`, 켜진 도구는 `CallControl state="active"`(흰 원)
+- 화면 짜임(토스식, NFR-08): 본문 맨 위 큰 제목 하나(할 일·지금 상태) + 회색 한두 줄, 누를 것은 `ui/bottom-cta`(아래에 붙음). 위쪽 바엔 제목 없이 뒤로·닫기만. 묶음은 테두리 대신 면(흰 화면엔 `bg-bg-subtle` 카드, 대시보드·통계는 `bg-bg-muted` 바탕에 흰 카드, 모서리 `rounded-3xl`). 설명 글을 늘리기 전에 배치·제목으로 풀 것
+- 파랑(`primary`)은 "지금 누를 것" 하나에만. 보조 동작은 회색 바탕(`secondary`)이나 글자 버튼(`ghost`), 선택 상태는 흰 바탕 + 진한 테두리 등 중립색. 통화 화면 버튼은 `call`·`call-danger`·`call-ghost`, 켜진 도구는 `CallControl state="active"`(흰 원)
 - 노랑(`guide-signal`)은 방향 지시에만. 통화 화면은 `call-*`, 빨강(`danger`)은 종료·오류에만. 종료는 확인 창(`ui/sheet`)을 한 번 거친다
 - 지표가 되는 답(출장 없이 해결?)은 같은 모양으로. 한쪽을 강조하면 원격 해결률이 기운다
 - 고객 화면: 본문 `text-body-l`(18px) 이상, 누를 버튼 `size="xl"`(64px), 누를 것은 화면 아래쪽. 엔지니어 통화 화면: 누르는 자리가 바뀌지 않게(안내가 사라져도 자리는 남긴다)
 - 가리키기(`pointer`)는 디자인 시스템상 브랜드 블루지만, 지금 CALL-08·09·14 구현은 빨강이다. 바꾸려면 요구사항부터 고칠 것
 - 지금 코드의 다른 예외(바꾸려면 요구사항부터): 카톡 공유 버튼 노랑(카카오 색), 고객 '허용' 화살표 노랑(JOIN-02). AR(CALL-14)은 빨강 화살표·amber 정지 표시를 쓴다
 - 피그마 화면의 고객 이름·전화번호 입력, 방 코드, '엔지니어' 호칭은 따르지 않는다(NFR-07, ROOM-02 폐기). 고객 화면에서는 '기사님'
+
+## 화면 문구
+
+사람이 쓴 말처럼. 쓰고 나서 소리 내어 읽어 보고 어색하면 고친다.
+- 해요체. 고객(사장님)에게는 '-시-'를 살린다('닫으셔도 돼요'). 버튼 이름은 동사로 짧게, 안내에서는 버튼 이름을 그대로 부른다
+- 한 문장에 한 가지. 두 가지면 띠·안내의 제목/두 번째 줄로 나눈다. 대시(—)나 가운데점(·)으로 두 문장을 잇지 않는다(가운데점은 '통화 중 · 3:12' 같은 정보 나열에만)
+- 괄호 설명 대신 풀어 쓴다('마이크 꺼짐(보기만)' ✗ → '마이크가 꺼져 있어요 / 고객님은 목소리를 못 들어요')
+- 상투어·번역투 금지: '원활하지 않아요', '이용해 주셔서 감사합니다', '~할 수 있습니다', '주의할 점'. 같은 어미('~해 드려요')를 한 화면에 반복하지 않는다
+- 공식 같은 문구 금지: 'X 없이, Y 하나로', 딱 맞춘 세 줄 나열. 구체적으로 무엇을 하는지 쓴다
+- 보조 용언은 띄어 쓴다('눌러 주세요', '봐 주세요'). 화면에서는 '세션' 대신 '상담'
+- 문구를 바꾸면 `docs/requirements.md`의 인용과 e2e 테스트의 기대 문구도 같이 바꾼다
 
 ## 이벤트 이름 (events 테이블)
 

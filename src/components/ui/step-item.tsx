@@ -10,9 +10,10 @@ export type StepState = "done" | "current" | "todo" | "error";
 export function StepItem({ state, children, detail }: { state: StepState; children: ReactNode; detail?: ReactNode }) {
   return (
     <li className="flex gap-3" data-state={state}>
+      {/* relative: 목록의 세로 잇는 선(ol::before)보다 위에 그려지게 */}
       <span
         aria-hidden="true"
-        className={`grid size-7 flex-none place-items-center rounded-full ${
+        className={`relative grid size-7 flex-none place-items-center rounded-full ${
           state === "done"
             ? "bg-success text-on-primary"
             : state === "current"

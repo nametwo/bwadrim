@@ -15,9 +15,9 @@ export default function NotFound() {
         </ButtonLink>
       }
     >
-      주소가 잘못됐거나 볼 수 없는 상담이에요.
+      주소가 틀렸거나 볼 수 없는 상담이에요.
       <br />
-      고객님은 문자로 받으신 링크를 다시 눌러 주세요.
+      A/S 받으시는 사장님은 문자 속 링크를 다시 눌러 주세요.
     </NoticeScreen>
   );
 }

@@ -71,7 +71,13 @@ export function OpenInBrowser({
     <NoticeScreen
       tone="warning"
       icon={<ExternalIcon className="size-10" />}
-      title="이 화면에서는 카메라가 안 켜져요"
+      title={
+        <>
+          이 화면에서는
+          <br />
+          카메라가 안 켜져요
+        </>
+      }
       actions={
         <>
           {canOpen ? (
@@ -96,9 +102,9 @@ export function OpenInBrowser({
       footer={canOpen ? undefined : "복사한 링크를 사파리·크롬·삼성 인터넷 주소창에 붙여 넣어도 돼요."}
     >
       <p>
-        {app} 안에서 열렸어요.
+        {app} 안에서 열려서 그래요.
         <br />
-        사파리나 크롬에서 열면 바로 돼요.
+        사파리나 크롬으로 열면 돼요.
       </p>
       {!canOpen && <MenuPicture />}
     </NoticeScreen>

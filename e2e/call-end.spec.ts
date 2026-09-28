@@ -129,7 +129,7 @@ test("끝내기: 엔지니어 해결 여부 창·계속하기 · 고객 확인 �
   }
 });
 
-test("고객 마이크를 못 쓰면 카메라만으로 연결 (camera_granted mic:false, 엔지니어 화면 '고객 마이크 없음')", async ({
+test("고객 마이크를 못 쓰면 카메라만으로 연결 (camera_granted mic:false, 엔지니어 화면 '고객님 마이크가 꺼져 있어요')", async ({
   browser,
   baseURL,
 }) => {
@@ -156,7 +156,7 @@ test("고객 마이크를 못 쓰면 카메라만으로 연결 (camera_granted m
     await cp.goto(`/join/${ROOM.join_token}`);
     await cp.getByRole("button", { name: /카메라 켜고 시작하기/ }).click();
     await expect(cp.getByTestId("cust-status")).toHaveText("기사님이 보고 있어요", { timeout: 30_000 });
-    await expect(ep.getByText(/고객 마이크 없음/)).toBeVisible({ timeout: 10_000 });
+    await expect(ep.getByText(/고객님 마이크가 꺼져 있어요/)).toBeVisible({ timeout: 10_000 });
     await expect
       .poll(async () => (await mockEvents()).find((e) => e.room_id === ROOM.id && e.name === "camera_granted")?.props)
       .toEqual({ mic: false });
