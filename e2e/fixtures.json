@@ -49,6 +49,18 @@
       "code": "E2EEEE",
       "status": "waiting",
       "join_token": "e2e0eeeeeeeeeeeeeeeeeeeeeeeeeee5"
+    },
+    {
+      "id": "e2e00000-0000-4000-8000-00000000a006",
+      "code": "E2EFFF",
+      "status": "waiting",
+      "join_token": "e2e0fffffffffffffffffffffffffff6"
+    },
+    {
+      "id": "e2e00000-0000-4000-8000-00000000a007",
+      "code": "E2EGGG",
+      "status": "waiting",
+      "join_token": "e2e0999999999999999999999999999a"
     }
   ]
 }

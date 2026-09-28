@@ -33,8 +33,8 @@ create table if not exists events (
   id         bigint generated always as identity primary key,
   room_id    uuid references rooms(id) on delete cascade,
   actor      text not null check (actor in ('engineer','customer','system')),
-  name       text not null,       -- room_created, link_opened, camera_granted, connected, relay_used, ended, ...
-  props      jsonb default '{}',  -- user agent, ice candidate type, duration 등
+  name       text not null,       -- DATA-01: room_created, link_opened, call_ready, call_failed, connected, ended, ...
+  props      jsonb default '{}',  -- 이벤트별 부가정보 + v(배포 버전)·env(production|preview|development)
   created_at timestamptz not null default now()
 );
 
@@ -124,3 +124,57 @@ create policy "bwadrim engineer lane: send" on realtime.messages
     realtime.messages.extension in ('broadcast', 'presence')
     and private.open_room_owner(realtime.topic(), 'e') = (select auth.uid())
   );
+
+-- ─── 운영 로깅 (DATA-07, OPS-06) ───
+
+-- 상담 화면 요약 (call_summary). 화면(페이지)마다 한 줄 — 화면이 숨겨질 때마다 같은 줄을 덮어쓴다.
+-- events에 쌓으면 스냅숏이 줄마다 늘어나 통계 화면을 무겁게 하므로 따로 둔다.
+-- 쓰기는 서버 API(/api/events, service role)만. 엔지니어는 자기 상담 것만 읽는다
+create table if not exists call_reports (
+  room_id    uuid not null references rooms(id) on delete cascade,
+  pid        text not null,                         -- 화면(페이지 로드)마다 만드는 무작위 id
+  actor      text not null check (actor in ('engineer','customer')),
+  report     jsonb not null default '{}',           -- exit, phase, 통화 품질(rtt·손실·fps), 끊김 횟수 등 + v·env
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (room_id, pid)
+);
+
+create index if not exists call_reports_updated_idx on call_reports(updated_at);
+
+alter table call_reports enable row level security;
+
+drop policy if exists "engineer reads own reports" on call_reports;
+create policy "engineer reads own reports" on call_reports
+  for select using (
+    exists (select 1 from rooms r where r.id = call_reports.room_id and r.engineer_id = auth.uid())
+  );
+
+-- 알림 쿨다운: 같은 알림을 서버 인스턴스 여럿이 동시에 보내지 않게 (src/lib/alerts.ts)
+create table if not exists private.alert_state (
+  key          text primary key,
+  last_sent_at timestamptz not null
+);
+alter table private.alert_state enable row level security;
+
+-- 쿨다운이 지났으면 지금 시각으로 바꾸고 true (이번에 보내도 된다), 아니면 false
+create or replace function public.claim_alert(p_key text, p_cooldown_sec integer)
+returns boolean
+language plpgsql volatile security definer set search_path = ''
+as $$
+declare
+  claimed boolean;
+begin
+  insert into private.alert_state as s (key, last_sent_at)
+  values (p_key, now())
+  on conflict (key) do update
+    set last_sent_at = excluded.last_sent_at
+    where s.last_sent_at < now() - make_interval(secs => p_cooldown_sec)
+  returning true into claimed;
+  return coalesce(claimed, false);
+end;
+$$;
+
+-- 서버(service role)만 부른다. public 함수라 기본으로 누구나 RPC로 부를 수 있으므로 막는다
+revoke execute on function public.claim_alert(text, integer) from public, anon, authenticated;
+grant execute on function public.claim_alert(text, integer) to service_role;

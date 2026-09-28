@@ -9,6 +9,8 @@ type Ahead = {
   key: string;
   mic: Promise<MediaStream | null>;
   releaseWakeLock: () => void;
+  /** 마이크를 못 받았을 때 그 이유 (DOMException.name, 지표용). mic가 끝난 뒤에 읽을 것 */
+  micError: () => string | null;
 };
 
 let pending: Ahead | null = null;
@@ -24,10 +26,18 @@ function discard(a: Ahead) {
 /** 반드시 탭 핸들러 안에서 부를 것 (iOS는 제스처 없이 마이크를 묻지 않는다) */
 export function requestMicAhead(key: string) {
   if (pending) discard(pending);
+  let micError: string | null = null;
   const mic: Promise<MediaStream | null> = navigator.mediaDevices?.getUserMedia
-    ? navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => null) // 거부·없음 — 보기만(CALL-02)
-    : Promise.resolve(null);
-  const mine: Ahead = { key, mic, releaseWakeLock: keepScreenOn() };
+    ? navigator.mediaDevices.getUserMedia({ audio: true }).catch((e: unknown) => {
+        // 거부·없음 — 보기만(CALL-02)
+        micError = e instanceof Error ? e.name : "unknown";
+        return null;
+      })
+    : Promise.resolve(null).then(() => {
+        micError = "unsupported";
+        return null;
+      });
+  const mine: Ahead = { key, mic, releaseWakeLock: keepScreenOn(), micError: () => micError };
   pending = mine;
   setTimeout(() => {
     if (pending === mine) {
@@ -42,5 +52,5 @@ export function takeMicAhead(roomId: string): Omit<Ahead, "key"> | null {
   const a = pending;
   if (!a || (a.key !== "new" && a.key !== roomId)) return null;
   pending = null;
-  return { mic: a.mic, releaseWakeLock: a.releaseWakeLock };
+  return { mic: a.mic, releaseWakeLock: a.releaseWakeLock, micError: a.micError };
 }

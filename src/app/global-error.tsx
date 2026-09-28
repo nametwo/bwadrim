@@ -1,7 +1,20 @@
 "use client";
 
+import { useEffect } from "react";
+import { reportClientError } from "@/lib/client-error";
+
 // 최상위 레이아웃까지 실패했을 때 (BUG-13). 전역 스타일이 없으므로 인라인 스타일만 쓴다
-export default function GlobalError({ retry }: { retry: () => void }) {
+export default function GlobalError({
+  error,
+  retry,
+}: {
+  error: Error & { digest?: string };
+  retry: () => void;
+}) {
+  useEffect(() => {
+    reportClientError("render", error, { digest: error.digest, global: true });
+  }, [error]);
+
   return (
     <html lang="ko">
       <body

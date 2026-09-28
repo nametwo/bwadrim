@@ -106,6 +106,27 @@ export async function mockReset(roomId?: string): Promise<void> {
   await fetch(`${SUPABASE_URL}/__reset${roomId ? `?room=${roomId}` : ""}`, { method: "POST" });
 }
 
+export interface MockReport {
+  room_id: string;
+  pid: string;
+  actor: string;
+  report: Record<string, unknown>;
+}
+
+export async function mockReports(): Promise<MockReport[]> {
+  const r = await fetch(`${SUPABASE_URL}/__reports`);
+  return (await r.json()) as MockReport[];
+}
+
+/** 서비스 키로 방 상태를 바꾼다 (끝난 상담 흉내) */
+export async function mockPatchRoom(roomId: string, patch: Record<string, unknown>): Promise<void> {
+  await fetch(`${SUPABASE_URL}/rest/v1/rooms?id=eq.${roomId}`, {
+    method: "PATCH",
+    headers: { apikey: FIXTURE.serviceKey, "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
 export async function mockRooms(): Promise<{ id: string; status: string; resolved_remotely: boolean | null }[]> {
   const r = await fetch(`${SUPABASE_URL}/__rooms`);
   return (await r.json()) as { id: string; status: string; resolved_remotely: boolean | null }[];

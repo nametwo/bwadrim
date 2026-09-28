@@ -1,6 +1,17 @@
 // 핵심 지표 계산 (DATA-02, DATA-06). 이벤트 개수가 아니라 세션 단위로 센다.
 // 입력은 엔지니어 자신의 세션·이벤트(RLS가 걸러 준다).
 
+// 통계 화면이 읽는 이벤트 이름. 이것만 받아야 실패·오류 기록이 늘어도 화면이 무거워지지 않는다
+export const METRIC_EVENT_NAMES = [
+  "link_opened",
+  "camera_granted",
+  "connected",
+  "relay_used",
+  "pointer_used",
+  "freeze_used",
+  "ended",
+] as const;
+
 export interface MetricRoom {
   id: string;
   resolved_remotely: boolean | null;

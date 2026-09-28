@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CallSession, type CallQuality, type CallState } from "@/lib/webrtc/call";
-import { fetchIceServers } from "@/lib/webrtc/ice";
+import { CallSession, type CallQuality, type CallSignal, type CallState } from "@/lib/webrtc/call";
+import { fetchIceServers, type IceConfig } from "@/lib/webrtc/ice";
+import { createTelemetry } from "@/lib/telemetry";
+import { CallReport } from "@/lib/call-report";
 import { keepScreenOn } from "@/lib/wake-lock";
 import { PointerMarker, usePointerMarker } from "@/components/pointer-marker";
 import { FreezeCanvas } from "@/components/freeze-canvas";
@@ -111,6 +113,13 @@ export function CameraStart({
   // 사진 요청 받기 해제 (CALL-16)
   const stopPhotosRef = useRef<(() => void) | null>(null);
   const { view: guideView, receive: receiveGuide, reset: resetGuide } = useGuideReceiver();
+  // 지표 (DATA-01·07): 이 화면의 전송기(pid)와 화면 요약. 폰에 저장하지 않는다
+  const [tel] = useState(() => createTelemetry({ role: "customer", token }));
+  const [report] = useState(() => new CallReport(tel, { role: "customer" }));
+  // '카메라 켜기'를 누른 횟수, 카메라를 받은 시각, 받은 ICE 설정 — 실패 기록에 붙인다
+  const attemptRef = useRef(0);
+  const cameraAtRef = useRef<number | null>(null);
+  const iceRef = useRef<{ cfg: IceConfig; at: number } | null>(null);
 
   function releaseWakeLock() {
     releaseWakeLockRef.current?.();
@@ -135,12 +144,36 @@ export function CameraStart({
 
   function postEvent(name: string, props: Record<string, unknown> = {}) {
     // 지표 기록 — 실패해도 진행을 막지 않는다
-    fetch("/api/events", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token, name, props }),
-      keepalive: true,
-    }).catch(() => {});
+    tel.post(name, props);
+  }
+
+  // 연결 기록마다 붙이는 공통 정보: TURN을 받았는지, 카메라를 켠 뒤 얼마나 지났는지
+  function callContext() {
+    const ice = iceRef.current;
+    const at = cameraAtRef.current;
+    return {
+      turn: ice ? !ice.cfg.turnError : null,
+      turn_err: ice?.cfg.turnCode ?? null,
+      ms_since_camera: at === null ? null : Date.now() - at,
+      gum_attempt: attemptRef.current,
+    };
+  }
+
+  // 통화 연결 과정 → 지표 (call_ready·call_stuck·call_failed·connected)
+  function onSignal(sig: CallSignal) {
+    const { type, ...rest } = sig;
+    if (type === "ready") {
+      postEvent("call_ready", { ...rest, ms_ice: iceRef.current?.cfg.ms ?? null, ...callContext() });
+    } else if (type === "stuck") {
+      postEvent("call_stuck", { ...rest, ...callContext() });
+    } else if (type === "failed") {
+      const ice = iceRef.current;
+      postEvent("call_failed", { ...rest, turn_age_ms: ice ? Date.now() - ice.at : null, ...callContext() });
+      report.flush("failed");
+    } else if (type === "connected") {
+      postEvent("connected", { ...rest, ...callContext() });
+      if (sig.relay) postEvent("relay_used");
+    }
   }
 
   // 카메라+마이크를 연다. 마이크를 못 쓰면(전화 통화 중 등) 카메라만이라도 연다 — 목소리는 전화로 하면 된다
@@ -160,12 +193,17 @@ export function CameraStart({
 
   async function start() {
     setPhase("starting");
+    const attempt = ++attemptRef.current;
     // 폰을 비추기만 하고 화면을 안 건드려서 자동 잠금으로 끊기기 쉽다 — 버튼 탭 안에서 요청
     releaseWakeLock();
     releaseWakeLockRef.current = keepScreenOn();
+    const gumAt = Date.now();
     const opened = await openCamera();
+    // 300ms 안에 거부되면 예전에 거부한 것이 저장돼 권한 창이 안 뜬 경우로 본다
+    const msGum = Date.now() - gumAt;
     if ("error" in opened) {
-      postEvent("camera_denied", { reason: opened.error });
+      postEvent("camera_denied", { reason: opened.error, ms_gum: msGum, attempt });
+      report.set("exit", "camera_denied");
       releaseWakeLock();
       setFailure(cameraFailureOf(opened.error));
       setPhase("denied");
@@ -174,26 +212,71 @@ export function CameraStart({
     const stream = opened.stream;
     streamRef.current = stream;
     setMicOff(!opened.mic);
-    postEvent("camera_granted", { mic: opened.mic });
+    cameraAtRef.current = Date.now();
+    postEvent("camera_granted", { mic: opened.mic, ms_gum: msGum, attempt });
 
-    const ice = await fetchIceServers(token);
+    const ice = await fetchIceServers(token, "customer");
+    iceRef.current = { cfg: ice, at: Date.now() };
     // 링크를 연 뒤 세션이 닫혔거나 만료됐다 — 종료 알림(bye)은 채널에 들어오기 전이라 받지 못했다
     if (ice.roomGone) {
+      postEvent("call_failed", { stage: "room_gone", reason: "turn_404", ...callContext() });
+      report.set("exit", "gone");
       stream.getTracks().forEach((t) => t.stop());
       releaseWakeLock();
       setPhase("gone");
       return;
     }
-    const session = new CallSession({
+    let session: CallSession;
+    try {
+      session = createSession(stream, ice);
+    } catch (e) {
+      // 오래된 브라우저 등에서 통화를 만들다 멈춤 — 기록하고 '다시 연결' 화면으로
+      postEvent("call_failed", {
+        stage: "start",
+        reason: "exception",
+        err: e instanceof Error ? `${e.name}: ${e.message}` : String(e),
+        ...callContext(),
+      });
+      stream.getTracks().forEach((t) => t.stop());
+      releaseWakeLock();
+      setCallState("failed");
+      setPhase("call");
+      return;
+    }
+    sessionRef.current = session;
+    report.attach(() => {
+      const { quality, ...call } = session.telemetry();
+      return { quality, call };
+    });
+    setAnchorLink(session.anchorLink);
+    setGuideLink(session.guideLink);
+    // 기사님이 사진을 찍으면 이 폰 카메라로 원본을 찍어 보낸다 (CALL-16). 몰래 찍히지 않게 화면에 알린다
+    stopPhotosRef.current?.();
+    stopPhotosRef.current = servePhotos(
+      session.photoLink,
+      () => capturePhoto(videoRef.current, streamRef.current?.getVideoTracks()[0] ?? null),
+      () => {
+        report.inc("photo_served");
+        showNotice("기사님이 사진을 찍었어요");
+      },
+    );
+    session.join();
+    setPhase("call");
+  }
+
+  function createSession(stream: MediaStream, ice: IceConfig) {
+    return new CallSession({
       roomId,
       role: "customer",
       iceServers: ice.iceServers,
       clockOffsetMs: ice.clockOffsetMs,
       localStream: stream,
+      onSignal,
       onState: (s) => {
         const prev = lastStateRef.current;
         lastStateRef.current = s;
         setCallState(s);
+        report.setPhase(`call:${s}`);
         if (s !== "connected") {
           setFrozen(null);
           setStrokes([]);
@@ -205,14 +288,11 @@ export function CameraStart({
           setConnectedAt(connectedAtRef.current);
           reportCamera();
           if (prev !== "connected") showNotice("기사님과 연결됐어요");
-          // relay(TURN) 경유 여부 — 원가 지표. turn: TURN 자격증명을 받았는지
-          setTimeout(async () => {
-            const relay = (await sessionRef.current?.usedRelay()) ?? false;
-            postEvent("connected", { relay, turn: !ice.turnError });
-            if (relay) postEvent("relay_used");
-          }, 1000);
+          // connected·relay_used 기록은 onSignal이 한다 (연결 시도마다 한 번, 1초 뒤 다시 확인)
         }
         if (s === "ended" || s === "failed" || s === "denied" || s === "replaced") {
+          report.set("exit", s === "ended" ? "bye" : s);
+          report.flush(s);
           streamRef.current?.getTracks().forEach((t) => t.stop());
           releaseWakeLock();
           setConfirmEnd(false);
@@ -224,13 +304,18 @@ export function CameraStart({
         // 끊긴 동안 떠 있던 화살표는 지운다 — 다시 붙으면 기사님이 새로 누른다 (피그마 C10)
         if (q === "unstable") resetGuide();
       },
-      onPointer: (pos) => showMarker(videoRef.current, pos),
+      onPointer: (pos) => {
+        report.inc("pointer_recv");
+        showMarker(videoRef.current, pos);
+      },
       onCameraCommand: (cmd) => {
+        report.inc("cam_cmd");
         if (cmd.cmd === "flip") flipCamera(true);
         else applyTorch(cmd.on);
       },
       onDraw: (e) => {
         if (e.t === "freeze") {
+          report.inc("freeze_recv");
           setFrozen(e.image);
           setStrokes([]);
           return;
@@ -244,18 +329,6 @@ export function CameraStart({
         if (audioRef.current) audioRef.current.srcObject = remote;
       },
     });
-    sessionRef.current = session;
-    setAnchorLink(session.anchorLink);
-    setGuideLink(session.guideLink);
-    // 기사님이 사진을 찍으면 이 폰 카메라로 원본을 찍어 보낸다 (CALL-16). 몰래 찍히지 않게 화면에 알린다
-    stopPhotosRef.current?.();
-    stopPhotosRef.current = servePhotos(
-      session.photoLink,
-      () => capturePhoto(videoRef.current, streamRef.current?.getVideoTracks()[0] ?? null),
-      () => showNotice("기사님이 사진을 찍었어요"),
-    );
-    session.join();
-    setPhase("call");
   }
 
   // 끝난 화면에 보여 줄 통화 시간
@@ -290,6 +363,8 @@ export function CameraStart({
     setAnchorBanner(null);
     setGuideLink(null);
     resetGuide();
+    report.inc("restarts");
+    report.set("exit", null);
     start();
   }
 
@@ -318,6 +393,7 @@ export function CameraStart({
         }
         reportCamera();
       } else {
+        report.inc(r.reason === "needs_tap" ? "flip_needs_tap" : "flip_fail");
         if (r.reason === "needs_tap" && byEngineer) setFlipRequested(true);
         reportCamera(r.reason);
       }
@@ -332,6 +408,7 @@ export function CameraStart({
       torchRef.current = on;
       showNotice(on ? "기사님이 손전등을 켰어요" : "기사님이 손전등을 껐어요");
     }
+    if (!ok) report.inc("torch_fail");
     reportCamera(ok ? undefined : "failed");
   }
 
@@ -349,6 +426,8 @@ export function CameraStart({
     setEndedByMe(true);
     endTalk();
     setCallState("ended");
+    report.set("exit", "hangup");
+    report.flush("hangup");
   }
 
   // 방향 지시 수신. 채널이 닫히면(재연결) 바로 지운다 — 다시 누르면 새 hold가 온다
@@ -371,6 +450,12 @@ export function CameraStart({
       offOpen();
     };
   }, [guideLink, receiveGuide, resetGuide]);
+
+  // 화면 요약(call_summary): 숨겨질 때·떠날 때 보낸다. 통화 밖 단계(시작·거부·끝남)도 기록
+  useEffect(() => report.listen(), [report]);
+  useEffect(() => {
+    if (phase !== "call") report.setPhase(phase);
+  }, [phase, report]);
 
   // 로컬 미리보기 연결
   useEffect(() => {

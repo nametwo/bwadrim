@@ -6,8 +6,10 @@
 //   GET  /auth/v1/admin/users/:id      (서비스 키) 사용자 — 고객 화면의 기사님 이름
 //   GET  /rest/v1/rooms?code=eq.X      (id=eq.X, select=… 지원) Accept가 vnd.pgrst.object+json이면 객체 1개
 //   PATCH /rest/v1/rooms?id=eq.X…      상태 갱신 (status=eq.X 조건 지원)
-//   POST /rest/v1/events               기록 (본문 객체 또는 배열) · GET은 통계 화면용(필터 무시)
-//   GET  /__events  ·  GET /__rooms  ·  POST /__reset[?room=ID]  ·  GET /__health   (테스트용)
+//   POST /rest/v1/events               기록 (본문 객체 또는 배열) · GET은 통계 화면용(필터 무시) · HEAD는 개수(count)
+//   POST /rest/v1/call_reports         화면 요약 upsert (room_id+pid) · GET은 eq 필터
+//   POST /rest/v1/rpc/claim_alert      알림 쿨다운 — 항상 true
+//   GET  /__events  ·  GET /__reports  ·  GET /__rooms  ·  POST /__reset[?room=ID]  ·  GET /__health   (테스트용)
 //
 // 고정 데이터는 e2e/fixtures.json과 같다 (테스트도 같은 파일을 읽는다).
 import http from "node:http";
@@ -21,6 +23,7 @@ const PORT = Number(process.env.E2E_SUPABASE_PORT ?? FIXTURE.supabasePort);
 
 let rooms = [];
 let events = [];
+let reports = [];
 
 function freshRoom(r, now) {
   return {
@@ -42,10 +45,12 @@ function reset(roomId) {
     const r = FIXTURE.rooms.find((x) => x.id === roomId);
     if (r) rooms = rooms.map((x) => (x.id === roomId ? freshRoom(r, now) : x));
     events = events.filter((e) => e.room_id !== roomId);
+    reports = reports.filter((r) => r.room_id !== roomId);
     return;
   }
   rooms = FIXTURE.rooms.map((r) => freshRoom(r, now));
   events = [];
+  reports = [];
 }
 reset();
 
@@ -99,6 +104,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === "/__health") return send(res, 200, { ok: true });
     if (p === "/__events") return send(res, 200, events);
+    if (p === "/__reports") return send(res, 200, reports);
     if (p === "/__rooms") return send(res, 200, rooms);
     if (p === "/__reset" && req.method === "POST") {
       reset(url.searchParams.get("room") ?? undefined);
@@ -155,6 +161,32 @@ const server = http.createServer(async (req, res) => {
       const rows = filterRows(events.filter((e) => mine.has(e.room_id)), url.searchParams);
       return send(res, 200, rows.map((e, i) => project({ id: i + 1, ...e }, select)));
     }
+
+    // 상담마다 개수 제한(/api/events)이 쓰는 개수 세기 — PostgREST는 content-range에 총수를 준다
+    if (p === "/rest/v1/events" && req.method === "HEAD") {
+      const n = filterRows(events, url.searchParams).length;
+      res.writeHead(200, { "content-range": `*/${n}` });
+      return res.end();
+    }
+
+    if (p === "/rest/v1/call_reports") {
+      if ((req.headers.apikey ?? "") !== FIXTURE.serviceKey) return send(res, 401, { message: "service key required" });
+      if (req.method === "GET") {
+        const select = url.searchParams.get("select");
+        return send(res, 200, filterRows(reports, url.searchParams).map((r) => project(r, select)));
+      }
+      if (req.method === "POST") {
+        const body = await readBody(req);
+        for (const r of Array.isArray(body) ? body : body ? [body] : []) {
+          const i = reports.findIndex((x) => x.room_id === r.room_id && x.pid === r.pid);
+          if (i >= 0) reports[i] = { ...reports[i], ...r };
+          else reports.push({ ...r, created_at: new Date().toISOString() });
+        }
+        return send(res, 201);
+      }
+    }
+
+    if (p === "/rest/v1/rpc/claim_alert" && req.method === "POST") return send(res, 200, true);
 
     if (p === "/rest/v1/events" && req.method === "POST") {
       const body = await readBody(req);

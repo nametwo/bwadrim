@@ -6,6 +6,7 @@ import { ChevronLeftIcon } from "@/components/ui/icons";
 import { StatCard } from "@/components/ui/stat-card";
 import {
   computeMetrics,
+  METRIC_EVENT_NAMES,
   type MetricEvent,
   type MetricRoom,
   type Ratio,
@@ -72,7 +73,7 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
     }),
     // 기간 안에 만든 세션의 이벤트만 쓰므로, 기간 시작 이후 이벤트만 받아도 된다
     fetchAll<MetricEvent>((from, to) => {
-      let q = supabase.from("events").select("room_id, name, props");
+      let q = supabase.from("events").select("room_id, name, props").in("name", [...METRIC_EVENT_NAMES]);
       if (since) q = q.gte("created_at", since);
       return q.order("id", { ascending: true }).range(from, to);
     }),

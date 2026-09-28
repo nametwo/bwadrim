@@ -12,6 +12,10 @@ import {
   type CameraState,
 } from "./camera";
 import { fromRTCDataChannel, type ChannelDataLink, type DataLink } from "./data-link";
+import { CallTelemetry, type CallSignal, type TelemetrySnapshot } from "./call-telemetry";
+import { StatsSampler, pathInfo, type QualitySummary } from "./stats";
+
+export type { CallSignal } from "./call-telemetry";
 
 // 정지 화면(JPEG data URL)은 DataChannel 메시지 크기 제한 때문에 조각내 보낸다
 const FREEZE_CHUNK = 12_000;
@@ -69,6 +73,13 @@ export interface CallSessionOptions {
   onPeerChanged?: () => void;
   // 연결된 뒤 잠깐 끊겼다(unstable) / 다시 붙었다(good). 브라우저가 스스로 다시 붙거나, 못 붙으면 failed가 된다
   onQuality?: (quality: CallQuality) => void;
+  // 지표용 연결 과정 알림 (준비됨·제한 시간 초과·실패·연결됨, DATA-01). 화면 동작에는 쓰지 않는다
+  onSignal?: (signal: CallSignal) => void;
+}
+
+// 화면 요약(call_summary)에 넣는 통화 관찰값
+export interface CallTelemetryReport extends TelemetrySnapshot {
+  quality: QualitySummary;
 }
 
 export type CallQuality = "good" | "unstable";
@@ -147,9 +158,22 @@ export class CallSession {
   private closed = false;
   // 카메라 전환 시 교체된다. 이후 새로 맺는 연결도 지금 카메라로 보내기 위함
   private localStream: MediaStream | null;
+  // 지표: 연결 과정 관찰과 통화 품질 표본 (화면 동작은 바꾸지 않는다)
+  private readonly tel: CallTelemetry;
+  private readonly sampler = new StatsSampler();
+  // connected 기록을 이미 보낸 연결 (재연결 disconnected → connected는 다시 보내지 않는다)
+  private confirmedPc: RTCPeerConnection | null = null;
 
   constructor(private opts: CallSessionOptions) {
     this.localStream = opts.localStream;
+    this.tel = new CallTelemetry((s) => {
+      if (!this.closed || s.type === "failed") this.opts.onSignal?.(s);
+    });
+  }
+
+  // 화면 요약(call_summary)용 관찰값
+  telemetry(): CallTelemetryReport {
+    return { ...this.tel.snapshot(), quality: this.sampler.summary() };
   }
 
   join() {
@@ -160,10 +184,12 @@ export class CallSession {
     const { roomId, role } = this.opts;
     const peer = this.peerRole();
 
+    this.tel.joinStarted();
     // 로그인 토큰(JWT)을 소켓에 먼저 실어 둔다. 페이지를 막 연 직후엔 토큰이 늦게 붙어서,
     // 그 전에 채널에 들어가면 익명으로 취급돼 엔지니어 채널 보내기가 거부된다 (고객은 원래 익명)
     await this.refreshAuth();
     if (this.closed) return;
+    this.tel.authReady();
     this.joinedAt = Date.now() + (this.opts.clockOffsetMs ?? 0);
 
     // 내 채널의 presence도 본다: 같은 역할의 더 늦은 기기가 오면 물러난다
@@ -182,6 +208,7 @@ export class CallSession {
     this.sendLane
       .on("presence", { event: "sync" }, () => this.onOwnLaneSync())
       .subscribe(async (status, err) => {
+      this.tel.laneStatus("send", status);
       if (status === "SUBSCRIBED") {
         let tracked = await this.sendLane?.track(me);
         if (tracked === "error") {
@@ -192,9 +219,11 @@ export class CallSession {
         if (this.closed) return;
         // 그래도 거부 = 보내기 권한이 없다 (로그인이 풀렸거나 이 세션의 주인이 아님)
         if (tracked === "error") {
+          this.tel.tracked("error");
           this.onChannelError(new Error("Unauthorized: presence track"));
           return;
         }
+        this.tel.tracked(tracked === "timed out" ? "timed out" : "ok");
         this.sendLaneReady = true;
         // 재구독(망 전환 등)이나 track 대기 중 이미 연결이 시작됐으면 상태를 덮어쓰지 않는다
         if (!this.closed && !this.pc) this.opts.onState("waiting");
@@ -226,6 +255,7 @@ export class CallSession {
       })
       .on("presence", { event: "sync" }, () => this.onPresenceSync())
       .subscribe((status, err) => {
+        this.tel.laneStatus("listen", status);
         if (status === "CHANNEL_ERROR") this.onChannelError(err);
       });
   }
@@ -244,6 +274,12 @@ export class CallSession {
     if (this.closed || !/unauthori[sz]ed|permission|denied/i.test(err?.message ?? "")) {
       return;
     }
+    this.tel.fail(
+      "denied",
+      /presence track/.test(err?.message ?? "") ? "track_error" : "channel_unauthorized",
+      err,
+      this.pc?.connectionState ?? null,
+    );
     this.opts.onState("denied");
     this.destroy();
   }
@@ -272,14 +308,20 @@ export class CallSession {
 
     if (!top) {
       // 상대가 나갔다 — 연결을 정리하고 재접속을 기다린다 (고객이 새로고침하는 경우)
-      if (this.pc) this.resetPeer();
+      if (this.pc) {
+        this.tel.presenceLost(this.pc.connectionState);
+        this.resetPeer();
+      }
       return;
     }
 
     if (top.id !== prev) {
       // 상대 기기가 바뀌었다 — 이전 기기와의 연결은 버리고 새 기기와 맺는다
       if (this.pc) this.resetPeer();
-      if (prev) this.opts.onPeerChanged?.();
+      if (prev) {
+        this.tel.peerChanged();
+        this.opts.onPeerChanged?.();
+      }
       const queued = this.pendingOffer;
       if (queued?.from === top.id) {
         this.pendingOffer = null;
@@ -315,7 +357,9 @@ export class CallSession {
     };
     pc.onconnectionstatechange = () => {
       if (this.closed || this.pc !== pc) return;
+      this.tel.pcState(pc.connectionState);
       if (pc.connectionState === "connected") {
+        this.confirmConnected(pc);
         this.opts.onQuality?.("good");
         this.opts.onState("connected");
       } else if (pc.connectionState === "disconnected") {
@@ -326,7 +370,20 @@ export class CallSession {
 
     this.pc = pc;
     this.pcPeer = peerId;
+    this.tel.pcCreated();
+    this.sampler.start(pc);
     return pc;
+  }
+
+  // 연결되고 1초 뒤에도 연결돼 있으면 connected 기록 (연결 시도마다 한 번). 경로(TURN 경유 등)도 이때 본다
+  private confirmConnected(pc: RTCPeerConnection) {
+    if (this.confirmedPc === pc) return;
+    setTimeout(async () => {
+      if (this.closed || this.pc !== pc || pc.connectionState !== "connected" || this.confirmedPc === pc) return;
+      this.confirmedPc = pc;
+      const info = await pathInfo(pc);
+      if (this.pc === pc) this.tel.confirmConnected(info);
+    }, 1000);
   }
 
   private async offer() {
@@ -347,9 +404,11 @@ export class CallSession {
       await pc.setLocalDescription(offer);
       if (this.pc !== pc) return; // 그사이 상대 기기가 바뀌었다
       this.send("offer", { to: peerId, sdp: offer });
+      this.tel.offerSent();
     } catch (e) {
       if (this.pc !== pc) return;
       console.error("[call] offer 실패:", e);
+      this.tel.fail("negotiation", "offer_error", e, pc?.connectionState ?? null);
       this.fail();
     } finally {
       this.negotiating = false;
@@ -365,6 +424,7 @@ export class CallSession {
     }
     if (payload.from !== this.activePeer) {
       this.pendingOffer = { from: payload.from, sdp: payload.sdp };
+      this.tel.offerHeld();
       return;
     }
     this.answer(payload.from, payload.sdp);
@@ -372,6 +432,7 @@ export class CallSession {
 
   private async answer(peerId: string, sdp: RTCSessionDescriptionInit) {
     let pc: RTCPeerConnection | null = null;
+    this.tel.offerReleased();
     try {
       this.opts.onState("connecting");
       if (this.pc) this.resetPeer(); // 고객이 재시도한 경우 이전 연결 폐기
@@ -391,9 +452,11 @@ export class CallSession {
       await pc.setLocalDescription(answer);
       if (this.pc !== pc) return;
       this.send("answer", { to: peerId, sdp: answer });
+      this.tel.answerSent();
     } catch (e) {
       if (this.pc !== pc) return;
       console.error("[call] answer 실패:", e);
+      this.tel.fail("negotiation", "answer_error", e, pc?.connectionState ?? null);
       this.fail();
     }
   }
@@ -406,10 +469,12 @@ export class CallSession {
     try {
       await pc.setRemoteDescription(payload.sdp);
       if (this.pc !== pc) return;
+      this.tel.answerApplied();
       this.flushIce();
     } catch (e) {
       if (this.pc !== pc) return;
       console.error("[call] answer 수신 처리 실패:", e);
+      this.tel.fail("negotiation", "accept_answer_error", e, pc.connectionState);
       this.fail();
     }
   }
@@ -429,6 +494,7 @@ export class CallSession {
         await pc.addIceCandidate(candidate);
       } catch (e) {
         console.warn("[call] ICE 후보 추가 실패:", e);
+        this.tel.iceAddFailed();
       }
     } else {
       // 연결 준비 전(엔지니어가 offer를 맡아 둔 사이 포함) — 연결을 맺으면 그 기기 것만 넣는다
@@ -447,11 +513,13 @@ export class CallSession {
 
   // 모든 신호에 내 기기 id(from)를 붙인다
   private send(event: string, payload: Record<string, unknown>) {
-    this.sendLane?.send({
-      type: "broadcast",
-      event,
-      payload: { ...payload, from: this.id },
-    });
+    this.sendLane
+      ?.send({
+        type: "broadcast",
+        event,
+        payload: { ...payload, from: this.id },
+      })
+      .then((r) => this.tel.sendResult(r), () => this.tel.sendResult("error"));
   }
 
   private attachDataChannel(dc: RTCDataChannel) {
@@ -596,40 +664,9 @@ export class CallSession {
     await sender?.replaceTrack(track);
   }
 
-  // relay(TURN) 경유 여부 — 연결 후 원가 지표용
-  async usedRelay(): Promise<boolean> {
-    if (!this.pc) return false;
-    try {
-      const stats = await this.pc.getStats();
-      let selectedPairId: string | null = null;
-      stats.forEach((s) => {
-        if (s.type === "transport" && s.selectedCandidatePairId) {
-          selectedPairId = s.selectedCandidatePairId;
-        }
-      });
-      let localCandidateId: string | null = null;
-      stats.forEach((s) => {
-        if (
-          s.type === "candidate-pair" &&
-          (s.id === selectedPairId || (!selectedPairId && s.nominated && s.state === "succeeded"))
-        ) {
-          localCandidateId = s.localCandidateId;
-        }
-      });
-      let relay = false;
-      stats.forEach((s) => {
-        if (s.id === localCandidateId && s.candidateType === "relay") {
-          relay = true;
-        }
-      });
-      return relay;
-    } catch {
-      return false;
-    }
-  }
-
   private resetPeer() {
     const old = this.pcPeer;
+    this.sampler.stop();
     this.pc?.close();
     this.pc = null;
     this.pcPeer = null;
@@ -654,6 +691,7 @@ export class CallSession {
   // 엔지니어는 채널에 남아 고객이 링크를 다시 열면 이어받는다.
   private onBye() {
     if (this.closed) return;
+    this.sampler.stop();
     this.pc?.close();
     this.pc = null;
     this.pcPeer = null;
@@ -668,6 +706,8 @@ export class CallSession {
   // 남아 있으면 엔지니어가 다시 들어올 때 꺼진 카메라로 재연결된다.
   private fail() {
     if (this.closed) return;
+    // 원인을 이미 남긴 실패(협상 예외 등)는 telemetry가 거른다 — 여기선 ICE failed
+    this.tel.fail(null, "failed", undefined, this.pc?.connectionState ?? null);
     this.opts.onState("failed");
     if (this.opts.role === "customer") this.destroy();
   }
@@ -675,6 +715,8 @@ export class CallSession {
   // 언마운트 시에도 호출. 여러 번 불러도 된다. 로컬 트랙 정지는 호출측 책임.
   destroy() {
     this.closed = true;
+    this.tel.dispose();
+    this.sampler.stop();
     this.anchorChannel.dispose();
     this.guideChannel.dispose();
     this.photoChannel.dispose();

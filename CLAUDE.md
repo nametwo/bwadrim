@@ -30,11 +30,12 @@ src/proxy.ts                                     # 세션 갱신 + 엔지니어 
 src/app/
   (engineer)/login, /dashboard, /room/[id], /stats  # 로그인 필요. 방 생성·종료는 서버 액션. stats = 핵심 지표(DATA-06)
   join/[token]                                   # 고객 진입, 공개. 32자리 링크 토큰(ROOM-12). start-screen(시작), camera-help(거부 원인별 안내), camera-start(통화)
-  api/turn                                       # 링크 토큰 검증 후 Cloudflare TURN 단기 자격증명 발급
-  api/events                                     # 고객(비로그인) 쪽 지표 이벤트 수집
+  api/turn                                       # 링크 토큰 검증 후 Cloudflare TURN 단기 자격증명 발급. 폴백 시 turn_fallback
+  api/events                                     # 폰 쪽 지표 기록(고객=링크 토큰, 엔지니어=role+로그인 쿠키). call_summary는 call_reports에 upsert
+  api/cron/digest                                # 하루 운영 요약 → 디스코드 (Vercel Cron, CRON_SECRET, OPS-07)
 src/lib/
   supabase/{client,server,admin}.ts              # admin = service role, 서버 전용
-  webrtc/                                        # peer 연결, ICE 설정, 시그널링, 포인터 좌표(pointer.ts), 화면 멈춤·그리기(draw.ts), 카메라 전환·손전등(camera.ts), DataChannel 래퍼(data-link.ts), 방향 지시 메시지(guide.ts), 사진 찍기·주고받기(photo.ts, CALL-16), 대시보드 탭에서 마이크 미리 받기(mic-ahead.ts, CALL-01)
+  webrtc/                                        # peer 연결, ICE 설정, 시그널링, 연결 과정 관찰·제한 시간(call-telemetry.ts), 통화 품질 getStats 요약(stats.ts), 포인터 좌표(pointer.ts), 화면 멈춤·그리기(draw.ts), 카메라 전환·손전등(camera.ts), DataChannel 래퍼(data-link.ts), 방향 지시 메시지(guide.ts), 사진 찍기·주고받기(photo.ts, CALL-16), 대시보드 탭에서 마이크 미리 받기(mic-ahead.ts, CALL-01)
   tracking/                                      # 평면 앵커 추적(AR 핀, CALL-14). 설계는 tracking/README.md, 벤치는 scripts/tracking-bench
   join-token.ts                                  # 고객 링크 토큰 형식 검사
   engineer-name.ts                               # 엔지니어 표시 이름 (user_metadata.name, OPS-03). 고객 시작 화면 기사님 카드
@@ -42,7 +43,12 @@ src/lib/
   format.ts                                      # 화면 시각·시간 글자 ('오늘 오후 5:03', 한국 시간 고정)
   wake-lock.ts                                   # 통화 중 화면 꺼짐 방지
   in-app-browser.ts                              # 카톡 등 인앱 브라우저 감지·외부 브라우저로 열기
-  events.ts                                      # 지표 이벤트 기록
+  events.ts                                      # 지표 이벤트 기록 (서버). v·env를 붙이고 토큰을 지운 뒤 알림 규칙을 돈다
+  alerts.ts · alert-rules.ts                     # 디스코드 운영 알림(평소·응급, 쿨다운)과 어떤 기록이 어느 채널로 가는지 (OPS-06)
+  telemetry.ts · call-report.ts                  # 폰 → /api/events 전송(pid, sendBeacon) · 화면 요약 call_summary (DATA-07)
+  client-error.ts                                # 화면 JS 오류 → client_error (주소로 고객/엔지니어 구분)
+  redact.ts                                      # 기록·알림에서 링크 토큰 지우기
+  ops-digest.ts                                  # 하루 요약 계산 (실측 연결 실패율, 연결 시간 p50·p90 …)
   metrics.ts                                     # 핵심 지표 계산 (통계 화면)
 src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기). anchor/·anchor-overlay = AR 핀 층(CALL-14), guide-dpad(방향 링·가까이/멀리 알약)·guide-pad-geometry·guide-overlay(고객 노란 원 화살표·네 모서리)·guide-pill = 방향 지시(CALL-15)
   ui/                                            # 디자인 시스템 부품(NFR-08, 피그마 컴포넌트와 같은 이름): button(Button·ButtonLink·buttonClass), icons(선 아이콘), sheet(아래 확인 창), notice-screen(한 화면 한 안내), bottom-cta(아래에 붙는 버튼 자리), brand(로고), status-chip, step-item, banner, call-control(통화 원형 버튼), stat-card, engineer-card, call-timer
@@ -89,11 +95,17 @@ AR 핀(CALL-14)은 전용 DataChannel `anchor`(고객이 offer에 포함). 기�
 
 ## 이벤트 이름 (events 테이블)
 
-`room_created`, `link_opened`, `camera_granted`, `camera_denied`, `connected`, `relay_used`, `pointer_used`, `freeze_used`, `anchor_used`, `guide_used`, `photo_taken`, `ended`, `resolved_remotely`
+`room_created`, `link_opened`, `link_blocked`, `camera_granted`, `camera_denied`, `call_ready`, `call_stuck`, `call_failed`, `connected`, `relay_used`, `turn_fallback`, `client_error`, `pointer_used`, `freeze_used`, `anchor_used`, `guide_used`, `photo_taken`, `ended`, `resolved_remotely`
+
+화면 요약 `call_summary`는 events가 아니라 `call_reports` 표(화면 pid마다 한 줄)에 쌓는다 (DATA-07).
+- 실패는 연결 시도마다 처음 것 하나만(`call_failed`), 제한 시간 초과는 기록만(`call_stuck`, 화면 동작은 바꾸지 않음). 새 실패 경로를 만들면 `CallTelemetry.fail()`을 거치게 할 것
+- 모든 기록에 `v`·`env`가 붙는다. 기록·알림에 링크 토큰·고객 연락처를 넣지 말 것 (`redact.ts`가 토큰은 지우지만 믿지 말 것)
+- 알림 규칙을 바꾸면 `docs/requirements.md` OPS-06 표도 같이
 
 ## 환경 변수
 
 `.env.example` 참고. TURN 자격증명은 서버에서만 다루고 클라이언트엔 단기 토큰만 내려줄 것.
+디스코드 웹훅 주소(`DISCORD_WEBHOOK_INFO`·`DISCORD_WEBHOOK_ALERT`)와 `CRON_SECRET`도 비밀값 — 코드·문서·커밋에 실제 값을 넣지 말 것. 알림은 운영(`VERCEL_ENV=production`)에서만 간다.
 
 ## 하지 말 것
 

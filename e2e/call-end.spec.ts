@@ -159,7 +159,7 @@ test("고객 마이크를 못 쓰면 카메라만으로 연결 (camera_granted m
     await expect(ep.getByText(/고객님 마이크가 꺼져 있어요/)).toBeVisible({ timeout: 10_000 });
     await expect
       .poll(async () => (await mockEvents()).find((e) => e.room_id === ROOM.id && e.name === "camera_granted")?.props)
-      .toEqual({ mic: false });
+      .toMatchObject({ mic: false, attempt: 1 });
     expect(logs).toEqual([]);
   } finally {
     await engCtx.close();

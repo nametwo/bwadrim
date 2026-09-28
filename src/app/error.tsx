@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { NoticeScreen } from "@/components/ui/notice-screen";
 import { Button } from "@/components/ui/button";
 import { AlertIcon, RefreshIcon } from "@/components/ui/icons";
+import { reportClientError } from "@/lib/client-error";
 
 // 서버 오류 (BUG-13). 세션 만들기 실패 등
 export default function Error({
@@ -15,6 +16,8 @@ export default function Error({
 }) {
   useEffect(() => {
     console.error(error);
+    // 고객·엔지니어 상담 화면이면 client_error로 남는다 (DATA-01). digest = 서버 로그에서 같은 오류를 찾는 열쇠
+    reportClientError("render", error, { digest: error.digest });
   }, [error]);
 
   return (

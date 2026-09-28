@@ -3,8 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CallSession, sendBye, type CallQuality, type CallState } from "@/lib/webrtc/call";
-import { fetchIceServers } from "@/lib/webrtc/ice";
+import { CallSession, sendBye, type CallQuality, type CallSignal, type CallState } from "@/lib/webrtc/call";
+import { fetchIceServers, type IceConfig } from "@/lib/webrtc/ice";
+import { createTelemetry } from "@/lib/telemetry";
+import { CallReport } from "@/lib/call-report";
 import { toVideoPos } from "@/lib/webrtc/pointer";
 import {
   applyDrawCommand,
@@ -186,6 +188,18 @@ export function CallPanel({
   const [photoNote, setPhotoNote] = useState<"taken" | "failed" | null>(null);
   const [photoFlash, setPhotoFlash] = useState(0);
   const photoNoteTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // 지표 (DATA-01·07): 이 화면의 전송기(pid)와 화면 요약. 기록은 로그인 쿠키로 방 주인인지 확인받는다
+  const [tel] = useState(() => createTelemetry({ role: "engineer", token: joinToken }));
+  const [report] = useState(() => new CallReport(tel, { role: "engineer" }));
+  const startAtRef = useRef<number | null>(null);
+  const micResultRef = useRef<string | null>(null);
+  const iceRef = useRef<{ cfg: IceConfig; at: number } | null>(null);
+
+  // 화면 요약(call_summary): 숨겨질 때·떠날 때(대시보드로 이동 포함) 보낸다
+  useEffect(() => report.listen(), [report]);
+  useEffect(() => {
+    report.setPhase(state.phase === "call" ? `call:${state.call}` : state.phase);
+  }, [state, report]);
 
   useEffect(() => {
     unmountedRef.current = false;
@@ -248,37 +262,104 @@ export function CallPanel({
   }, [waitingForCustomer, roomId]);
 
   // 마이크 요청은 반드시 탭(제스처) 이후 — 여기서 직접 누른 '연결 준비' 또는 대시보드에서 받아 둔 것(ahead)
-  async function start(ahead?: { mic: Promise<MediaStream | null>; releaseWakeLock: () => void } | null) {
+  // 연결 기록마다 붙이는 공통 정보: TURN, 마이크, '연결 준비'부터 지난 시간
+  function callContext() {
+    const ice = iceRef.current;
+    const at = startAtRef.current;
+    return {
+      turn: ice ? !ice.cfg.turnError : null,
+      turn_err: ice?.cfg.turnCode ?? null,
+      mic: micResultRef.current,
+      ms_since_click: at === null ? null : Date.now() - at,
+    };
+  }
+
+  // 통화 연결 과정 → 지표 (call_ready·call_stuck·call_failed·connected). 고객 쪽과 같은 이름, actor만 engineer
+  function onSignal(sig: CallSignal) {
+    const { type, ...rest } = sig;
+    if (type === "ready") {
+      tel.post("call_ready", { ...rest, ms_ice: iceRef.current?.cfg.ms ?? null, ...callContext() });
+    } else if (type === "stuck") {
+      tel.post("call_stuck", { ...rest, ...callContext() });
+    } else if (type === "failed") {
+      const ice = iceRef.current;
+      tel.post("call_failed", { ...rest, turn_age_ms: ice ? Date.now() - ice.at : null, ...callContext() });
+      report.flush("failed");
+    } else if (type === "connected") {
+      tel.post("connected", { ...rest, ...callContext() });
+      if (sig.relay) tel.post("relay_used");
+    }
+  }
+
+  async function start(
+    ahead?: { mic: Promise<MediaStream | null>; releaseWakeLock: () => void; micError?: () => string | null } | null,
+  ) {
     if (starting || sessionRef.current) return;
     setStarting(true);
+    startAtRef.current = Date.now();
     releaseWakeLockRef.current?.();
     let mic: MediaStream | null = null;
     if (ahead) {
       releaseWakeLockRef.current = ahead.releaseWakeLock;
       mic = await ahead.mic;
+      micResultRef.current = mic ? "ok" : (ahead.micError?.() ?? "unknown");
     } else {
       releaseWakeLockRef.current = keepScreenOn();
       try {
         mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch {
+        micResultRef.current = "ok";
+      } catch (e) {
         // 마이크 거부/없음 — 영상 보기만이라도 진행
+        micResultRef.current = e instanceof Error ? e.name : "unknown";
       }
     }
-    const ice = await fetchIceServers(joinToken);
+    const ice = await fetchIceServers(joinToken, "engineer");
+    iceRef.current = { cfg: ice, at: Date.now() };
     if (unmountedRef.current) {
       mic?.getTracks().forEach((t) => t.stop());
       releaseWakeLockRef.current?.();
       return;
     }
+    // 이미 끝났거나 만료된 상담에서 '연결 준비' — 화면은 채널 거부로 알게 된다(기존 동작). 원인은 여기서 남긴다
+    if (ice.roomGone) tel.post("call_failed", { stage: "room_gone", reason: "turn_404", ...callContext() });
     micStreamRef.current = mic;
     setMicOn(!!mic);
     setTurnError(ice.turnError);
-    const session = new CallSession({
+    let session: CallSession;
+    try {
+      session = createSession(mic, ice);
+    } catch (e) {
+      tel.post("call_failed", {
+        stage: "start",
+        reason: "exception",
+        err: e instanceof Error ? `${e.name}: ${e.message}` : String(e),
+        ...callContext(),
+      });
+      throw e;
+    }
+    sessionRef.current = session;
+    report.attach(() => {
+      const { quality, ...call } = session.telemetry();
+      return { quality, call, usage: { ...usageRef.current }, photos: photosRef.current.length };
+    });
+    setAnchorLink(session.anchorLink);
+    setGuideLink(session.guideLink);
+    photoReqRef.current?.dispose();
+    photoReqRef.current = new PhotoRequester(session.photoLink);
+    session.join();
+    setState((prev) => (prev.phase === "idle" ? { phase: "call", call: "waiting", peerPresent: false } : prev));
+    setStarting(false);
+    setAutoStarting(false);
+  }
+
+  function createSession(mic: MediaStream | null, ice: IceConfig) {
+    return new CallSession({
       roomId,
       role: "engineer",
       iceServers: ice.iceServers,
       clockOffsetMs: ice.clockOffsetMs,
       localStream: mic,
+      onSignal,
       onState: (call) => {
         lastCallRef.current = call;
         // 연결이 바뀌면 고객 쪽 정지 화면도 사라지므로 이쪽도 풀어 둔다
@@ -307,6 +388,8 @@ export function CallPanel({
         }
         if (call === "connecting") setSaveError(false);
         if (call === "denied" || call === "replaced") {
+          report.set("exit", call);
+          report.flush(call);
           // 채널 권한이 없거나 다른 기기가 이어받았다 — 세션은 스스로 닫혔다.
           // 마이크·화면 켜짐도 풀고, '여기서 다시 받기'로 새 세션을 열 수 있게 비운다
           sessionRef.current = null;
@@ -353,6 +436,7 @@ export function CallPanel({
         checkMic();
       },
       onPeerChanged: () => {
+        report.inc("peer_changes");
         setPeerChanged(true);
         clearTimeout(peerChangedTimerRef.current);
         peerChangedTimerRef.current = setTimeout(() => setPeerChanged(false), 8000);
@@ -363,15 +447,6 @@ export function CallPanel({
         );
       },
     });
-    sessionRef.current = session;
-    setAnchorLink(session.anchorLink);
-    setGuideLink(session.guideLink);
-    photoReqRef.current?.dispose();
-    photoReqRef.current = new PhotoRequester(session.photoLink);
-    session.join();
-    setState((prev) => (prev.phase === "idle" ? { phase: "call", call: "waiting", peerPresent: false } : prev));
-    setStarting(false);
-    setAutoStarting(false);
   }
 
   function stopSession() {
@@ -460,7 +535,10 @@ export function CallPanel({
     setCamState((cs) => (cs ? { ...cs, error: undefined } : cs));
     // 응답이 안 오면(구버전 고객 화면 등) 버튼을 다시 풀어 준다
     clearTimeout(camTimerRef.current);
-    camTimerRef.current = setTimeout(() => setCamPending(false), 6000);
+    camTimerRef.current = setTimeout(() => {
+      report.inc("cam_cmd_timeout");
+      setCamPending(false);
+    }, 6000);
   }
 
   // 방향 지시(CALL-15): 누르는 동안 방향 링·알약이 0.4초마다 hold를 보낸다. 닫혀 있으면 send가 false(버림)
@@ -498,6 +576,7 @@ export function CallPanel({
       logToolOnce("photo_taken");
     } catch {
       // 연결 끊김·고객 폰에서 못 찍음·시간 초과 — 다시 누르면 된다
+      report.inc("photo_fail");
     } finally {
       if (!unmountedRef.current) {
         setPhotoBusy(false);
@@ -521,6 +600,7 @@ export function CallPanel({
     if (!video || !session || lastCallRef.current !== "connected") return;
     const image = captureFrame(video);
     if (!image || !session.sendFreeze(image)) {
+      report.inc(image ? "freeze_send_fail" : "freeze_no_frame");
       setFreezeError(true);
       return;
     }
@@ -663,6 +743,11 @@ export function CallPanel({
       result = await endRoom(roomId, resolvedRemotely);
     } catch {
       // 네트워크 오류 — 아래에서 안내
+    }
+    report.set("end_save", result ? (result.ok ? "ok" : result.reason) : "network");
+    if (result?.ok) {
+      report.set("exit", resolvedRemotely === null ? "closed" : "answered");
+      report.flush("answered", true);
     }
     if (unmountedRef.current) return;
     if (result?.ok) {
@@ -1119,7 +1204,10 @@ export function CallPanel({
       createdLabel={createdLabel}
       micOn={state.phase === "call" ? micOn : null}
       sentVia={sentVia}
-      onSent={setSentVia}
+      onSent={(via) => {
+        report.set("sent_via", via);
+        setSentVia(via);
+      }}
       progress={progress}
       peerPresent={peerPresent}
       failed={call === "failed"}

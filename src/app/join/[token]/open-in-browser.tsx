@@ -10,6 +10,8 @@ import { NoticeScreen } from "@/components/ui/notice-screen";
 import { Button } from "@/components/ui/button";
 import { CheckIcon, CloseIcon, CopyIcon, ExternalIcon, MoreIcon } from "@/components/ui/icons";
 import { CameraStart } from "./camera-start";
+import { createTelemetry } from "@/lib/telemetry";
+import { CallReport } from "@/lib/call-report";
 
 // 인앱 브라우저로 열렸을 때 (JOIN-10, 피그마 C05). 카카오톡·라인은 자동으로 기본 브라우저로 넘기고,
 // 나머지 앱은 직접 열도록 메뉴 그림으로 안내한다. 안드로이드 등에서 그 자리에서 되는 경우를 위해 '이대로 계속하기'를 둔다.
@@ -29,9 +31,23 @@ export function OpenInBrowser({
   const triedRef = useRef(false);
   const canOpen = kind === "kakaotalk" || kind === "line";
   const app = IN_APP_LABEL[kind];
+  // 화면 요약 (DATA-07): 앱 안 브라우저에서 막혀 떠났는지, 자동 전환을 시도했는지
+  const [report] = useState(
+    () =>
+      new CallReport(createTelemetry({ role: "customer", token }), {
+        role: "customer",
+        inapp: kind,
+        redirect_tried: false,
+      }),
+  );
+  useEffect(() => {
+    report.setPhase("inapp_guide");
+    return report.listen();
+  }, [report]);
 
   function openExternal() {
     const target = externalOpenUrl(kind, window.location.href);
+    report.inc("open_tap");
     if (target) window.location.href = target;
   }
 
@@ -40,8 +56,11 @@ export function OpenInBrowser({
     if (triedRef.current || !canOpen) return;
     triedRef.current = true;
     const target = externalOpenUrl(kind, window.location.href);
-    if (target) window.location.href = target;
-  }, [kind, canOpen]);
+    if (target) {
+      report.set("redirect_tried", true);
+      window.location.href = target;
+    }
+  }, [kind, canOpen, report]);
 
   async function copy() {
     try {
@@ -50,9 +69,11 @@ export function OpenInBrowser({
       setTimeout(() => setCopied(false), 2000);
     } catch {
       // 앱 안에서 복사가 막힐 수 있다 — 그림대로 메뉴에서 열면 된다
+      report.inc("copy_fail");
     }
   }
 
+  // '이대로 계속하기' — 이 화면 요약은 여기서 끝나고, 통화 화면이 자기 요약을 새로 쓴다
   if (stay) return <CameraStart roomId={roomId} token={token} engineerName={engineerName} />;
 
   const copyButton = (primary: boolean) => (
@@ -92,7 +113,10 @@ export function OpenInBrowser({
           )}
           <button
             type="button"
-            onClick={() => setStay(true)}
+            onClick={() => {
+              report.set("exit", "stay");
+              setStay(true);
+            }}
             className="min-h-touch text-body-m text-text-secondary underline underline-offset-4"
           >
             이대로 계속하기
