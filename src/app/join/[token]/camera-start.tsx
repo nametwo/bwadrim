@@ -105,7 +105,7 @@ export function CameraStart({
   // 기사님이 길게 눌러 꽂은 AR 핀 (CALL-14). 핀 안내(카드·화살표)가 뜨면 상태 문구는 숨긴다
   const [anchorLink, setAnchorLink] = useState<DataLink | null>(null);
   const [anchorBanner, setAnchorBanner] = useState<CustomerAnchorBanner>(null);
-  // 기사님이 십자키를 누르고 있는 동안의 방향 지시 (CALL-15, 전용 채널 'guide')
+  // 기사님이 방향 링을 누르고 있는 동안의 방향 지시 (CALL-15, 전용 채널 'guide')
   const [guideLink, setGuideLink] = useState<DataLink | null>(null);
   const { view: guideView, receive: receiveGuide, reset: resetGuide } = useGuideReceiver();
 

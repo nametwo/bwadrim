@@ -43,7 +43,8 @@ export function CallControl({
       >
         {icon}
       </span>
-      <span className="text-caption leading-tight text-call-text">{label}</span>
+      {/* 글자가 한 줄이든 두 줄이든 높이를 같게 — 도구가 바뀌어도(멈춤 등) 버튼 자리가 움직이지 않게 */}
+      <span className="min-h-[2.5em] text-center text-caption leading-tight text-call-text">{label}</span>
     </button>
   );
 }

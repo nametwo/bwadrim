@@ -24,7 +24,7 @@ export function GuidePill({
         data-testid="eng-guide-pill"
         data-cmd="none"
         role="status"
-        className="inline-flex items-center rounded-full bg-call-control px-3 py-2 text-label-s whitespace-nowrap text-call-text shadow-float"
+        className="inline-flex h-9 items-center rounded-full bg-call-control px-3 text-label-s whitespace-nowrap text-call-text shadow-float"
       >
         {hint}
       </span>
@@ -34,7 +34,7 @@ export function GuidePill({
     <span
       data-testid="eng-guide-pill"
       data-cmd={active ? cmd : "none"}
-      className={`inline-flex items-center gap-2 rounded-full px-3 py-2 whitespace-nowrap shadow-float ${
+      className={`inline-flex h-9 items-center gap-2 rounded-full px-3 whitespace-nowrap shadow-float ${
         active ? "bg-guide-signal text-guide-on-signal" : "bg-call-control text-call-text"
       }`}
     >

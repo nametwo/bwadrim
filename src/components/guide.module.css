@@ -118,7 +118,9 @@
   bottom: calc(100% + 8px);
   translate: -50% 0;
   z-index: 2;
-  white-space: nowrap;
+  width: max-content;
+  max-width: min(220px, calc(100vw - 32px));
+  text-align: center;
   padding: 6px 10px;
   border-radius: var(--radius-lg);
   background: var(--color-guide-band);
@@ -197,7 +199,8 @@
   --dx: 0;
   --dy: 0;
   position: absolute;
-  width: min(26cqw, 104px);
+  /* 가로 화면에서도 위·아래 원이 서로 자리를 바꾸거나 아래 버튼에 닿지 않게 높이로도 제한 */
+  width: min(26cqw, 104px, 22cqh);
   aspect-ratio: 1;
   pointer-events: auto;
 }
@@ -217,13 +220,16 @@
   --dy: -1;
   left: 50%;
   translate: -50% 0;
-  top: calc(var(--guide-top, max(12px, env(safe-area-inset-top))) + 36cqw);
+  top: min(
+    calc(var(--guide-top, max(12px, env(safe-area-inset-top))) + 36cqw),
+    calc(50cqh - min(26cqw, 104px, 22cqh) - 4px)
+  );
 }
 .arrow[data-dir="down"] {
   --dy: 1;
   left: 50%;
   translate: -50% 0;
-  bottom: calc(var(--guide-bottom, max(16px, env(safe-area-inset-bottom))) + 6cqw);
+  bottom: calc(var(--guide-bottom, max(16px, env(safe-area-inset-bottom))) + min(6cqw, 24px));
 }
 .disc {
   display: grid;

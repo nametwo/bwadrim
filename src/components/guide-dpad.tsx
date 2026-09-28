@@ -63,7 +63,7 @@ function useGuideSender(send: (msg: GuideMsg) => void) {
     sendRef.current = send;
   });
 
-  // 채널이 닫혀 send가 던져도 십자키 상태는 꼬이지 않게 한다. 고객 쪽은 1.5초 뒤 스스로 지운다
+  // 채널이 닫혀 send가 던져도 방향 링 상태는 꼬이지 않게 한다. 고객 쪽은 1.5초 뒤 스스로 지운다
   const post = useCallback((m: GuideMsg) => {
     try {
       sendRef.current(m);
@@ -97,7 +97,7 @@ function useGuideSender(send: (msg: GuideMsg) => void) {
   return { active, currentRef, hold, release };
 }
 
-// 방향키를 스스로 쓰지 않는 입력 요소. 여기에 포커스가 있어도 십자키 키보드는 동작한다
+// 방향키를 스스로 쓰지 않는 입력 요소. 여기에 포커스가 있어도 방향 지시 키보드는 동작한다
 const NON_TEXT_INPUTS = new Set(["checkbox", "button", "submit", "reset", "image", "file", "color"]);
 
 function isTyping(target: EventTarget | null) {
@@ -262,10 +262,11 @@ export function GuideDpad({
   };
 
   const apply = (cmd: GuideCmd | null) => {
+    // 이미 보내고 있는 지시(방향키를 누른 채 같은 조각을 누름 등)도 '보낸 누름'으로 친다 — 쓰는 법이 뜨지 않게
+    if (cmd) usedCmd.current = true;
     if (cmd === currentRef.current) return;
     if (cmd) {
-      usedCmd.current = true;
-      // 안드로이드는 방향이 바뀔 때 짧게 떨려 화면을 안 보고도 알 수 있다 (아이폰은 무시)
+      // 안드로이드는 손가락으로 누른 지시(방향·가까이·멀리)가 켜지거나 바뀔 때 짧게 떨려 화면을 안 보고도 알 수 있다 (아이폰은 무시)
       if (touchRef.current) navigator.vibrate?.(8);
       hold(cmd);
     } else release();
@@ -322,7 +323,7 @@ export function GuideDpad({
         className={s.ring}
         data-zone="ring"
         role="group"
-        aria-label="방향 지시 십자키: 누르고 있는 동안 고객 화면에 표시"
+        aria-label="방향 링: 누르고 있는 동안 고객 화면에 표시"
       >
         <svg viewBox={`${-RING_R} ${-RING_R} ${RING_D} ${RING_D}`} aria-hidden="true">
           {GUIDE_DIRS.map((dir) => (

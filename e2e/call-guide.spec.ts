@@ -3,7 +3,7 @@ import { CLIPS, FIXTURE, engineerCookie, fakeCamera, mockEvents, mockReset, redP
 import { RealtimeHub, describeHub } from "./realtime-mock";
 
 // 실제 통화 화면(/room/[id] ↔ /join/[token])에서 CALL-15 방향 지시:
-//  십자키를 누르고 있는 동안만 고객 화면에 방향이 뜨고, 떼면 사라진다. 전용 DataChannel 'guide'. 그동안 AR 핀은 잠시 숨는다.
+//  방향 링을 누르고 있는 동안만 고객 화면에 방향이 뜨고, 떼면 사라진다. 전용 DataChannel 'guide'. 그동안 AR 핀은 잠시 숨는다.
 // 진짜 Supabase 없이 — call-anchor.spec.ts와 같은 가짜 서버·가짜 카메라·실제 WebRTC 루프백.
 
 test.use({ launchOptions: fakeCamera(CLIPS.jitter) });
@@ -41,7 +41,7 @@ test.beforeEach(async () => {
   await mockReset(ROOM.id);
 });
 
-test("통화: 십자키를 누르는 동안만 고객 화면에 방향 · 굴리면 방향 전환 · 가까이 · 방향키 · AR 핀 잠시 숨김 · 멈춤 중 비활성 (guide_used 기록)", async ({
+test("통화: 방향 링을 누르는 동안만 고객 화면에 방향 · 굴리면 방향 전환 · 가까이 · 방향키 · AR 핀 잠시 숨김 · 멈춤 중 비활성 (guide_used 기록)", async ({
   browser,
   baseURL,
 }) => {
@@ -71,7 +71,7 @@ test("통화: 십자키를 누르는 동안만 고객 화면에 방향 · 굴리
     await cp.getByRole("button", { name: /카메라 켜고 시작하기/ }).click();
     await expect(cp.getByTestId("cust-status")).toHaveText("기사님이 보고 있어요", { timeout: 30_000 });
 
-    const pad = ep.getByRole("group", { name: /방향 지시 십자키/ });
+    const pad = ep.getByRole("group", { name: /방향 링/ });
     await expect(pad).toBeVisible({ timeout: 10_000 });
     await pad.scrollIntoViewIfNeeded();
     const box = (await pad.boundingBox())!;
@@ -157,7 +157,7 @@ test("통화: 십자키를 누르는 동안만 고객 화면에 방향 · 굴리
     await expect(cp.getByTestId("cust-status")).toHaveText("빨간 동그라미를 봐주세요", { timeout: 10_000 });
     await expect.poll(() => redPixels(cp, null), { timeout: 10_000 }).toBeGreaterThan(50);
 
-    // 8) 화면을 멈추면 십자키 자리에 파란 '라이브로'(피그마 E08) — 그 자리를 눌러도 고객 화면에 방향이 뜨지 않는다
+    // 8) 화면을 멈추면 방향 링 자리에 파란 '라이브로'(피그마 E08) — 그 자리를 눌러도 고객 화면에 방향이 뜨지 않는다
     const box2 = (await pad.boundingBox())!;
     await ep.getByRole("button", { name: /멈추고 그리기/ }).click();
     await expect(pad).toHaveCount(0, { timeout: 5_000 });
@@ -170,7 +170,7 @@ test("통화: 십자키를 누르는 동안만 고객 화면에 방향 · 굴리
     await expect(band).toHaveCount(0);
     await f4.up();
     await expect(live).toBeVisible();
-    // 라이브로 돌아가면 십자키도 돌아온다
+    // 라이브로 돌아가면 방향 링도 돌아온다
     await live.click();
     await expect(pad).toBeVisible({ timeout: 5_000 });
 

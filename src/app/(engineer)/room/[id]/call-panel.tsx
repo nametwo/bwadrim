@@ -82,7 +82,7 @@ function isTyping(target: EventTarget | null) {
 }
 
 // 엔지니어 세션 화면 (피그마 E03~E11·P01, ROOM-05·10·13, CALL-01·04).
-//   고객 부르기(링크 보내기 → 고객 진행 상황) → 통화(어두운 전체 화면, 영상 + 십자키·도구) → 통화를 끝낼까요? → 결과 기록
+//   고객 부르기(링크 보내기 → 고객 진행 상황) → 통화(어두운 전체 화면, 영상 + 방향 링·도구) → 통화를 끝낼까요? → 결과 기록
 // 대시보드의 '새 A/S 시작'·'이어하기' 탭에서 마이크를 미리 받아 두면(mic-ahead) 화면이 뜨자마자 통화 대기를 시작한다.
 // 폰 한 손 조작 기준: 누를 것은 아래쪽에, 크게.
 export function CallPanel({
@@ -444,7 +444,7 @@ export function CallPanel({
     camTimerRef.current = setTimeout(() => setCamPending(false), 6000);
   }
 
-  // 방향 지시(CALL-15): 누르는 동안 십자키가 0.4초마다 hold를 보낸다. 닫혀 있으면 send가 false(버림)
+  // 방향 지시(CALL-15): 누르는 동안 방향 링·알약이 0.4초마다 hold를 보낸다. 닫혀 있으면 send가 false(버림)
   function sendGuide(msg: GuideMsg) {
     if (msg.kind === "release") {
       lastGuideRef.current = null;
@@ -790,15 +790,18 @@ export function CallPanel({
         />
       </>
     );
-    const torchControl = !frozen && (
+    // 멈춘 동안에도 손전등 자리는 남겨 둔다(보이지 않게) — 옆 종료 버튼이 움직이지 않게
+    const torchControl = (
+      <span className={frozen ? "invisible" : "contents"} aria-hidden={frozen ? true : undefined}>
       <CallControl
         icon={<FlashlightIcon />}
         label={camState && !camState.torchSupported ? "손전등 없음" : camState?.torch ? "손전등 끄기" : "손전등"}
         state={camState?.torch ? "active" : "default"}
         pressed={camState?.torchSupported ? camState.torch : undefined}
         onClick={() => sendCamera("torch")}
-        disabled={!connected || camPending || !camState?.torchSupported}
+        disabled={!!frozen || !connected || camPending || !camState?.torchSupported}
       />
+      </span>
     );
     const center = frozen ? (
       // 멈춘 동안 지금 누를 것은 '라이브로' 하나라 파랑, 방향 지시는 없다 (피그마 E08)
@@ -950,7 +953,7 @@ export function CallPanel({
             )}
           </div>
 
-          {/* 도구판 (피그마 E05: 가운데 십자키, 양옆 원형 버튼) · PC는 오른쪽 패널 (P01) */}
+          {/* 도구판 (피그마 E05: 가운데 방향 링·알약, 양옆 원형 버튼) · PC는 오른쪽 패널 (P01) */}
           <aside className="bg-call-surface px-3 pt-3 pb-[max(12px,env(safe-area-inset-bottom))] lg:flex lg:w-[400px] lg:flex-col lg:gap-5 lg:overflow-y-auto lg:border-l lg:border-call-border lg:p-6">
             <div className="hidden flex-col gap-1 lg:flex">
               <h2 className="text-title-s">방향 지시</h2>
