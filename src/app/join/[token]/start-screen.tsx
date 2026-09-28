@@ -67,7 +67,7 @@ export function StartScreen({
         <Button size="xl" block onClick={onStart} loading={starting} icon={<CameraIcon className="size-6" />}>
           {starting ? "카메라 켜는 중…" : "카메라 켜고 시작하기"}
         </Button>
-        <p className="text-center text-body-s text-text-secondary">앱 설치 없이 바로 연결돼요 · 영상은 저장하지 않아요</p>
+        <p className="text-center text-body-s text-text-secondary">앱 설치 없이 바로 연결돼요 · 통화 영상은 저장하지 않아요</p>
       </div>
 
       {starting && <AllowOverlay android={android} />}

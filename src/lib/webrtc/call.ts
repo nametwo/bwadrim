@@ -32,6 +32,7 @@ const FREEZE_MAX_CHUNKS = 400;
 // 연결이 바뀌어도(재연결·이어받기) 같은 anchorLink 객체에 새 채널을 붙이므로 쓰는 쪽은 한 번만 받으면 된다.
 // 방향 지시(CALL-15)도 전용 DataChannel('guide') — 누르는 동안 0.4초마다 오는 hold가 사진 조각 뒤에 막히면
 // 고객 쪽 1.5초 만료가 지나 화살표가 저절로 사라진다(고객에겐 '멈춤'으로 보임). guideLink도 anchorLink처럼 같은 객체.
+// 사진 찍기(CALL-16)도 전용 DataChannel('photo') — 원본 사진(수백 KB~수 MB)이 다른 채널을 막지 않게. photoLink도 같은 객체.
 // 포인터는 연결 후 DataChannel로, 아직 열리지 않았으면 시그널링 broadcast로 보낸다.
 
 export type Role = "engineer" | "customer";
@@ -138,6 +139,8 @@ export class CallSession {
   private dc: RTCDataChannel | null = null;
   private readonly anchorChannel: ChannelDataLink = fromRTCDataChannel(null);
   private readonly guideChannel: ChannelDataLink = fromRTCDataChannel(null);
+  // 사진 찍기(CALL-16): 고객 원본 사진 조각이 포인터·방향 지시를 막지 않게 전용 채널. 큰 사진이라 큐를 넉넉히
+  private readonly photoChannel: ChannelDataLink = fromRTCDataChannel(null, { maxQueueBytes: 12 * 1024 * 1024 });
   private incomingFreeze: { id: string; parts: string[]; got: number } | null =
     null;
   private negotiating = false;
@@ -338,6 +341,7 @@ export class CallSession {
       this.attachDataChannel(pc.createDataChannel("draw"));
       this.anchorChannel.attach(pc.createDataChannel("anchor"));
       this.guideChannel.attach(pc.createDataChannel("guide"));
+      this.photoChannel.attach(pc.createDataChannel("photo"));
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -376,6 +380,7 @@ export class CallSession {
       pc.ondatachannel = (e) => {
         if (e.channel.label === "anchor") this.anchorChannel.attach(e.channel);
         else if (e.channel.label === "guide") this.guideChannel.attach(e.channel);
+        else if (e.channel.label === "photo") this.photoChannel.attach(e.channel);
         else this.attachDataChannel(e.channel);
       };
 
@@ -477,6 +482,11 @@ export class CallSession {
   // 방향 지시(CALL-15)용 전송로 (src/lib/webrtc/guide.ts 메시지). 세션이 살아 있는 동안 같은 객체
   get guideLink(): DataLink {
     return this.guideChannel;
+  }
+
+  // 사진 찍기(CALL-16)용 전송로 (src/lib/webrtc/photo.ts 메시지). 세션이 살아 있는 동안 같은 객체
+  get photoLink(): DataLink {
+    return this.photoChannel;
   }
 
   private receiveFreezeChunk(msg: unknown) {
@@ -626,6 +636,7 @@ export class CallSession {
     this.dc = null;
     this.anchorChannel.attach(null);
     this.guideChannel.attach(null);
+    this.photoChannel.attach(null);
     this.incomingFreeze = null;
     // 이전 기기의 후보만 버린다 — 새 기기 후보가 먼저 와 있을 수 있다
     this.pendingIce = this.pendingIce.filter((q) => q.from !== old);
@@ -648,6 +659,7 @@ export class CallSession {
     this.pcPeer = null;
     this.anchorChannel.attach(null);
     this.guideChannel.attach(null);
+    this.photoChannel.attach(null);
     this.opts.onState("ended");
     if (this.opts.role === "customer") this.destroy();
   }
@@ -665,6 +677,7 @@ export class CallSession {
     this.closed = true;
     this.anchorChannel.dispose();
     this.guideChannel.dispose();
+    this.photoChannel.dispose();
     this.pc?.close();
     this.pc = null;
     this.pcPeer = null;

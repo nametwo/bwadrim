@@ -14,6 +14,7 @@ import {
 } from "@/components/anchor/customer-anchor";
 import { GuideOverlay, useGuideReceiver } from "@/components/guide-overlay";
 import { isGuideMsg } from "@/lib/webrtc/guide";
+import { capturePhoto, servePhotos } from "@/lib/webrtc/photo";
 import {
   setTorch,
   switchCamera,
@@ -107,6 +108,8 @@ export function CameraStart({
   const [anchorBanner, setAnchorBanner] = useState<CustomerAnchorBanner>(null);
   // 기사님이 방향 링을 누르고 있는 동안의 방향 지시 (CALL-15, 전용 채널 'guide')
   const [guideLink, setGuideLink] = useState<DataLink | null>(null);
+  // 사진 요청 받기 해제 (CALL-16)
+  const stopPhotosRef = useRef<(() => void) | null>(null);
   const { view: guideView, receive: receiveGuide, reset: resetGuide } = useGuideReceiver();
 
   function releaseWakeLock() {
@@ -244,6 +247,13 @@ export function CameraStart({
     sessionRef.current = session;
     setAnchorLink(session.anchorLink);
     setGuideLink(session.guideLink);
+    // 기사님이 사진을 찍으면 이 폰 카메라로 원본을 찍어 보낸다 (CALL-16). 몰래 찍히지 않게 화면에 알린다
+    stopPhotosRef.current?.();
+    stopPhotosRef.current = servePhotos(
+      session.photoLink,
+      () => capturePhoto(videoRef.current, streamRef.current?.getVideoTracks()[0] ?? null),
+      () => showNotice("기사님이 사진을 찍었어요"),
+    );
     session.join();
     setPhase("call");
   }
@@ -256,6 +266,8 @@ export function CameraStart({
 
   // 끊긴 뒤·다른 곳에 넘어간 뒤·잘못 끝낸 뒤 다시 연결. 새로고침 없이 이 탭 안에서 카메라부터 다시 연다 (JOIN-08·09·11)
   function restart() {
+    stopPhotosRef.current?.();
+    stopPhotosRef.current = null;
     sessionRef.current?.destroy();
     sessionRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -384,6 +396,7 @@ export function CameraStart({
   // 언마운트 정리
   useEffect(() => {
     return () => {
+      stopPhotosRef.current?.();
       sessionRef.current?.destroy();
       streamRef.current?.getTracks().forEach((t) => t.stop());
       releaseWakeLockRef.current?.();

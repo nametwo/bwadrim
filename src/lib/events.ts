@@ -12,6 +12,7 @@ export type EventName =
   | "freeze_used"
   | "anchor_used"
   | "guide_used"
+  | "photo_taken"
   | "ended"
   | "resolved_remotely";
 

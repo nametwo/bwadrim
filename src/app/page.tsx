@@ -43,8 +43,8 @@ export default function Home() {
         <Feature icon={<HandTapIcon className="size-5" />} title="보면서 가리켜 드려요">
           누를 곳을 화면에 동그라미로 표시해 드려요.
         </Feature>
-        <Feature icon={<ShieldIcon className="size-5" />} title="영상은 저장하지 않아요">
-          통화가 끝나면 화면도 함께 사라져요.
+        <Feature icon={<ShieldIcon className="size-5" />} title="통화 영상은 저장하지 않아요">
+          기사님이 필요한 사진만 찍어 두고, 찍을 때마다 화면에 알려 드려요.
         </Feature>
       </ul>
 

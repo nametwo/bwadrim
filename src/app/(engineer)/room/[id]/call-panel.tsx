@@ -14,6 +14,8 @@ import {
 } from "@/lib/webrtc/draw";
 import { keepScreenOn } from "@/lib/wake-lock";
 import { takeMicAhead } from "@/lib/webrtc/mic-ahead";
+import { PhotoRequester } from "@/lib/webrtc/photo";
+import type { TakenPhoto } from "@/lib/photo-save";
 import type { CameraState } from "@/lib/webrtc/camera";
 import type { GuideCmd, GuideMsg } from "@/lib/webrtc/guide";
 import { PointerMarker, usePointerMarker } from "@/components/pointer-marker";
@@ -33,6 +35,7 @@ import { Sheet } from "@/components/ui/sheet";
 import { NoticeScreen } from "@/components/ui/notice-screen";
 import {
   AlertIcon,
+  CameraIcon,
   EraserIcon,
   FlashlightIcon,
   FlipCameraIcon,
@@ -145,7 +148,7 @@ export function CallPanel({
   const lastCallRef = useRef<CallState>("waiting");
   const confirmShownAtRef = useRef(0);
   const releaseWakeLockRef = useRef<(() => void) | null>(null);
-  const toolsLoggedRef = useRef(new Set<"pointer_used" | "freeze_used" | "anchor_used" | "guide_used">());
+  const toolsLoggedRef = useRef(new Set<"pointer_used" | "freeze_used" | "anchor_used" | "guide_used" | "photo_taken">());
   // 통화 요약용 횟수 (가리키기·핀, 방향 지시 누름, 그린 선)
   const usageRef = useRef({ pointer: 0, guide: 0, draw: 0 });
   const lastGuideRef = useRef<GuideCmd | null>(null);
@@ -174,6 +177,14 @@ export function CallPanel({
   const [press, setPress] = useState<{ x: number; y: number } | null>(null);
   // 방향 지시 (CALL-15): 연결마다 같은 전송로(guideLink, 전용 채널 'guide')
   const [guideLink, setGuideLink] = useState<CallSession["guideLink"] | null>(null);
+  // 사진 찍기 (CALL-16): 고객 폰 원본 사진을 받아 이 기기 메모리에만 모아 두고, 끝낼 때 저장할지 묻는다
+  const photoReqRef = useRef<PhotoRequester | null>(null);
+  const [photos, setPhotos] = useState<TakenPhoto[]>([]);
+  const photosRef = useRef<TakenPhoto[]>([]);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoNote, setPhotoNote] = useState<"taken" | "failed" | null>(null);
+  const [photoFlash, setPhotoFlash] = useState(0);
+  const photoNoteTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     unmountedRef.current = false;
@@ -181,7 +192,10 @@ export function CallPanel({
       unmountedRef.current = true;
       clearTimeout(camTimerRef.current);
       clearTimeout(peerChangedTimerRef.current);
+      clearTimeout(photoNoteTimerRef.current);
       if (pressRef.current) clearTimeout(pressRef.current.timer);
+      photoReqRef.current?.dispose();
+      photosRef.current.forEach((p) => URL.revokeObjectURL(p.url));
       sessionRef.current?.destroy();
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
       releaseWakeLockRef.current?.();
@@ -351,6 +365,8 @@ export function CallPanel({
     sessionRef.current = session;
     setAnchorLink(session.anchorLink);
     setGuideLink(session.guideLink);
+    photoReqRef.current?.dispose();
+    photoReqRef.current = new PhotoRequester(session.photoLink);
     session.join();
     setState((prev) => (prev.phase === "idle" ? { phase: "call", call: "waiting", peerPresent: false } : prev));
     setStarting(false);
@@ -358,6 +374,8 @@ export function CallPanel({
   }
 
   function stopSession() {
+    photoReqRef.current?.dispose();
+    photoReqRef.current = null;
     sessionRef.current?.destroy();
     sessionRef.current = null;
     setAnchorLink(null);
@@ -462,7 +480,34 @@ export function CallPanel({
     }
   }
 
-  function logToolOnce(name: "pointer_used" | "freeze_used" | "anchor_used" | "guide_used") {
+  // 고객 폰 카메라로 원본 사진 한 장 (CALL-16). 고객 화면에는 '기사님이 사진을 찍었어요'가 뜬다
+  async function takePhoto() {
+    const req = photoReqRef.current;
+    if (!req || photoBusy || lastCallRef.current !== "connected") return;
+    setPhotoBusy(true);
+    setPhotoFlash((k) => k + 1);
+    let note: "taken" | "failed" = "failed";
+    try {
+      const blob = await req.request();
+      if (unmountedRef.current) return;
+      const photo: TakenPhoto = { id: crypto.randomUUID(), blob, url: URL.createObjectURL(blob), at: Date.now() };
+      photosRef.current = [...photosRef.current, photo];
+      setPhotos(photosRef.current);
+      note = "taken";
+      logToolOnce("photo_taken");
+    } catch {
+      // 연결 끊김·고객 폰에서 못 찍음·시간 초과 — 다시 누르면 된다
+    } finally {
+      if (!unmountedRef.current) {
+        setPhotoBusy(false);
+        setPhotoNote(note);
+        clearTimeout(photoNoteTimerRef.current);
+        photoNoteTimerRef.current = setTimeout(() => setPhotoNote(null), note === "taken" ? 2000 : 3500);
+      }
+    }
+  }
+
+  function logToolOnce(name: "pointer_used" | "freeze_used" | "anchor_used" | "guide_used" | "photo_taken") {
     if (toolsLoggedRef.current.has(name)) return;
     toolsLoggedRef.current.add(name);
     logToolUsed(roomId, name).catch(() => {});
@@ -702,6 +747,7 @@ export function CallPanel({
         saving={ending}
         saveError={saveError}
         onSubmit={finish}
+        photos={photos}
       />
     );
   }
@@ -932,12 +978,53 @@ export function CallPanel({
                   마이크 꺼짐(보기만) · 고객님은 기사님 목소리를 못 들어요
                 </Banner>
               )}
+              {photoNote === "taken" && (
+                <Banner tone="success" role="status" icon={<CameraIcon className="size-[22px]" />}>
+                  사진 {photos.length}장 찍었어요 · 끝낼 때 저장할 수 있어요
+                </Banner>
+              )}
+              {photoNote === "failed" && (
+                <Banner tone="error" role="alert">
+                  사진을 받지 못했어요. 다시 눌러 주세요.
+                </Banner>
+              )}
               {connected && peerMic === false && (
                 <Banner tone="info" icon={<MicOffIcon className="size-[22px]" />}>
                   고객 마이크 없음 · 전화로 말씀하세요
                 </Banner>
               )}
             </div>
+            {/* 찍는 순간 영상이 잠깐 밝아진다 */}
+            {photoFlash > 0 && (
+              <div
+                key={photoFlash}
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 z-10 animate-[fade-in_0.35s_ease-out_reverse_both] bg-gray-0/70"
+              />
+            )}
+            {/* 사진 찍기 (CALL-16): 영상 오른쪽 아래, 카메라 셔터처럼. 찍은 장수 표시 */}
+            {connected && !frozen && (
+              <button
+                type="button"
+                data-testid="eng-photo"
+                aria-label={photos.length ? `사진 찍기 (지금까지 ${photos.length}장)` : "사진 찍기"}
+                onClick={takePhoto}
+                onPointerDown={(e) => e.stopPropagation()}
+                onPointerUp={(e) => e.stopPropagation()}
+                disabled={photoBusy || unstable}
+                className="absolute right-3 bottom-3 z-20 grid size-14 place-items-center rounded-full bg-gray-0 text-gray-900 shadow-float active:scale-95 disabled:opacity-60"
+              >
+                {photoBusy ? <Spinner className="size-6" /> : <CameraIcon className="size-7" />}
+                {photos.length > 0 && (
+                  <span
+                    data-testid="eng-photo-count"
+                    className="absolute -top-1 -right-1 grid h-6 min-w-6 place-items-center rounded-full bg-call-bg px-1.5 text-label-s text-call-text ring-2 ring-gray-0"
+                  >
+                    {photos.length}
+                  </span>
+                )}
+              </button>
+            )}
             {/* 아래: 처음 쓸 때만 제스처 안내, 그리고 지금 고객 화면에 뜬 방향 지시 (PC는 오른쪽 패널에) */}
             {connected && (
               <div className="pointer-events-none absolute inset-x-0 bottom-3 flex flex-col items-center gap-2 px-3">

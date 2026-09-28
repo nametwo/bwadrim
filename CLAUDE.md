@@ -34,10 +34,11 @@ src/app/
   api/events                                     # 고객(비로그인) 쪽 지표 이벤트 수집
 src/lib/
   supabase/{client,server,admin}.ts              # admin = service role, 서버 전용
-  webrtc/                                        # peer 연결, ICE 설정, 시그널링, 포인터 좌표(pointer.ts), 화면 멈춤·그리기(draw.ts), 카메라 전환·손전등(camera.ts), DataChannel 래퍼(data-link.ts), 방향 지시 메시지(guide.ts), 대시보드 탭에서 마이크 미리 받기(mic-ahead.ts, CALL-01)
+  webrtc/                                        # peer 연결, ICE 설정, 시그널링, 포인터 좌표(pointer.ts), 화면 멈춤·그리기(draw.ts), 카메라 전환·손전등(camera.ts), DataChannel 래퍼(data-link.ts), 방향 지시 메시지(guide.ts), 사진 찍기·주고받기(photo.ts, CALL-16), 대시보드 탭에서 마이크 미리 받기(mic-ahead.ts, CALL-01)
   tracking/                                      # 평면 앵커 추적(AR 핀, CALL-14). 설계는 tracking/README.md, 벤치는 scripts/tracking-bench
   join-token.ts                                  # 고객 링크 토큰 형식 검사
   engineer-name.ts                               # 엔지니어 표시 이름 (user_metadata.name, OPS-03). 고객 시작 화면 기사님 카드
+  photo-save.ts                                  # 통화 중 찍은 사진 저장 (폰 공유 창·다운로드, CALL-16)
   format.ts                                      # 화면 시각·시간 글자 ('오늘 오후 5:03', 한국 시간 고정)
   wake-lock.ts                                   # 통화 중 화면 꺼짐 방지
   in-app-browser.ts                              # 카톡 등 인앱 브라우저 감지·외부 브라우저로 열기
@@ -60,6 +61,7 @@ Supabase Realtime **비공개** broadcast 채널, 역할별 일방통행 두 개
 AR 핀(CALL-14)은 전용 DataChannel `anchor`(고객이 offer에 포함). 기준 사진 조각이 'draw'의 포인터·그리기를 막지 않게 따로 연다. 엔지니어 영상 제스처: 짧게 탭 = 레이저 포인터(CALL-08), 0.5초 길게 누름 = AR 핀.
 포인터·드로잉은 연결 후 DataChannel로 옮길 것 (지연 최소화). 좌표는 0~1 정규화.
 방향 지시(CALL-15, `src/lib/webrtc/guide.ts`)는 전용 DataChannel `guide`(고객이 offer에 포함, `CallSession.guideLink`). 'draw'에 섞으면 정지 사진 조각 뒤에 막혀 1.5초가 지나 화살표가 저절로 사라진다(고객에겐 '멈춤'으로 보임). 엔지니어가 방향 링(`src/components/guide-dpad.tsx`, 상하좌우 네 조각 + 가운데 구멍 = 멈춤)이나 그 아래 '− 멀리 | 가까이 +' 알약을 누르는 동안 `hold`를 0.4초마다 재전송하고 떼면 `release`. 누른 자리 판정은 `src/components/guide-pad-geometry.ts`(단위 테스트 있음). 고객 쪽(`guide-overlay.tsx`)은 1.5초간 `hold`가 없으면 스스로 지운다. 고객 화면에 방향 지시가 떠 있는 동안은 AR 핀 층(`hidden`)과 상태 문구를 숨긴다. 실험실 `/lab/guide`는 통화 없이 흉내 낸다.
+사진 찍기(CALL-16, `src/lib/webrtc/photo.ts`)는 전용 DataChannel `photo`(고객이 offer에 포함, `CallSession.photoLink`). 엔지니어가 `photo-req`를 보내면 고객 폰이 자기 카메라로 찍어(ImageCapture → 잠깐 해상도 올리기 → 영상 프레임) JPEG base64 조각으로 돌려준다. 고객 화면에 '기사님이 사진을 찍었어요'. 사진은 서버에 올리지 않고 엔지니어 메모리에만 있다가 결과 기록 화면에서 저장할지 묻는다.
 
 ## 디자인 토큰
 
@@ -75,7 +77,7 @@ AR 핀(CALL-14)은 전용 DataChannel `anchor`(고객이 offer에 포함). 기�
 
 ## 이벤트 이름 (events 테이블)
 
-`room_created`, `link_opened`, `camera_granted`, `camera_denied`, `connected`, `relay_used`, `pointer_used`, `freeze_used`, `anchor_used`, `guide_used`, `ended`, `resolved_remotely`
+`room_created`, `link_opened`, `camera_granted`, `camera_denied`, `connected`, `relay_used`, `pointer_used`, `freeze_used`, `anchor_used`, `guide_used`, `photo_taken`, `ended`, `resolved_remotely`
 
 ## 환경 변수
 

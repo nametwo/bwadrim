@@ -43,6 +43,12 @@
       "code": "E2EDDD",
       "status": "waiting",
       "join_token": "e2e0ddddddddddddddddddddddddddd4"
+    },
+    {
+      "id": "e2e00000-0000-4000-8000-00000000a005",
+      "code": "E2EEEE",
+      "status": "waiting",
+      "join_token": "e2e0eeeeeeeeeeeeeeeeeeeeeeeeeee5"
     }
   ]
 }

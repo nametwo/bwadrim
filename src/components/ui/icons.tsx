@@ -416,6 +416,15 @@ export function CarIcon(p: IconProps) {
   );
 }
 
+/** Icon/download — 사진 저장 */
+export function DownloadIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 4V15M7 10L12 15L17 10M5 20H19" />
+    </Svg>
+  );
+}
+
 /** Icon/check-circle — 끝났어요 */
 export function CheckCircleIcon(p: IconProps) {
   return (
