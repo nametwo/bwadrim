@@ -34,7 +34,7 @@ function platformOf(ua: string): Platform {
 const STEPS: Record<Platform, React.ReactNode[]> = {
   ios: [
     <>
-      주소창 왼쪽의 <b>가가</b>(또는 메뉴) 버튼을 누르세요
+      주소창 왼쪽의 <b>가가</b> 버튼이나 메뉴 버튼을 누르세요
     </>,
     <>
       <b>웹 사이트 설정</b>을 누르세요
@@ -48,7 +48,7 @@ const STEPS: Record<Platform, React.ReactNode[]> = {
   ],
   android: [
     <>
-      주소창 왼쪽의 <b>자물쇠</b>(또는 조절) 모양을 누르세요
+      주소창 왼쪽의 <b>자물쇠</b>나 조절 모양을 누르세요
     </>,
     <>
       <b>권한</b>을 누르세요
@@ -103,9 +103,9 @@ export function CameraHelp({ failure, onRetry }: { failure: CameraFailure; onRet
         title="다른 앱이 카메라를 쓰고 있어요"
         actions={retry}
       >
-        카메라·영상통화 앱을 닫은 뒤
+        카메라나 영상통화 앱을 닫고
         <br />
-        아래 버튼을 다시 눌러 주세요.
+        다시 눌러 주세요.
       </NoticeScreen>
     );
   }

@@ -699,7 +699,7 @@ export function CallPanel({
         open={sheet === "end"}
         onClose={() => setSheet(null)}
         title={inCall ? "통화를 끝낼까요?" : "상담을 끝낼까요?"}
-        description={inCall ? "고객 화면도 함께 끝나요. 끝낸 뒤 결과를 기록해요." : "끝낸 뒤 결과를 기록해요."}
+        description={inCall ? "고객님 화면도 같이 끊겨요. 끝나면 결과를 남겨 주세요." : "끝나면 결과를 남겨 주세요."}
         testId="eng-end-sheet"
       >
         <Button variant="danger" size="xl" block onClick={endCall}>
@@ -713,11 +713,11 @@ export function CallPanel({
         open={sheet === "close"}
         onClose={() => setSheet(null)}
         title="상담을 닫을까요?"
-        description="고객님께 보낸 링크도 더 이상 열리지 않아요."
+        description="고객님께 보낸 링크도 더는 안 열려요."
         testId="eng-close-sheet"
       >
         <Button variant="danger" size="xl" block disabled={ending} onClick={closeSession}>
-          네, 닫기
+          닫기
         </Button>
         <Button variant="secondary" size="xl" block onClick={cancelEnd}>
           취소
@@ -728,14 +728,19 @@ export function CallPanel({
 
   // TURN 없이 STUN만으로 동작 중 — 모바일망(5G/LTE)끼리는 연결이 실패할 수 있다
   const turnBanner = turnError && (
-    <Banner tone="warning" icon={<AlertIcon className="size-[22px]" />} sub={`모바일망끼리는 연결이 안 될 수 있어요 (${turnError})`}>
-      중계 서버(TURN) 없이 연결 중
+    <Banner tone="warning" icon={<AlertIcon className="size-[22px]" />} sub={`모바일 데이터끼리는 연결이 안 될 수 있어요 (${turnError})`}>
+      중계 서버 없이 연결하고 있어요
     </Banner>
   );
 
   const peerNotice = peerChanged && (
-    <Banner tone="warning" role="alert" icon={<AlertIcon className="size-[22px]" />}>
-      고객 쪽 연결이 새로 바뀌었어요 (고객 새로고침 또는 다른 기기). 모르는 사람이면 종료하세요.
+    <Banner
+      tone="warning"
+      role="alert"
+      icon={<AlertIcon className="size-[22px]" />}
+      sub="고객님이 새로고침했거나 다른 기기로 들어왔어요. 모르는 사람이면 통화를 끝내세요."
+    >
+      고객 쪽 기기가 바뀌었어요
     </Banner>
   );
 
@@ -791,11 +796,7 @@ export function CallPanel({
             {everConnected ? (
               "다시 연결할까요?"
             ) : (
-              <>
-                마이크를 켜고
-                <br />
-                시작할게요
-              </>
+              "마이크부터 켜 주세요"
             )}
           </h1>
           <p className="text-body-m text-text-secondary">
@@ -948,13 +949,13 @@ export function CallPanel({
             {/* 알림은 영상 위쪽에 겹친다 (AR 상태 칩 아래) */}
             <div className="pointer-events-none absolute inset-x-3 top-14 z-20 flex flex-col gap-2">
               {unstable && (
-                <Banner tone="warning" role="status">
-                  연결이 불안정해요 · 다시 연결하는 중
+                <Banner tone="warning" role="status" sub="다시 연결하고 있어요">
+                  연결이 불안정해요
                 </Banner>
               )}
               {frozen && (
-                <Banner tone="info" icon={<FreezeIcon className="size-[22px]" />}>
-                  화면을 멈췄어요 · 손가락으로 그리면 고객님 화면에도 보여요
+                <Banner tone="info" icon={<FreezeIcon className="size-[22px]" />} sub="손가락으로 그리면 고객님 화면에도 그려져요">
+                  화면을 멈췄어요
                 </Banner>
               )}
               {turnOpen && turnBanner}
@@ -975,13 +976,13 @@ export function CallPanel({
                 </Banner>
               )}
               {!micOn && (
-                <Banner tone="warning" icon={<MicOffIcon className="size-[22px]" />}>
-                  마이크 꺼짐(보기만) · 고객님은 기사님 목소리를 못 들어요
+                <Banner tone="warning" icon={<MicOffIcon className="size-[22px]" />} sub="고객님은 기사님 목소리를 못 들어요">
+                  마이크가 꺼져 있어요
                 </Banner>
               )}
               {photoNote === "taken" && (
-                <Banner tone="success" role="status" icon={<CameraIcon className="size-[22px]" />}>
-                  사진 {photos.length}장 찍었어요 · 끝낼 때 저장할 수 있어요
+                <Banner tone="success" role="status" icon={<CameraIcon className="size-[22px]" />} sub="통화를 끝낼 때 저장할 수 있어요">
+                  사진 {photos.length}장 찍었어요
                 </Banner>
               )}
               {photoNote === "failed" && (
@@ -990,8 +991,8 @@ export function CallPanel({
                 </Banner>
               )}
               {connected && peerMic === false && (
-                <Banner tone="info" icon={<MicOffIcon className="size-[22px]" />}>
-                  고객 마이크 없음 · 전화로 말씀하세요
+                <Banner tone="info" icon={<MicOffIcon className="size-[22px]" />} sub="말씀은 전화로 나눠 주세요">
+                  고객님 마이크가 꺼져 있어요
                 </Banner>
               )}
             </div>
@@ -1008,7 +1009,7 @@ export function CallPanel({
               <button
                 type="button"
                 data-testid="eng-photo"
-                aria-label={photos.length ? `사진 찍기 (지금까지 ${photos.length}장)` : "사진 찍기"}
+                aria-label={photos.length ? `사진 찍기, 지금까지 ${photos.length}장` : "사진 찍기"}
                 onClick={takePhoto}
                 onPointerDown={(e) => e.stopPropagation()}
                 onPointerUp={(e) => e.stopPropagation()}
@@ -1031,7 +1032,7 @@ export function CallPanel({
               <div className="pointer-events-none absolute inset-x-0 bottom-3 flex flex-col items-center gap-2 px-3">
                 {!frozen && !gestureLearned && (
                   <p className="w-fit max-w-full rounded-full bg-black-80 px-4 py-2 text-center text-label-s text-call-text">
-                    <b className="text-gray-0">톡</b> 빨간 동그라미 3초 · <b className="text-gray-0">꾹</b> 물체에 붙는 핀
+                    <b className="text-gray-0">톡</b> 누르면 빨간 동그라미, <b className="text-gray-0">꾹</b> 누르면 핀
                   </p>
                 )}
                 <span className="lg:hidden">
@@ -1045,7 +1046,7 @@ export function CallPanel({
           <aside className="bg-call-surface px-3 pt-3 pb-[max(12px,env(safe-area-inset-bottom))] lg:flex lg:w-[400px] lg:flex-col lg:gap-5 lg:overflow-y-auto lg:border-l lg:border-call-border lg:p-6">
             <div className="hidden flex-col gap-1 lg:flex">
               <h2 className="text-title-s">방향 지시</h2>
-              <p className="text-body-s text-call-text-secondary">누르고 있는 동안만 고객 화면에 표시돼요. 떼면 사라져요.</p>
+              <p className="text-body-s text-call-text-secondary">누르는 동안만 고객 화면에 떠요.</p>
               <span className="mt-2">
                 <GuidePill cmd={guideCmd} frozen={!!frozen} hint={padHint} />
               </span>
@@ -1087,7 +1088,7 @@ export function CallPanel({
       >
         이 기기는 통화에서 빠졌어요.
         <br />
-        여기서 계속하려면 아래를 누르세요.
+        여기서 계속하려면 아래 버튼을 누르세요.
       </NoticeScreen>
     );
   }

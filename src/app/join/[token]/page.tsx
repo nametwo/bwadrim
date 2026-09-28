@@ -14,11 +14,11 @@ import { OpenInBrowser } from "./open-in-browser";
 // 문자·카톡 미리보기에 뜨는 제목과 설명 — 모르는 링크로 보이지 않게 무엇인지 밝힌다. 검색에는 안 나오게
 export const metadata: Metadata = {
   title: "봐드림 원격 A/S",
-  description: "링크를 누르고 카메라를 켜면 기사님이 화면을 보며 도와드려요. 앱 설치 없이 바로 돼요.",
+  description: "카메라로 비춰 주시면 기사님이 보면서 알려 드려요. 앱은 안 깔아도 돼요.",
   robots: { index: false, follow: false },
   openGraph: {
     title: "봐드림 원격 A/S",
-    description: "링크를 누르고 카메라를 켜면 기사님이 화면을 보며 도와드려요. 앱 설치 없이 바로 돼요.",
+    description: "카메라로 비춰 주시면 기사님이 보면서 알려 드려요. 앱은 안 깔아도 돼요.",
   },
 };
 
@@ -50,7 +50,7 @@ export default async function JoinPage({ params }: PageProps<"/join/[token]">) {
       <NoticeScreen
         tone="warning"
         icon={<WifiOffIcon className="size-10" />}
-        title="잠시 연결이 원활하지 않아요"
+        title="잠깐 연결이 안 돼요"
         actions={
           // 같은 주소를 다시 연다 (새로고침)
           <a href={`/join/${token}`} className={buttonClass({ size: "xl", block: true })}>
@@ -59,17 +59,17 @@ export default async function JoinPage({ params }: PageProps<"/join/[token]">) {
           </a>
         }
       >
-        잠시 후 아래 버튼을 눌러 주세요.
+        조금 있다가 아래 버튼을 눌러 주세요.
       </NoticeScreen>
     );
   }
 
   if (!room) {
     return (
-      <NoticeScreen tone="neutral" icon={<LinkIcon className="size-10" />} title="주소를 확인해 주세요">
-        문자로 받으신 링크를 다시 한 번 눌러 주세요.
+      <NoticeScreen tone="neutral" icon={<LinkIcon className="size-10" />} title="열 수 없는 링크예요">
+        문자 속 링크를 다시 한 번 눌러 주세요.
         <br />
-        그래도 안 되면 기사님께 새 링크를 보내 달라고 말씀해 주세요.
+        그래도 안 열리면 기사님께 새 링크를 받아 주세요.
       </NoticeScreen>
     );
   }
@@ -78,18 +78,18 @@ export default async function JoinPage({ params }: PageProps<"/join/[token]">) {
   if (room.status === "ended") {
     return (
       <NoticeScreen tone="neutral" icon={<ClockIcon className="size-10" />} title="상담이 이미 끝났어요">
-        다시 도움이 필요하면
+        도움이 더 필요하시면
         <br />
-        기사님께 새 링크를 요청해 주세요.
+        기사님께 새 링크를 받아 주세요.
       </NoticeScreen>
     );
   }
   if (new Date(room.expires_at) < new Date()) {
     return (
       <NoticeScreen tone="neutral" icon={<ClockIcon className="size-10" />} title="링크가 만료됐어요">
-        링크는 24시간 동안만 쓸 수 있어요.
+        링크는 24시간만 쓸 수 있어요.
         <br />
-        기사님께 새 링크를 요청해 주세요.
+        기사님께 새 링크를 받아 주세요.
       </NoticeScreen>
     );
   }

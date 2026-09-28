@@ -29,7 +29,7 @@ export async function fetchIceServers(joinToken: string): Promise<IceConfig> {
     if (res.status === 404) {
       return {
         iceServers: STUN_ONLY,
-        turnError: "세션이 종료됐거나 만료됐어요",
+        turnError: "상담이 끝났거나 만료됐어요",
         roomGone: true,
         clockOffsetMs,
       };

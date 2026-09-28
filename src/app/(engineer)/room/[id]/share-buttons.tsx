@@ -10,7 +10,7 @@ export type SentVia = "sms" | "share" | "copy";
 
 // 고객에게 보내는 문자 (ROOM-06). 무엇인지·무엇을 누를지·설치가 없다는 것을 먼저 말한다 — 모르는 링크로 보이지 않게
 export function inviteMessage(joinUrl: string) {
-  return `[봐드림] 원격 A/S 링크예요.\n링크를 누르고 '카메라 켜고 시작하기'를 눌러 고장 난 곳을 비춰 주세요. (앱 설치 없음)\n${joinUrl}`;
+  return `[봐드림] 원격 A/S 링크입니다.\n링크를 열고 '카메라 켜고 시작하기'를 누른 다음, 고장 난 곳을 비춰 주세요. 앱은 따로 안 깔아도 됩니다.\n${joinUrl}`;
 }
 
 // 엔지니어 본인 폰의 문자/공유 시트를 연다 (피그마 E03·E04).

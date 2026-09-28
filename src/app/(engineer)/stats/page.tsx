@@ -12,7 +12,7 @@ import {
 } from "@/lib/metrics";
 
 export const metadata: Metadata = {
-  title: "통계 — 봐드림",
+  title: "통계 | 봐드림",
 };
 
 const PERIODS = [
@@ -107,11 +107,11 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
 
   // 숫자를 읽을 때 주의할 점 — 카드마다 붙이면 글이 많아져 맨 아래에 모아 접어 둔다
   const notes: [string, string][] = [
-    ["원격 해결률", "연결 없이 닫았거나 답하지 않은 상담은 빼고 셉니다."],
-    ["카메라 허용", "링크를 연 상담 중 고객이 카메라를 켠 비율입니다."],
-    ["연결 실패율", "연결 준비를 안 눌렀거나 고객이 기다리다 나간 경우도 포함돼 실제보다 높게 나옵니다."],
-    ["TURN 중계", "비용 계산 근거. 5G끼리 등 직접 연결이 안 될 때 중계 서버를 거칩니다."],
-    ["상담당 평균", "통화 시간이 아니라 상담을 만든 때부터 잽니다."],
+    ["원격 해결률", "연결 없이 닫았거나 답을 안 남긴 상담은 빼고 셌어요."],
+    ["카메라 허용", "링크를 연 상담 가운데 고객님이 카메라를 켠 비율이에요."],
+    ["연결 실패율", "연결 준비를 안 눌렀거나 고객님이 기다리다 나간 경우까지 들어가서 실제보다 높게 나와요."],
+    ["TURN 중계", "비용을 따질 때 보는 숫자예요. 5G끼리처럼 바로 연결이 안 되면 중계 서버를 거쳐요."],
+    ["상담당 평균", "통화 시간이 아니라 상담을 만든 때부터 쟀어요."],
   ];
 
   return (
@@ -195,7 +195,7 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
 
             <details className="group rounded-3xl bg-bg-page px-5">
               <summary className="flex min-h-button-l cursor-pointer list-none items-center justify-between text-label-m text-text-secondary">
-                숫자를 읽을 때 주의할 점
+                이렇게 셌어요
                 <ChevronLeftIcon className="size-5 -rotate-90 text-icon-secondary transition-transform group-open:rotate-90" />
               </summary>
               <dl className="flex flex-col gap-3 pb-5">

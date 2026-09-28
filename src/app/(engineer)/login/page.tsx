@@ -4,7 +4,7 @@ import { Brand } from "@/components/ui/brand";
 import { LoginForm } from "./login-form";
 
 export const metadata: Metadata = {
-  title: "로그인 — 봐드림",
+  title: "로그인 | 봐드림",
 };
 
 export default async function LoginPage({

@@ -117,7 +117,7 @@ export function EngineerAnchorLayer({
           )}
           {retap && (
             <span className="rounded-xl bg-black-80 px-3 py-2 text-sm text-call-text">
-              표시를 놓쳤어요 — 다시 길게 눌러 주세요
+              표시를 놓쳤어요. 다시 길게 눌러 주세요
             </span>
           )}
         </div>

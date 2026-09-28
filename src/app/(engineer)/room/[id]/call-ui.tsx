@@ -75,10 +75,10 @@ export function AppBarAction({
 /** PC 오른쪽 패널의 키보드 안내 — 피그마 P01 */
 export function ShortcutsBox() {
   const rows: [string, string][] = [
-    ["← → ↑ ↓", "방향 (누르고 있는 동안)"],
+    ["← → ↑ ↓", "누르는 동안 방향 지시"],
     ["=  /  -", "가까이 / 멀리"],
     ["F", "멈추고 그리기 / 라이브로"],
-    ["클릭", "빨간 동그라미 (3초)"],
+    ["클릭", "빨간 동그라미"],
     ["길게 클릭", "물체에 붙는 핀"],
   ];
   return (

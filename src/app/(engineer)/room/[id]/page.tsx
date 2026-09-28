@@ -12,7 +12,7 @@ import { createRoom } from "../../dashboard/actions";
 import { CallPanel } from "./call-panel";
 
 export const metadata: Metadata = {
-  title: "원격 A/S — 봐드림",
+  title: "원격 A/S | 봐드림",
 };
 
 export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
@@ -72,7 +72,7 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
           <div className={`mb-5 grid size-14 place-items-center rounded-full [&>svg]:size-7 ${result.tint}`}>{result.icon}</div>
           <h1 className="text-title-l">{result.title}</h1>
           <p className="text-body-m text-text-secondary">
-            {ended ? "고객님께 보낸 링크는 더 이상 열리지 않아요" : "만든 지 24시간이 지나 링크가 더 이상 열리지 않아요"}
+            {ended ? "고객님께 보낸 링크는 이제 안 열려요" : "만든 지 24시간이 지나서 링크가 닫혔어요"}
           </p>
         </section>
 

@@ -21,14 +21,14 @@ export default function Error({
     <NoticeScreen
       tone="warning"
       icon={<AlertIcon className="size-10" />}
-      title="잠시 문제가 생겼어요"
+      title="잠깐 문제가 생겼어요"
       actions={
         <Button size="xl" block onClick={() => retry()} icon={<RefreshIcon className="size-6" />}>
           다시 시도
         </Button>
       }
     >
-      잠시 후 다시 시도해 주세요.
+      조금 있다가 다시 눌러 주세요.
     </NoticeScreen>
   );
 }

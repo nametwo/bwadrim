@@ -75,7 +75,7 @@ describe("engineerChip", () => {
   it("고객 화살표 안내가 우선", () => {
     const a = anchor("a1", [pin("p1")]);
     const c = engineerChip(eng({ anchor: a, customerState: "lost", customerArrow: true }));
-    expect(c).toEqual({ text: "고객 화면 밖 — 화살표 안내 중", tone: "guide" });
+    expect(c).toEqual({ text: "고객 화면 밖이라 화살표로 안내 중", tone: "guide" });
     expect(engineerChip(eng({ anchor: a, customerState: "tracking", customerArrow: true }))?.tone).toBe("guide");
   });
 });
@@ -199,16 +199,16 @@ describe("엔지니어 안내: 기준 토스트 · 다시 탭", () => {
     expect(referenceToast({ trackable: null, referenceReason: null })).toBeNull();
     expect(referenceToast({ trackable: true, referenceReason: null })).toBeNull();
     expect(referenceToast({ trackable: false, referenceReason: "low_texture" })).toBe(
-      "무늬가 적어 고정이 어려워요 — 고객에게 사진 카드로 보여줘요",
+      "무늬가 적어서 붙이기 어려워요. 사진 카드로 보여 줄게요",
     );
     expect(referenceToast({ trackable: false, referenceReason: null })).toBe(
-      "무늬가 적어 고정이 어려워요 — 고객에게 사진 카드로 보여줘요",
+      "무늬가 적어서 붙이기 어려워요. 사진 카드로 보여 줄게요",
     );
     expect(referenceToast({ trackable: false, referenceReason: "pin_blank" })).toBe(
-      "표시한 곳 주변에 무늬가 적어요 — 고객에게 사진 카드로 보여줘요",
+      "표시한 곳 주변에 무늬가 적어서 사진 카드로 보여 줄게요",
     );
     expect(referenceToast({ trackable: true, referenceReason: "ambiguous" })).toBe(
-      "같은 무늬가 반복돼요 — 고객에게 사진 카드로 보여줘요",
+      "비슷한 무늬가 많아서 사진 카드로 보여 줄게요",
     );
   });
 

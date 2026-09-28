@@ -82,7 +82,7 @@ test("통화: 짧게 탭 = 빨간 동그라미, 길게 누름 = 고객 화면에
     await holdAt(ep, cx, cy, 800);
     await expect(ep.getByRole("button", { name: "핀 지우기" })).toBeVisible({ timeout: 5_000 });
     await expect(ep.getByText("고객 화면에 표시 중")).toBeVisible({ timeout: 20_000 });
-    await expect(cp.getByTestId("cust-status")).toHaveText("빨간 동그라미를 봐주세요", { timeout: 20_000 });
+    await expect(cp.getByTestId("cust-status")).toHaveText("빨간 동그라미를 봐 주세요", { timeout: 20_000 });
     await expect.poll(() => redPixels(ep, "eng-stage"), { timeout: 10_000 }).toBeGreaterThan(50);
     await expect.poll(() => redPixels(cp, null), { timeout: 10_000 }).toBeGreaterThan(50);
     await expect.poll(async () => (await mockEvents()).map((e) => e.name)).toContain("anchor_used");

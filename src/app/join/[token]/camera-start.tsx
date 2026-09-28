@@ -414,9 +414,9 @@ export function CameraStart({
       icon={<ClockIcon className="size-10" />}
       title="상담이 이미 끝났어요"
     >
-      다시 도움이 필요하면
+      도움이 더 필요하시면
       <br />
-      기사님께 새 링크를 요청해 주세요.
+      기사님께 새 링크를 받아 주세요.
     </NoticeScreen>
   );
 
@@ -442,13 +442,18 @@ export function CameraStart({
                 onClick={restart}
                 icon={<RefreshIcon className="size-5" />}
               >
-                잘못 눌렀어요 · 다시 연결
+                잘못 눌렀다면 다시 연결
               </Button>
             )
           }
         >
-          {talkSec !== null && talkSec >= 1 ? `${engineerLabel}과 ${formatDuration(talkSec)} 통화했어요.` : "이용해 주셔서 감사합니다."}
-          <br />이 창은 닫아도 돼요.
+          {talkSec !== null && talkSec >= 1 && (
+            <>
+              {engineerLabel}과 {formatDuration(talkSec)} 통화했어요.
+              <br />
+            </>
+          )}
+          이 창은 닫으셔도 돼요.
         </NoticeScreen>
       );
     }
@@ -460,15 +465,15 @@ export function CameraStart({
           testId="cust-replaced"
           tone="neutral"
           icon={<PhoneIcon className="size-10" />}
-          title="다른 곳에서 연결했어요"
+          title="다른 폰에서 연결됐어요"
           actions={
             <Button size="xl" block onClick={restart}>
               이 폰으로 연결
             </Button>
           }
         >
-          같은 링크를 다른 폰이나 창에서 열었어요.
-          <br />이 폰으로 계속하려면 아래를 눌러 주세요.
+          같은 링크가 다른 폰이나 창에서 열렸어요.
+          <br />이 폰으로 계속하시려면 아래 버튼을 눌러 주세요.
         </NoticeScreen>
       );
     }
@@ -491,7 +496,7 @@ export function CameraStart({
         >
           와이파이나 데이터가 켜져 있는지 보고
           <br />
-          아래 버튼을 눌러 주세요.
+          다시 연결해 주세요.
         </NoticeScreen>
       );
     }
@@ -502,9 +507,9 @@ export function CameraStart({
     const unstable = connected && quality === "unstable";
     const statusText =
       anchorBanner === "pin" && !frozen
-        ? "빨간 동그라미를 봐주세요"
+        ? "빨간 동그라미를 봐 주세요"
         : frozen
-        ? "화면을 멈추고 설명 중이에요"
+        ? "화면을 멈추고 설명하고 있어요"
         : connected
         ? "기사님이 보고 있어요"
         : callState === "connecting"
@@ -514,7 +519,7 @@ export function CameraStart({
     const waitHint = longWait
       ? "오래 걸리면 기사님께 전화로 “카메라 켰어요”라고 알려 주세요."
       : micOff
-        ? "마이크 없이 연결해요. 기사님과는 전화로 이야기해 주세요."
+        ? "마이크 없이 연결할게요. 말씀은 전화로 나눠 주세요."
         : "카메라는 이미 켜졌어요. 고장 난 곳을 미리 비춰 주세요.";
 
     return (
@@ -580,7 +585,7 @@ export function CameraStart({
           )}
           {/* 피그마 C09: 멈춘 동안은 폰을 내려놔도 된다 — 팔 떨림을 없앤다 */}
           {frozen && !unstable && (
-            <Banner tone="info" role="status" icon={<FreezeIcon className="size-[22px]" />} sub="폰은 편하게 두셔도 돼요">
+            <Banner tone="info" role="status" icon={<FreezeIcon className="size-[22px]" />} sub="폰을 내려놓으셔도 돼요">
               기사님이 화면을 멈췄어요
             </Banner>
           )}
@@ -594,7 +599,7 @@ export function CameraStart({
           )}
           {flipRequested && (
             <div className="flex flex-col items-center gap-3 rounded-3xl bg-bg-page px-5 py-5 text-center shadow-float">
-              <p className="text-title-m text-text-primary">기사님이 카메라를 바꿔 달라고 하세요</p>
+              <p className="text-title-m text-text-primary">기사님이 카메라를 바꿔 달라고 하셨어요</p>
               <Button
                 size="xl"
                 block

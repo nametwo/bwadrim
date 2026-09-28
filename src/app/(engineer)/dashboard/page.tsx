@@ -14,7 +14,7 @@ import { NewRoomButton } from "./new-room-button";
 import { MicAheadLink } from "./mic-ahead-link";
 
 export const metadata: Metadata = {
-  title: "상담 목록 — 봐드림",
+  title: "상담 목록 | 봐드림",
 };
 
 type Room = {
@@ -187,7 +187,7 @@ export default async function DashboardPage() {
                   <MessageIcon className="size-7" />
                 </span>
                 <p className="text-label-l">아직 상담이 없어요</p>
-                <p className="text-body-m text-text-secondary">아래 &lsquo;새 A/S 시작&rsquo;으로 시작해 보세요</p>
+                <p className="text-body-m text-text-secondary">아래 &lsquo;새 A/S 시작&rsquo;을 눌러 보세요</p>
               </div>
             ) : past.length === 0 ? (
               <p className="px-5 pt-2 pb-5 text-body-m text-text-secondary">끝난 상담이 아직 없어요.</p>

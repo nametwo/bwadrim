@@ -61,7 +61,7 @@ export function StartScreen({
         </Button>
         <p className="flex items-center justify-center gap-1 text-body-s text-text-secondary">
           <ShieldIcon className="size-4 flex-none" />
-          앱 설치 없음 · 통화 영상은 저장하지 않아요
+          앱은 안 깔아도 되고, 통화 영상은 남지 않아요
         </p>
       </BottomCta>
 

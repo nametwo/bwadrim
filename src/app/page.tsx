@@ -15,14 +15,14 @@ export default function Home() {
 
       <section className="flex flex-col gap-3 pt-8 pb-8">
         <h1 className="text-display-l text-text-primary">
-          설치 없이, 링크 하나로
+          고장 난 곳,
           <br />
-          봐드려요
+          기사님이 봐드려요
         </h1>
         <p className="text-body-l text-text-secondary">
-          폰 카메라로 비추면
+          문자 속 링크를 누르고
           <br />
-          기사님이 보고 알려 드려요
+          폰 카메라로 비추면 돼요
         </p>
       </section>
 
@@ -32,22 +32,22 @@ export default function Home() {
           <MessageIcon className="size-6" />
         </span>
         <div className="flex flex-col gap-1">
-          <h2 className="text-title-s text-text-primary">A/S를 받으시는 사장님</h2>
+          <h2 className="text-title-s text-text-primary">A/S 받으시는 사장님께</h2>
           <p className="text-body-l text-text-primary">
-            기사님이 보낸 <b>문자 속 링크</b>를 눌러 주세요. 여기서는 따로 하실 일이 없어요.
+            기사님이 보낸 <b>문자 속 링크</b>를 눌러 주세요. 이 화면에서는 하실 게 없어요.
           </p>
         </div>
       </section>
 
       <ul className="mt-8 flex flex-col gap-5 px-1">
-        <Feature icon={<CameraIcon className="size-5" />} title="앱 설치·가입 없음">
-          링크를 누르고 카메라만 켜면 돼요
+        <Feature icon={<CameraIcon className="size-5" />} title="앱은 안 깔아도 돼요">
+          링크 열고 카메라만 켜면 끝이에요
         </Feature>
-        <Feature icon={<HandTapIcon className="size-5" />} title="보면서 가리켜 드려요">
-          누를 곳을 화면에 동그라미로 표시해요
+        <Feature icon={<HandTapIcon className="size-5" />} title="누를 곳을 짚어 드려요">
+          화면에 빨간 동그라미가 떠요
         </Feature>
-        <Feature icon={<ShieldIcon className="size-5" />} title="통화 영상은 저장하지 않아요">
-          사진을 찍을 때마다 화면에 알려 드려요
+        <Feature icon={<ShieldIcon className="size-5" />} title="통화 영상은 남기지 않아요">
+          사진을 찍으면 그때마다 알림이 떠요
         </Feature>
       </ul>
 

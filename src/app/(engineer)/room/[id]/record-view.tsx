@@ -62,7 +62,7 @@ export function RecordView({
     onSubmit(choice);
   }
 
-  const rows: [string, string][] = [["상담", `${createdLabel}에 만듦`]];
+  const rows: [string, string][] = [["만든 시각", createdLabel]];
   if (summary.talkSec !== null) rows.push(["통화 시간", formatDuration(summary.talkSec)]);
   rows.push(["방향 지시", `${summary.guide}번`], ["가리키기·그리기", `${summary.pointer + summary.draw}번`]);
 
@@ -84,7 +84,7 @@ export function RecordView({
             <br />
             해결됐나요?
           </h1>
-          <p className="text-body-m text-text-secondary">이 기록이 원격 해결률이 돼요</p>
+          <p className="text-body-m text-text-secondary">고른 답이 원격 해결률에 들어가요</p>
         </div>
         <Choice selected={choice === true} disabled={saving} onSelect={() => setChoice(true)}>
           네, 원격으로 해결했어요
@@ -99,7 +99,7 @@ export function RecordView({
           <div className="flex flex-col gap-0.5">
             <h2 className="text-title-s">통화 중 찍은 사진 {n}장</h2>
             <p className="text-body-s text-text-secondary">
-              {photoState === "saved" ? "폰에 저장했어요." : "저장하지 않으면 이 화면을 떠날 때 사라져요."}
+              {photoState === "saved" ? "폰에 저장했어요." : "저장 안 하면 이 화면을 나갈 때 지워져요."}
             </p>
           </div>
           <ul className="flex gap-2 overflow-x-auto pb-1">
@@ -119,7 +119,7 @@ export function RecordView({
             className="bg-bg-page"
             icon={photoState === "saved" ? <CheckIcon className="size-5" /> : <DownloadIcon className="size-5" />}
           >
-            {photoState === "saving" ? "저장하는 중…" : photoState === "saved" ? "저장했어요 · 다시 저장" : `사진 ${n}장 폰에 저장`}
+            {photoState === "saving" ? "저장하는 중…" : photoState === "saved" ? "다시 저장하기" : `사진 ${n}장 폰에 저장`}
           </Button>
           {photoState === "failed" && (
             <p role="alert" className="text-body-s text-text-danger">
@@ -161,7 +161,7 @@ export function RecordView({
         open={askPhotos}
         onClose={() => setAskPhotos(false)}
         title={`찍은 사진 ${n}장을 저장할까요?`}
-        description="저장하지 않으면 사진이 사라져요."
+        description="저장 안 하면 사진은 지워져요."
         testId="eng-photo-sheet"
       >
         <Button
@@ -187,7 +187,7 @@ export function RecordView({
             if (choice !== null) onSubmit(choice);
           }}
         >
-          저장하지 않고 끝내기
+          저장 안 하고 끝내기
         </Button>
       </Sheet>
     </main>

@@ -33,7 +33,7 @@ export function engineerChip(
     Partial<Pick<EngineerSnapshot, "customerReason" | "trackable">>,
 ): Chip | null {
   if (!s.anchor || committedOf(s.anchor.annotations).length === 0) return null;
-  if (s.customerArrow) return { text: "고객 화면 밖 — 화살표 안내 중", tone: "guide" };
+  if (s.customerArrow) return { text: "고객 화면 밖이라 화살표로 안내 중", tone: "guide" };
   // 무늬가 적어 고객 쪽도 못 찾는다 → 고객은 사진 카드를 보고 있다 ("찾는 중"이라고 하면 기다리게 된다)
   if (
     (s.customerState === "searching" || s.customerState === "lost") &&
@@ -66,11 +66,11 @@ export function referenceToast(
   s: Pick<EngineerSnapshot, "trackable" | "referenceReason">,
 ): string | null {
   if (s.trackable === false) {
-    if (s.referenceReason === "pin_blank") return "표시한 곳 주변에 무늬가 적어요 — 고객에게 사진 카드로 보여줘요";
-    return "무늬가 적어 고정이 어려워요 — 고객에게 사진 카드로 보여줘요";
+    if (s.referenceReason === "pin_blank") return "표시한 곳 주변에 무늬가 적어서 사진 카드로 보여 줄게요";
+    return "무늬가 적어서 붙이기 어려워요. 사진 카드로 보여 줄게요";
   }
   if (s.trackable === true && s.referenceReason === "ambiguous") {
-    return "같은 무늬가 반복돼요 — 고객에게 사진 카드로 보여줘요";
+    return "비슷한 무늬가 많아서 사진 카드로 보여 줄게요";
   }
   return null;
 }

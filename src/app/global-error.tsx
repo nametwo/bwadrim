@@ -23,9 +23,9 @@ export default function GlobalError({ retry }: { retry: () => void }) {
         }}
       >
         <title>봐드림</title>
-        <h1 style={{ fontSize: 26, fontWeight: 700 }}>잠시 문제가 생겼어요</h1>
+        <h1 style={{ fontSize: 26, fontWeight: 700 }}>잠깐 문제가 생겼어요</h1>
         <p style={{ fontSize: 18, color: "#515a68" /* text-secondary */ }}>
-          잠시 후 다시 시도해 주세요.
+          조금 있다가 다시 눌러 주세요.
         </p>
         <button
           onClick={() => retry()}

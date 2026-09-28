@@ -26,7 +26,7 @@ function deniedCoach(reason: string | null) {
     return "다른 앱이 카메라를 쓰고 있어요. 카메라·영상통화 앱을 닫고 다시 눌러 달라고 말씀해 주세요.";
   }
   if (reason === "NotFoundError" || reason === "OverconstrainedError") return "카메라를 찾지 못했어요. 다른 폰으로 링크를 열어 달라고 말씀해 주세요.";
-  if (reason === "unsupported") return "인터넷 앱(사파리·크롬)으로 링크를 열어 달라고 말씀해 주세요.";
+  if (reason === "unsupported") return "사파리나 크롬으로 링크를 열어 달라고 말씀해 주세요.";
   return "고객님 화면에 켜는 방법이 나와 있어요. 그대로 따라 해 달라고 말씀해 주세요.";
 }
 
@@ -81,7 +81,7 @@ export function WaitingView({
     micOn === null ? null : (
       <span className={`inline-flex items-center gap-1 text-label-m ${micOn ? "text-text-success" : "text-text-warning"}`}>
         {micOn ? <MicIcon className="size-4" /> : <MicOffIcon className="size-4" />}
-        {micOn ? "마이크 켜짐" : "마이크 꺼짐(보기만)"}
+        {micOn ? "마이크 켜짐" : "마이크 꺼짐"}
       </span>
     );
 
@@ -108,7 +108,7 @@ export function WaitingView({
         <figure className="mt-8 flex flex-col gap-3 rounded-3xl bg-bg-subtle p-4">
           <figcaption className="flex items-center gap-1.5 px-1 text-label-m text-text-secondary">
             <MessageIcon className="size-4" />
-            고객님이 받을 문자
+            보낼 문자
           </figcaption>
           <p className="rounded-2xl rounded-tl-md bg-bg-page px-4 py-3 text-body-m whitespace-pre-line text-text-primary select-all">
             {inviteMessage(joinUrl)}
@@ -233,8 +233,9 @@ export function WaitingView({
           <ChevronLeftIcon className="size-5 -rotate-90 text-icon-secondary transition-transform group-open:rotate-90" />
         </summary>
         <p className="pb-4 text-text-secondary">
-          &ldquo;문자로 보내 드린 링크를 누르시고, 파란색 <b className="text-text-primary">카메라 켜고 시작하기</b>를 누른 다음{" "}
-          <b className="text-text-primary">허용</b>을 눌러 주세요. 그리고 고장 난 곳을 비춰 주세요.&rdquo;
+          &ldquo;문자로 링크 보내 드렸어요. 누르시면 파란 버튼{" "}
+          <b className="text-text-primary">카메라 켜고 시작하기</b>가 있는데, 그거 누르시고{" "}
+          <b className="text-text-primary">허용</b> 누르시면 돼요. 그다음에 고장 난 데를 비춰 주세요.&rdquo;
         </p>
       </details>
 
