@@ -39,7 +39,7 @@ export function GuideLab() {
     <main className="flex min-h-dvh flex-col gap-4 bg-call-bg p-3 text-call-text sm:p-6">
       <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h1 className="text-base font-bold">방향 지시 실험실</h1>
-        <p className="text-xs text-call-text-secondary">십자키를 누르고 있는 동안만 고객 화면에 표시돼요</p>
+        <p className="text-xs text-call-text-secondary">방향 링·알약을 누르고 있는 동안만 고객 화면에 표시돼요</p>
       </header>
 
       <div className="flex items-start justify-center gap-3 md:gap-8">
@@ -52,7 +52,7 @@ export function GuideLab() {
             <GuideDpad onSend={onSend} />
           </div>
           <p className="mt-2 text-xs text-call-text-secondary">
-            누른 채 굴려서 방향 바꾸기 · 가운데 위(+) 가까이, 아래(−) 멀리 · PC는 방향키, = 가까이, - 멀리
+            링을 누른 채 굴려서 방향 바꾸기 · 가운데 구멍 = 멈춤 · 아래 알약 왼쪽 멀리, 오른쪽 가까이 · PC는 방향키, = 가까이, - 멀리
           </p>
         </section>
 

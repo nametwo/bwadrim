@@ -124,6 +124,8 @@ export function CallPanel({
   const [gestureLearned, setGestureLearned] = useState(false);
   // 지금 고객 화면에 떠 있는 방향 지시 (피그마 GuidePill)
   const [guideCmd, setGuideCmd] = useState<GuideCmd | null>(null);
+  // 방향 링을 톡 누르기만 했을 때 '고객 화면' 알약 자리에 잠깐 보여 주는 쓰는 법
+  const [padHint, setPadHint] = useState<string | null>(null);
   // 링크를 어떻게 보냈는지(E03 → E04), 고객이 어디까지 왔는지 (ROOM-13)
   const [sentVia, setSentVia] = useState<SentVia | null>(null);
   const [progress, setProgress] = useState<JoinProgress | null>(null);
@@ -800,14 +802,14 @@ export function CallPanel({
     );
     const center = frozen ? (
       // 멈춘 동안 지금 누를 것은 '라이브로' 하나라 파랑, 방향 지시는 없다 (피그마 E08)
-      <div className="flex h-[196px] w-[196px] flex-col items-center justify-center gap-3">
+      <div className="flex h-[216px] w-[160px] flex-col items-center justify-center gap-3">
         <Button size="xl" block onClick={resume} icon={<PlayIcon className="size-6" />}>
           라이브로
         </Button>
         <p className="text-center text-caption text-call-text-secondary">멈춘 화면에서는 방향을 알려 줄 수 없어요</p>
       </div>
     ) : (
-      <GuideDpad onSend={sendGuide} disabled={!connected || unstable} />
+      <GuideDpad onSend={sendGuide} onHint={setPadHint} disabled={!connected || unstable} />
     );
 
     return (
@@ -942,7 +944,7 @@ export function CallPanel({
                   </p>
                 )}
                 <span className="lg:hidden">
-                  <GuidePill cmd={guideCmd} frozen={!!frozen} />
+                  <GuidePill cmd={guideCmd} frozen={!!frozen} hint={padHint} />
                 </span>
               </div>
             )}
@@ -954,7 +956,7 @@ export function CallPanel({
               <h2 className="text-title-s">방향 지시</h2>
               <p className="text-body-s text-call-text-secondary">누르고 있는 동안만 고객 화면에 표시돼요. 떼면 사라져요.</p>
               <span className="mt-2">
-                <GuidePill cmd={guideCmd} frozen={!!frozen} />
+                <GuidePill cmd={guideCmd} frozen={!!frozen} hint={padHint} />
               </span>
             </div>
             <div className="mx-auto grid w-full max-w-[420px] grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-1">

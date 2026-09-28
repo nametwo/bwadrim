@@ -10,14 +10,23 @@ import {
 import {
   GUIDE_DIRS,
   GUIDE_KEEPALIVE_MS,
-  isGuideDir,
   type GuideCmd,
-  type GuideDir,
   type GuideMsg,
 } from "@/lib/webrtc/guide";
+import {
+  DIR_ANGLE,
+  RING_D,
+  RING_R,
+  glyphTransform,
+  ringAccepts,
+  ringCmdAt,
+  wedgePath,
+  zoomCmdAt,
+} from "./guide-pad-geometry";
 import s from "./guide.module.css";
 
-// 엔지니어 십자키 (요구사항 CALL-15).
+// 엔지니어 방향 지시 (요구사항 CALL-15, 피그마 Components → Dpad).
+// 둥근 방향 링(상하좌우 네 조각, 가운데 구멍 = 멈춤) + 아래 '− 멀리 | 가까이 +' 알약.
 // 누르고 있는 동안만 고객 화면에 지시가 뜨고, 떼면 사라진다(= 멈춤).
 
 const KEY_CMD: Record<string, GuideCmd> = {
@@ -31,16 +40,15 @@ const KEY_CMD: Record<string, GuideCmd> = {
   NumpadSubtract: "farther",
 };
 
-/** 디자인 기준 크기(px). guide.module.css와 맞춘다 */
-const SIZE = 196;
-/** 가운데 원(가까이/멀리) 반지름 */
-const HUB_R = 40;
-/** 가운데 원에서 위/아래 판정 여유 */
-const HUB_DEAD = 6;
-/** 방향을 바꿀 때 경계 여유(도). 대각선 근처에서 깜빡이지 않게 */
-const HYST = 10;
+const WEDGE = Object.fromEntries(GUIDE_DIRS.map((d) => [d, wedgePath(DIR_ANGLE[d])])) as Record<string, string>;
+const GLYPH = Object.fromEntries(GUIDE_DIRS.map((d) => [d, glyphTransform(DIR_ANGLE[d])])) as Record<string, string>;
 
-const DIR_ANG: Record<GuideDir, number> = { right: 0, down: 90, left: 180, up: -90 };
+/** 아무것도 보내지 않고 뗐을 때 잠깐 보여 주는 쓰는 법 */
+export const PAD_HINT = {
+  ring: "방향을 누르고 있는 동안만 고객 화면에 보여요",
+  zoom: "멀리·가까이 중 한쪽을 누르고 있어 주세요",
+} as const;
+const HINT_MS = 1800;
 
 /** 누르는 동안 hold를 주기적으로 보내고, 떼면 release를 한 번 보낸다. */
 function useGuideSender(send: (msg: GuideMsg) => void) {
@@ -98,42 +106,34 @@ function isTyping(target: EventTarget | null) {
   return target instanceof HTMLInputElement && !NON_TEXT_INPUTS.has(target.type);
 }
 
-function sectorOf(deg: number): GuideDir {
-  const a = ((deg % 360) + 360) % 360;
-  if (a >= 315 || a < 45) return "right";
-  if (a < 135) return "down";
-  if (a < 225) return "left";
-  return "up";
-}
-
-function angDiff(a: number, b: number) {
-  const x = Math.abs((((a - b) % 360) + 360) % 360);
-  return x > 180 ? 360 - x : x;
-}
-
-function ArrowIcon() {
+function MinusGlyph() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M4 12h14M12.5 5.5 19 12l-6.5 6.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
+      <path d="M5 12H19" />
     </svg>
   );
 }
 
+function PlusGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 5V19M5 12H19" />
+    </svg>
+  );
+}
+
+type Zone = "ring" | "zoom";
+
 /**
- * 십자키. 누르고 있는 동안만 고객 화면에 지시가 뜬다.
- * - 팔(상하좌우)에서 시작: 엄지 위치의 방향. 누른 채 굴려서 방향을 바꿀 수 있고, 가운데로 오면 꺼진다.
- * - 가운데 원에서 시작: 위쪽 반(+) 가까이, 아래쪽 반(−) 멀리. 누른 채 위아래로 밀어 바꿀 수 있다.
+ * 방향 링 + 가까이·멀리 알약. 누르고 있는 동안만 고객 화면에 지시가 뜬다.
+ * - 링: 누른 조각의 방향. 누른 채 엄지를 굴려 떼지 않고 방향을 바꾼다. 가운데 구멍으로 오면 꺼진다.
+ * - 알약: 왼쪽 반 멀리, 오른쪽 반 가까이. 누른 채 옆으로 밀어 바꾼다.
+ * - 링에서 시작한 누름은 방향만, 알약에서 시작한 누름은 가까이·멀리만 보낸다(둘 사이 틈은 무시).
  * - PC: 방향키, = 가까이, - 멀리를 누르고 있는 동안.
  */
 export function GuideDpad({
   onSend,
+  onHint,
   keyboard = true,
   disabled = false,
   className,
@@ -143,6 +143,11 @@ export function GuideDpad({
    * 던진 예외는 무시한다. 프리즈 등으로 지시를 끄려면 disabled를 넘긴다(고객 쪽 reset만으로는 다시 뜬다).
    */
   onSend: (msg: GuideMsg) => void;
+  /**
+   * 아무것도 보내지 않고 뗐을 때(가운데 구멍·알약 경계를 톡) 쓰는 법 문구를 1.8초 넘긴다. 끝나면 null.
+   * 통화 화면은 '고객 화면' 알약 자리에 보여 준다. 넘기지 않으면 링 위에 작은 말풍선으로 띄운다.
+   */
+  onHint?: (text: string | null) => void;
   keyboard?: boolean;
   disabled?: boolean;
   className?: string;
@@ -150,15 +155,25 @@ export function GuideDpad({
   const { active, currentRef, hold, release } = useGuideSender(onSend);
   const pointerIdRef = useRef<number | null>(null);
   const keyCmdRef = useRef<GuideCmd | null>(null);
-  const zoomMode = useRef(false);
+  const zoneRef = useRef<Zone | null>(null);
+  const zoomArmed = useRef(false);
   const usedCmd = useRef(false);
-  const [hint, setHint] = useState(false);
+  const touchRef = useRef(false);
+  const ringRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef<HTMLDivElement>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const onHintRef = useRef(onHint);
+
+  useEffect(() => {
+    onHintRef.current = onHint;
+  });
 
   // 창이 가려지거나 포커스를 잃으면 keyup/pointerup이 안 올 수 있으니 바로 뗀 것으로 처리
   useEffect(() => {
     const stop = () => {
       pointerIdRef.current = null;
       keyCmdRef.current = null;
+      zoneRef.current = null;
       release();
     };
     const onVisibility = () => {
@@ -176,7 +191,7 @@ export function GuideDpad({
     if (!disabled) return;
     pointerIdRef.current = null;
     keyCmdRef.current = null;
-    zoomMode.current = false;
+    zoneRef.current = null;
     release();
   }, [disabled, release]);
 
@@ -214,41 +229,53 @@ export function GuideDpad({
     };
   }, [keyboard, disabled, hold, release]);
 
+  // 쓰는 법 문구: 1.8초 뒤 지운다. 받는 쪽(onHint)이 있으면 그쪽에 보여 준다
   useEffect(() => {
+    onHintRef.current?.(hint);
     if (!hint) return;
-    const id = setTimeout(() => setHint(false), 1800);
+    const id = setTimeout(() => setHint(null), HINT_MS);
     return () => clearTimeout(id);
   }, [hint]);
+  useEffect(() => () => onHintRef.current?.(null), []);
 
-  const local = (e: ReactPointerEvent<HTMLDivElement>) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    const k = SIZE / r.width;
+  /** 링 중심 기준 좌표(디자인 px) */
+  const ringLocal = (e: ReactPointerEvent) => {
+    const r = ringRef.current!.getBoundingClientRect();
+    const k = RING_D / r.width;
     return { x: (e.clientX - r.left - r.width / 2) * k, y: (e.clientY - r.top - r.height / 2) * k };
   };
 
-  const cmdAt = (p: { x: number; y: number }): GuideCmd | null => {
-    if (zoomMode.current) {
-      if (p.y < -HUB_DEAD) return "closer";
-      if (p.y > HUB_DEAD) return "farther";
-      return null;
+  /** 알약 왼쪽 기준 가로 위치(디자인 px) */
+  const zoomX = (e: ReactPointerEvent) => {
+    const r = zoomRef.current!.getBoundingClientRect();
+    return (e.clientX - r.left) * (RING_D / r.width);
+  };
+
+  const cmdAt = (e: ReactPointerEvent): GuideCmd | null => {
+    if (zoneRef.current === "ring") return ringCmdAt(ringLocal(e), currentRef.current);
+    if (zoneRef.current === "zoom") {
+      const cmd = zoomCmdAt(zoomX(e), currentRef.current, zoomArmed.current);
+      if (cmd) zoomArmed.current = true;
+      return cmd;
     }
-    if (Math.hypot(p.x, p.y) < HUB_R) return null;
-    const deg = (Math.atan2(p.y, p.x) * 180) / Math.PI;
-    const cur = currentRef.current;
-    if (cur && isGuideDir(cur) && angDiff(deg, DIR_ANG[cur]) <= 45 + HYST) return cur;
-    return sectorOf(deg);
+    return null;
   };
 
   const apply = (cmd: GuideCmd | null) => {
     if (cmd === currentRef.current) return;
     if (cmd) {
       usedCmd.current = true;
+      // 안드로이드는 방향이 바뀔 때 짧게 떨려 화면을 안 보고도 알 수 있다 (아이폰은 무시)
+      if (touchRef.current) navigator.vibrate?.(8);
       hold(cmd);
     } else release();
   };
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (disabled || pointerIdRef.current !== null || (e.pointerType === "mouse" && e.button !== 0)) return;
+    const zone = (e.target as Element).closest?.("[data-zone]")?.getAttribute("data-zone") as Zone | null | undefined;
+    if (zone !== "ring" && zone !== "zoom") return;
+    if (zone === "ring" && !ringAccepts(ringLocal(e))) return;
     e.preventDefault();
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -257,32 +284,31 @@ export function GuideDpad({
     }
     pointerIdRef.current = e.pointerId;
     keyCmdRef.current = null;
-    const p = local(e);
-    zoomMode.current = Math.hypot(p.x, p.y) < HUB_R;
+    zoneRef.current = zone;
+    zoomArmed.current = false;
     usedCmd.current = false;
-    setHint(false);
-    apply(cmdAt(p));
+    touchRef.current = e.pointerType === "touch";
+    setHint(null);
+    apply(cmdAt(e));
   };
 
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (disabled || e.pointerId !== pointerIdRef.current) return;
-    apply(cmdAt(local(e)));
+    apply(cmdAt(e));
   };
 
   const onPointerEnd = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.pointerId !== pointerIdRef.current) return;
     pointerIdRef.current = null;
-    // 가운데 한가운데를 톡 누르기만 했으면 쓰는 법을 잠깐 보여준다
-    if (zoomMode.current && !usedCmd.current) setHint(true);
-    zoomMode.current = false;
+    // 아무것도 보내지 않고 뗐으면(가운데 구멍·알약 경계를 톡) 쓰는 법을 잠깐 보여준다
+    if (!usedCmd.current && zoneRef.current) setHint(PAD_HINT[zoneRef.current]);
+    zoneRef.current = null;
     release();
   };
 
   return (
     <div
-      className={className ? `${s.dpad} ${className}` : s.dpad}
-      role="group"
-      aria-label="방향 지시 십자키: 누르고 있는 동안 고객 화면에 표시"
+      className={className ? `${s.pad} ${className}` : s.pad}
       aria-disabled={disabled || undefined}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -291,20 +317,39 @@ export function GuideDpad({
       onLostPointerCapture={onPointerEnd}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {GUIDE_DIRS.map((dir) => (
-        <div key={dir} className={s.arm} data-dir={dir} data-active={active === dir || undefined}>
-          <ArrowIcon />
-        </div>
-      ))}
-      <div className={s.hub}>
-        <div className={s.half} data-cmd="closer" data-active={active === "closer" || undefined}>
-          <b>+</b>가까이
-        </div>
+      <div
+        ref={ringRef}
+        className={s.ring}
+        data-zone="ring"
+        role="group"
+        aria-label="방향 지시 십자키: 누르고 있는 동안 고객 화면에 표시"
+      >
+        <svg viewBox={`${-RING_R} ${-RING_R} ${RING_D} ${RING_D}`} aria-hidden="true">
+          {GUIDE_DIRS.map((dir) => (
+            <g key={dir} className={s.wedge} data-dir={dir} data-active={active === dir || undefined}>
+              <path className={s.seg} d={WEDGE[dir]} />
+              <path className={s.chev} transform={GLYPH[dir]} d="M9.5 6 15.5 12 9.5 18" />
+            </g>
+          ))}
+        </svg>
+        {hint && !onHint && <div className={s.hint}>{hint}</div>}
+      </div>
+      <div
+        ref={zoomRef}
+        className={s.zoom}
+        data-zone="zoom"
+        role="group"
+        aria-label="가까이·멀리: 누르고 있는 동안 고객 화면에 표시"
+      >
         <div className={s.half} data-cmd="farther" data-active={active === "farther" || undefined}>
-          <b>−</b>멀리
+          <MinusGlyph />
+          멀리
+        </div>
+        <div className={s.half} data-cmd="closer" data-active={active === "closer" || undefined}>
+          가까이
+          <PlusGlyph />
         </div>
       </div>
-      {hint && <div className={s.hint}>가운데 위(+) 가까이 · 아래(−) 멀리</div>}
     </div>
   );
 }

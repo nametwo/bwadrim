@@ -84,6 +84,8 @@ test("통화: 십자키를 누르는 동안만 고객 화면에 방향 · 굴리
     await f1.down(cx + 70, cy);
     await expect(band).toHaveAttribute("data-cmd", "right", { timeout: 5_000 });
     await expect(band).toContainText("오른쪽으로");
+    // 고객 화면 오른쪽 가장자리에 노란 원 화살표
+    await expect(cp.getByTestId("guide-arrow")).toHaveAttribute("data-dir", "right");
     await expect(cp.getByTestId("cust-status")).toBeHidden();
     // 엔지니어 화면의 '고객 화면' 알약도 노랗게 '오른쪽으로' (피그마 GuidePill)
     await expect(ep.getByTestId("eng-guide-pill").filter({ visible: true })).toHaveAttribute("data-cmd", "right");
@@ -107,12 +109,25 @@ test("통화: 십자키를 누르는 동안만 고객 화면에 방향 · 굴리
     await expect(band).toHaveAttribute("data-cmd", "left", { timeout: 3_000 });
     await expect(band).toHaveCount(0, { timeout: 5_000 });
 
-    // 5) 가운데 원 위쪽 반 = 가까이
+    // 5) 링 아래 알약: 오른쪽 반 = 가까이, 누른 채 왼쪽으로 밀면 떼지 않고 멀리
+    const zoom = ep.getByRole("group", { name: /가까이·멀리/ });
+    const zb = (await zoom.boundingBox())!;
     const f3 = await finger(ep);
-    await f3.down(cx, cy - 20);
+    await f3.down(zb.x + zb.width * 0.75, zb.y + zb.height / 2);
     await expect(band).toHaveAttribute("data-cmd", "closer", { timeout: 5_000 });
+    await expect(cp.getByTestId("guide-arrow")).toHaveCount(0);
+    await f3.move(zb.x + zb.width * 0.25, zb.y + zb.height / 2);
+    await expect(band).toHaveAttribute("data-cmd", "farther", { timeout: 5_000 });
     await f3.up();
     await expect(band).toHaveCount(0, { timeout: 5_000 });
+
+    // 5-1) 가운데 구멍을 톡 누르기만 하면 아무것도 보내지 않고, '고객 화면' 알약 자리에 쓰는 법이 잠깐 뜬다
+    const f7 = await finger(ep);
+    await f7.down(cx, cy);
+    await f7.up();
+    await expect(ep.getByTestId("eng-guide-pill").filter({ visible: true })).toContainText("방향을 누르고 있는 동안만");
+    await ep.waitForTimeout(600);
+    await expect(band).toHaveCount(0);
 
     // 6) PC처럼 방향키를 누르고 있는 동안
     await ep.keyboard.down("ArrowDown");

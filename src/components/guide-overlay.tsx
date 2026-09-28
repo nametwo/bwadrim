@@ -120,9 +120,32 @@ export function useGuideReceiver({ stillHint = false }: Options = {}) {
   return { view, receive, reset };
 }
 
-/** 고객 화면 위에 겹치는 지시(화살표 또는 가까이/멀리 괄호) + 문구. 부모는 position: relative 여야 한다. */
+// 오른쪽을 가리키는 화살표(24 기준, 피그마 Icon/arrow-right). 방향은 CSS로 돌린다
+function Arrow() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4.5 12H19M12.5 5.5 19 12l-6.5 6.5" />
+    </svg>
+  );
+}
+
+function ChipGlyph({ cmd }: { cmd: GuideCmd }) {
+  if (isGuideDir(cmd)) return <Arrow />;
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d={cmd === "closer" ? "M12 5V19M5 12H19" : "M5 12H19"} />
+    </svg>
+  );
+}
+
+/**
+ * 고객 화면 위에 겹치는 지시 + 문구. 부모는 position: relative 여야 한다.
+ * 위: 노란 동그라미(같은 모양) + 큰 글씨 띠. 방향이면 그쪽 가장자리에 노란 원 화살표가 살짝 밀리고,
+ * 가까이·멀리면 가운데 네 모서리가 벌어지거나(가까이) 안쪽을 향해 모인다(멀리).
+ */
 export function GuideOverlay({ view }: { view: GuideView }) {
   const text = !view ? null : view.kind === "cmd" ? GUIDE_TEXT[view.cmd] : GUIDE_STILL_TEXT;
+  const cmd = view?.kind === "cmd" ? view.cmd : null;
   return (
     <div className={s.overlay}>
       {/* 화면 낭독기용. 라이브 영역은 늘 DOM에 두고 글자만 바꿔야 새 지시가 읽힌다 */}
@@ -130,19 +153,15 @@ export function GuideOverlay({ view }: { view: GuideView }) {
         {text ? `${text.main}. ${text.sub}` : ""}
       </div>
       {view?.kind === "still" && <div className={s.frame} />}
-      {view?.kind === "cmd" && isGuideDir(view.cmd) && (
-        <div key={`a${view.key}`} className={s.arrow} data-dir={view.cmd}>
-          <div className={s.rot}>
-            <svg viewBox="-6 -6 132 112" aria-hidden="true">
-              <polygon className={s.chev} points="0,6 24,6 56,50 24,94 0,94 32,50" />
-              <polygon className={s.chev} points="32,6 56,6 88,50 56,94 32,94 64,50" />
-              <polygon className={s.chev} points="64,6 88,6 120,50 88,94 64,94 96,50" />
-            </svg>
+      {view && cmd && isGuideDir(cmd) && (
+        <div key={`a${view.key}`} className={s.arrow} data-dir={cmd} data-testid="guide-arrow">
+          <div className={s.disc}>
+            <Arrow />
           </div>
         </div>
       )}
-      {view?.kind === "cmd" && !isGuideDir(view.cmd) && (
-        <div key={`z${view.key}`} className={s.brackets} data-cmd={view.cmd} aria-hidden="true">
+      {view && cmd && !isGuideDir(cmd) && (
+        <div key={`z${view.key}`} className={s.corners} data-cmd={cmd} aria-hidden="true">
           <i />
           <i />
           <i />
@@ -155,8 +174,13 @@ export function GuideOverlay({ view }: { view: GuideView }) {
           className={s.band}
           aria-hidden="true"
           data-testid="guide-band"
-          data-cmd={view.kind === "cmd" ? view.cmd : "still"}
+          data-cmd={cmd ?? "still"}
         >
+          {cmd && (
+            <span className={s.chip} data-dir={isGuideDir(cmd) ? cmd : undefined}>
+              <ChipGlyph cmd={cmd} />
+            </span>
+          )}
           <div className={s.main}>{text.main}</div>
           <div className={s.sub}>{text.sub}</div>
         </div>

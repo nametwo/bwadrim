@@ -1,88 +1,117 @@
-/* ---------- 엔지니어: 십자키 ---------- */
+/* ---------- 엔지니어: 방향 링 + 가까이·멀리 알약 (피그마 Components → Dpad) ---------- */
+/* 크기는 guide-pad-geometry.ts(RING_D·PILL_H·PILL_GAP)와 맞춘다 */
 
-.dpad {
+.pad {
   position: relative;
-  width: 196px;
-  height: 196px;
+  display: flex;
   flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 160px;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
+}
+.pad[aria-disabled="true"] {
+  opacity: 0.4;
+}
+.ring {
+  position: relative;
+  width: 160px;
+  height: 160px;
   cursor: pointer;
 }
-.dpad[aria-disabled="true"] {
-  opacity: 0.35;
-  cursor: default;
+.ring svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
-.arm {
-  position: absolute;
-  display: grid;
-  place-items: center;
-  background: var(--color-call-control);
-  color: var(--color-guide-signal);
-  transition: background-color 0.08s;
+/* 조각: 채움과 같은 색 선(두께 6, 둥근 이음)으로 모서리를 3px 둥글린다 */
+.seg {
+  fill: var(--color-call-control);
+  stroke: var(--color-call-control);
+  stroke-width: 6;
+  stroke-linejoin: round;
+  transition: fill 0.08s, stroke 0.08s;
 }
-.arm svg {
-  width: 26px;
-  height: 26px;
+.chev {
+  fill: none;
+  stroke: var(--color-call-icon);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+  transition: stroke 0.08s;
 }
-.arm[data-dir="up"] { left: 68px; top: 0; width: 60px; height: 64px; border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-sm) var(--radius-sm); }
-.arm[data-dir="down"] { left: 68px; bottom: 0; width: 60px; height: 64px; border-radius: var(--radius-sm) var(--radius-sm) var(--radius-2xl) var(--radius-2xl); }
-.arm[data-dir="left"] { left: 0; top: 68px; width: 64px; height: 60px; border-radius: var(--radius-2xl) var(--radius-sm) var(--radius-sm) var(--radius-2xl); }
-.arm[data-dir="right"] { right: 0; top: 68px; width: 64px; height: 60px; border-radius: var(--radius-sm) var(--radius-2xl) var(--radius-2xl) var(--radius-sm); }
-.arm[data-dir="up"] svg { rotate: -90deg; }
-.arm[data-dir="down"] svg { rotate: 90deg; }
-.arm[data-dir="left"] svg { rotate: 180deg; }
-.arm[data-active] {
-  background: var(--color-guide-signal);
-  color: var(--color-guide-on-signal);
+.wedge[data-active] .seg {
+  fill: var(--color-guide-signal);
+  stroke: var(--color-guide-signal);
 }
-.hub {
-  position: absolute;
-  left: 58px;
-  top: 58px;
-  z-index: 1;
-  width: 80px;
-  height: 80px;
-  border-radius: 50%;
-  overflow: hidden;
+.wedge[data-active] .chev {
+  stroke: var(--color-guide-on-signal);
+}
+
+.zoom {
   display: flex;
-  flex-direction: column;
-  background: var(--color-call-surface);
-  box-shadow: 0 0 0 3px var(--color-call-bg), inset 0 0 0 1px var(--color-call-border);
+  gap: 4px;
+  width: 160px;
+  height: 48px;
+  cursor: pointer;
 }
 .half {
-  flex: 1;
   display: flex;
+  flex: 1;
   align-items: center;
   justify-content: center;
-  gap: 3px;
+  gap: 4px;
+  white-space: nowrap;
+  background: var(--color-call-control);
   color: var(--color-call-text);
-  font-size: 12px;
+  font-size: var(--text-label-m);
+  line-height: var(--text-label-m--line-height);
   font-weight: 700;
-  transition: background-color 0.08s;
-}
-.half b {
-  font-size: 18px;
-  line-height: 1;
-  color: var(--color-guide-signal);
-}
-.half[data-cmd="closer"] {
-  padding-top: 6px;
-  border-bottom: 1px solid var(--color-call-border);
+  letter-spacing: -0.01em;
+  transition: background-color 0.08s, color 0.08s;
 }
 .half[data-cmd="farther"] {
-  padding-bottom: 6px;
+  border-radius: var(--radius-3xl) var(--radius-md) var(--radius-md) var(--radius-3xl);
+}
+.half[data-cmd="closer"] {
+  border-radius: var(--radius-md) var(--radius-3xl) var(--radius-3xl) var(--radius-md);
+}
+.half svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: var(--color-call-text-secondary);
+  stroke-width: 2.75;
+  stroke-linecap: round;
+  transition: stroke 0.08s;
 }
 .half[data-active] {
   background: var(--color-guide-signal);
   color: var(--color-guide-on-signal);
 }
-.half[data-active] b {
-  color: var(--color-guide-on-signal);
+.half[data-active] svg {
+  stroke: var(--color-guide-on-signal);
 }
+
+/* PC 마우스: 올리면 누를 수 있는 자리가 조금 밝아진다 */
+@media (hover: hover) and (pointer: fine) {
+  .pad:not([aria-disabled]) .wedge:not([data-active]):hover .seg {
+    fill: var(--color-call-control-pressed);
+    stroke: var(--color-call-control-pressed);
+  }
+  .pad:not([aria-disabled]) .half:not([data-active]):hover {
+    background: var(--color-call-control-pressed);
+  }
+}
+
+/* 통화 화면은 '고객 화면' 알약에 쓰는 법을 보여 준다(onHint). 받는 쪽이 없을 때(실험실)만 링 위 말풍선 */
 .hint {
   position: absolute;
   left: 50%;
@@ -94,11 +123,12 @@
   border-radius: var(--radius-lg);
   background: var(--color-guide-band);
   color: var(--color-call-text);
-  font-size: 12px;
+  font-size: var(--text-caption);
   pointer-events: none;
 }
 
-/* ---------- 고객: 화살표 + 문구 ---------- */
+/* ---------- 고객: 위 안내 띠 + 가장자리 노란 원 화살표 / 가까이·멀리 네 모서리 ---------- */
+/* 실험실의 작은 고객 폰에서도 같은 비율로 보이게 cqw로 잰다. 390px 폭에서 1cqw ≈ 3.9px */
 
 .overlay {
   position: absolute;
@@ -111,142 +141,183 @@
 .band {
   position: absolute;
   top: var(--guide-top, max(12px, env(safe-area-inset-top)));
-  left: 4cqw;
-  right: 4cqw;
-  padding: 3.2cqw 4.4cqw 3.6cqw;
-  border-radius: 5cqw;
+  left: 3cqw;
+  right: 3cqw;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 3.6cqw;
+  row-gap: 1.6cqw;
+  padding: 3.6cqw 4.2cqw 4.2cqw;
+  border-radius: min(6.2cqw, 24px);
   background: var(--color-guide-band);
   color: var(--color-guide-on-band);
   /* 고객이 화살표·문구를 눌러도 아래 버튼(통화 종료 등)으로 새지 않게 흡수 */
   pointer-events: auto;
   animation: pop 0.2s ease-out;
 }
+.chip {
+  display: grid;
+  place-items: center;
+  width: min(13.4cqw, 52px);
+  aspect-ratio: 1;
+  border-radius: var(--radius-full);
+  background: var(--color-guide-signal);
+  color: var(--color-guide-on-signal);
+}
+.chip svg {
+  width: 58%;
+  height: 58%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .main {
-  font-size: min(10.5cqw, 52px);
+  font-size: min(10.3cqw, 40px);
   font-weight: 900;
   line-height: 1.15;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
   white-space: nowrap;
 }
 .sub {
-  margin-top: 1cqw;
-  font-size: min(5.4cqw, 26px);
+  grid-column: 1 / -1;
+  font-size: min(5.4cqw, 21px);
   font-weight: 700;
-  line-height: 1.35;
+  line-height: 1.33;
+  text-wrap: balance;
+  word-break: keep-all;
 }
 
+/* 방향: 가장자리 노란 원 + 검은 화살표. 가운데(비추는 물건)는 비워 둔다.
+   위는 안내 띠 바로 아래, 아래는 통화 종료 버튼 위. 영상 비율을 가정하지 않는다 —
+   세로 영상이면 영상 가장자리에 조금 걸치고, 가로 영상이면 위아래 검은 여백에 들어가 물건을 가리지 않는다 */
 .arrow {
+  --dx: 0;
+  --dy: 0;
   position: absolute;
-  width: min(25cqw, 120px);
+  width: min(26cqw, 104px);
   aspect-ratio: 1;
   pointer-events: auto;
-  /* 피그마 효과 스타일 Guide/Arrow와 같은 그림자 */
-  filter: drop-shadow(0 2px 6px rgb(0 0 0 / 0.6));
-  animation: 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both;
-}
-.arrow svg {
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-}
-.arrow[data-dir="left"] {
-  left: 3cqw;
-  top: 50%;
-  translate: 0 -50%;
-  animation-name: in-left;
 }
 .arrow[data-dir="right"] {
+  --dx: 1;
   right: 3cqw;
   top: 50%;
   translate: 0 -50%;
-  animation-name: in-right;
+}
+.arrow[data-dir="left"] {
+  --dx: -1;
+  left: 3cqw;
+  top: 50%;
+  translate: 0 -50%;
 }
 .arrow[data-dir="up"] {
+  --dy: -1;
   left: 50%;
-  top: calc(var(--guide-top, max(12px, env(safe-area-inset-top))) + 40cqw);
   translate: -50% 0;
-  animation-name: in-up;
+  top: calc(var(--guide-top, max(12px, env(safe-area-inset-top))) + 36cqw);
 }
 .arrow[data-dir="down"] {
+  --dy: 1;
   left: 50%;
-  bottom: calc(var(--guide-bottom, max(16px, env(safe-area-inset-bottom))) + 22cqw);
   translate: -50% 0;
-  animation-name: in-down;
+  bottom: calc(var(--guide-bottom, max(16px, env(safe-area-inset-bottom))) + 6cqw);
 }
-.arrow[data-dir="left"] .rot { rotate: 180deg; }
-.arrow[data-dir="up"] .rot { rotate: -90deg; }
-.arrow[data-dir="down"] .rot { rotate: 90deg; }
-.rot {
+.disc {
+  display: grid;
+  place-items: center;
   width: 100%;
   height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--color-guide-signal);
+  color: var(--color-guide-on-signal);
+  /* 밝은 벽에서도 테두리가 보이게 얇은 어두운 선 + 부드러운 그림자 */
+  box-shadow:
+    0 0 0 max(2px, 0.75cqw) var(--color-guide-outline),
+    0 1.6cqw 5cqw color-mix(in srgb, var(--color-guide-outline) 40%, transparent);
+  animation:
+    disc-in 0.24s cubic-bezier(0.2, 0.9, 0.3, 1.2) both,
+    nudge 1.2s ease-in-out 0.24s infinite;
 }
-
-.chev {
-  fill: var(--color-guide-signal);
-  stroke: var(--color-guide-outline);
-  stroke-width: 10;
-  paint-order: stroke;
+.disc svg {
+  width: 56%;
+  height: 56%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
   stroke-linejoin: round;
-  animation: chev 0.8s ease-in-out infinite;
 }
-.chev:nth-child(2) { animation-delay: 0.13s; }
-.chev:nth-child(3) { animation-delay: 0.26s; }
+.arrow[data-dir="left"] .disc svg,
+.chip[data-dir="left"] svg { rotate: 180deg; }
+.arrow[data-dir="up"] .disc svg,
+.chip[data-dir="up"] svg { rotate: -90deg; }
+.arrow[data-dir="down"] .disc svg,
+.chip[data-dir="down"] svg { rotate: 90deg; }
 
-.brackets {
-  position: absolute;
-  left: 18cqw;
-  right: 18cqw;
-  top: 50%;
-  height: 64cqw;
-  translate: 0 -50%;
+/* 가까이: 바깥을 향한 네 모서리가 벌어진다 / 멀리: 안쪽을 향한 네 모서리가 모인다 (멈춘 그림만 봐도 뜻이 보이게 모양이 다르다) */
+.corners {
   --s: 1;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(72cqw, 280px);
+  aspect-ratio: 1;
+  translate: -50% -50%;
 }
-.brackets[data-cmd="farther"] {
+.corners[data-cmd="farther"] {
   --s: -1;
 }
-.brackets i {
+.corners i {
   position: absolute;
-  width: 14cqw;
-  height: 14cqw;
+  width: min(11.3cqw, 44px);
+  aspect-ratio: 1;
   border: 0 solid var(--color-guide-signal);
-  filter: drop-shadow(0 0 0.4cqw var(--color-guide-outline)) drop-shadow(0 0 0.4cqw var(--color-guide-outline));
-  animation: brk 0.8s ease-in-out infinite;
+  filter:
+    drop-shadow(0 0 0.35cqw var(--color-guide-outline))
+    drop-shadow(0 0.6cqw 1.8cqw color-mix(in srgb, var(--color-guide-outline) 40%, transparent));
+  animation: breathe 1.4s ease-in-out infinite;
 }
-.brackets i:nth-child(1) { left: 0; top: 0; border-left-width: 2.8cqw; border-top-width: 2.8cqw; --tx: -1; --ty: -1; }
-.brackets i:nth-child(2) { right: 0; top: 0; border-right-width: 2.8cqw; border-top-width: 2.8cqw; --tx: 1; --ty: -1; }
-.brackets i:nth-child(3) { left: 0; bottom: 0; border-left-width: 2.8cqw; border-bottom-width: 2.8cqw; --tx: -1; --ty: 1; }
-.brackets i:nth-child(4) { right: 0; bottom: 0; border-right-width: 2.8cqw; border-bottom-width: 2.8cqw; --tx: 1; --ty: 1; }
+.corners i:nth-child(1) { left: 0; top: 0; --tx: -1; --ty: -1; }
+.corners i:nth-child(2) { right: 0; top: 0; --tx: 1; --ty: -1; }
+.corners i:nth-child(3) { left: 0; bottom: 0; --tx: -1; --ty: 1; }
+.corners i:nth-child(4) { right: 0; bottom: 0; --tx: 1; --ty: 1; }
+/* 가까이: ┌ ┐ └ ┘ */
+.corners[data-cmd="closer"] i:nth-child(1) { border-left-width: 2cqw; border-top-width: 2cqw; border-top-left-radius: 4cqw; }
+.corners[data-cmd="closer"] i:nth-child(2) { border-right-width: 2cqw; border-top-width: 2cqw; border-top-right-radius: 4cqw; }
+.corners[data-cmd="closer"] i:nth-child(3) { border-left-width: 2cqw; border-bottom-width: 2cqw; border-bottom-left-radius: 4cqw; }
+.corners[data-cmd="closer"] i:nth-child(4) { border-right-width: 2cqw; border-bottom-width: 2cqw; border-bottom-right-radius: 4cqw; }
+/* 멀리: ┘ └ ┐ ┌ (꺾인 쪽이 가운데를 향한다) */
+.corners[data-cmd="farther"] i:nth-child(1) { border-right-width: 2cqw; border-bottom-width: 2cqw; border-bottom-right-radius: 4cqw; }
+.corners[data-cmd="farther"] i:nth-child(2) { border-left-width: 2cqw; border-bottom-width: 2cqw; border-bottom-left-radius: 4cqw; }
+.corners[data-cmd="farther"] i:nth-child(3) { border-right-width: 2cqw; border-top-width: 2cqw; border-top-right-radius: 4cqw; }
+.corners[data-cmd="farther"] i:nth-child(4) { border-left-width: 2cqw; border-top-width: 2cqw; border-top-left-radius: 4cqw; }
 
+/* (선택) 손 뗀 뒤 '그대로요' — 실험실에서만 켠다 */
 .frame {
   position: absolute;
   inset: 0;
   border: 2.6cqw solid var(--color-guide-signal);
-  box-shadow: inset 0 0 0 0.8cqw var(--color-guide-outline);
 }
 
 @keyframes pop {
   from { opacity: 0; transform: scale(0.96); }
 }
-@keyframes chev {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
+@keyframes disc-in {
+  from {
+    opacity: 0;
+    transform: translate(calc(var(--dx) * -6cqw), calc(var(--dy) * -6cqw)) scale(0.7);
+  }
 }
-@keyframes brk {
-  50% { translate: calc(var(--tx) * var(--s) * 4cqw) calc(var(--ty) * var(--s) * 4cqw); }
+@keyframes nudge {
+  50% { transform: translate(calc(var(--dx) * 1.6cqw), calc(var(--dy) * 1.6cqw)); }
 }
-@keyframes in-right {
-  from { transform: translateX(-30cqw) scale(1.25); opacity: 0.3; }
-}
-@keyframes in-left {
-  from { transform: translateX(30cqw) scale(1.25); opacity: 0.3; }
-}
-@keyframes in-up {
-  from { transform: translateY(20cqh) scale(1.25); opacity: 0.3; }
-}
-@keyframes in-down {
-  from { transform: translateY(-20cqh) scale(1.25); opacity: 0.3; }
+@keyframes breathe {
+  50% { translate: calc(var(--tx) * var(--s) * 2.6cqw) calc(var(--ty) * var(--s) * 2.6cqw); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .band, .arrow, .chev, .brackets i { animation: none; }
+  .band, .disc, .corners i { animation: none; }
 }
