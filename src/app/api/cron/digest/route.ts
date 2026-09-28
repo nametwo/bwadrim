@@ -58,6 +58,7 @@ export async function GET(request: Request) {
       .select("id, resolved_remotely")
       .gte("created_at", range.start.toISOString())
       .lt("created_at", range.end.toISOString())
+      .order("created_at", { ascending: true })
       .limit(1000);
     if (error) throw error;
     const ids = (rooms ?? []).map((r) => r.id as string);
@@ -88,7 +89,13 @@ export async function GET(request: Request) {
 
     const warn = digestNeedsAlert(digest);
     if (warn.length) {
-      await notify("alert", { title: `어제(${range.label}) 확인이 필요해요`, lines: [...warn, "평소 채널의 하루 요약을 봐 주세요."] });
+      // 같은 날짜는 하루에 한 번만 (손으로 다시 보내도 응급 채널엔 다시 안 간다)
+      await notify("alert", {
+        title: `${range.label} 확인이 필요해요`,
+        lines: [...warn, "평소 채널의 하루 요약을 봐 주세요."],
+        key: `digest-warn-${range.label}`,
+        cooldownSec: 86400,
+      });
     }
     return NextResponse.json({ date: range.label, digest });
   } catch (e) {

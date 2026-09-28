@@ -178,3 +178,16 @@ $$;
 -- 서버(service role)만 부른다. public 함수라 기본으로 누구나 RPC로 부를 수 있으므로 막는다
 revoke execute on function public.claim_alert(text, integer) from public, anon, authenticated;
 grant execute on function public.claim_alert(text, integer) to service_role;
+
+-- 보내기에 실패한 알림의 쿨다운을 되돌린다 (방금 잡은 것만 — 1분 안)
+create or replace function public.release_alert(p_key text)
+returns void
+language sql volatile security definer set search_path = ''
+as $$
+  delete from private.alert_state
+   where key = p_key
+     and last_sent_at > now() - interval '1 minute';
+$$;
+
+revoke execute on function public.release_alert(text) from public, anon, authenticated;
+grant execute on function public.release_alert(text) to service_role;

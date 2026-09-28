@@ -32,10 +32,15 @@ export function sendTelemetry(
   } catch {
     return;
   }
-  try {
-    if (opts.beacon && typeof navigator.sendBeacon === "function") {
-      if (navigator.sendBeacon("/api/events", new Blob([body], { type: "application/json" }))) return;
+  if (opts.beacon && typeof navigator.sendBeacon === "function") {
+    try {
+      // text/plain: 브라우저가 따로 묻지 않고(CORS 안전) 보낸다. 서버는 본문을 JSON으로 읽는다
+      if (navigator.sendBeacon("/api/events", new Blob([body], { type: "text/plain;charset=UTF-8" }))) return;
+    } catch {
+      // 못 보내면 아래 fetch로
     }
+  }
+  try {
     fetch("/api/events", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

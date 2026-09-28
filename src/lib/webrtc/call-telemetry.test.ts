@@ -157,4 +157,36 @@ describe("실패(call_failed)", () => {
     vi.advanceTimersByTime(STAGE_LIMIT_MS.offerHold);
     expect(of("stuck")[0]).toMatchObject({ stage: "presence", reason: "offer_without_presence" });
   });
+
+  it("채널 권한 거부는 앞선 실패가 있어도 남긴다 (세션을 끝내므로)", () => {
+    joinReady();
+    t.pcCreated();
+    t.fail(null, "failed");
+    t.fail("denied", "channel_unauthorized");
+    expect(of("failed").map((s) => s.type === "failed" && s.stage)).toEqual(["ice", "denied"]);
+  });
 });
+
+describe("정상 종료 (peerClosed)", () => {
+  it("상대가 끝내면 남은 단계 타이머를 멈추고 끊김 시간을 닫는다", () => {
+    joinReady();
+    t.pcCreated();
+    t.pcState("connected");
+    t.pcState("disconnected");
+    vi.advanceTimersByTime(3000);
+    t.peerClosed();
+    vi.advanceTimersByTime(STAGE_LIMIT_MS.ice);
+    expect(of("stuck")).toHaveLength(0);
+    expect(t.snapshot().disconnected_ms).toBe(3000);
+  });
+
+  it("연결 전에 끝나도 ice 지연을 남기지 않는다", () => {
+    joinReady();
+    t.pcCreated();
+    t.answerSent();
+    t.peerClosed();
+    vi.advanceTimersByTime(STAGE_LIMIT_MS.ice);
+    expect(of("stuck")).toHaveLength(0);
+  });
+});
+

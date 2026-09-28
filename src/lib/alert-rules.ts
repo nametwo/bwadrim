@@ -19,22 +19,34 @@ export function errorText(e: unknown): string {
   return String(e);
 }
 
-// 최근 windowMin분 동안 이 이름의 기록이 몇 개인지 (distinctRooms면 상담 수)
-async function recentCount(name: string, windowMin: number, distinctRooms = false): Promise<number> {
+// 최근 windowMin분 동안 운영 기록이 몇 개인지 (distinctRooms면 상담 수, keep으로 더 거른다)
+async function recentCount(
+  name: string,
+  windowMin: number,
+  distinctRooms = false,
+  keep: (p: Props) => boolean = () => true,
+): Promise<number> {
   const since = new Date(Date.now() - windowMin * 60_000).toISOString();
   const { data, error } = await createAdminClient()
     .from("events")
     .select("room_id, props")
     .eq("name", name)
+    .eq("props->>env", "production")
     .gte("created_at", since)
+    .order("created_at", { ascending: false })
     .limit(500);
   if (error || !data) return 0;
-  const rows = data.filter((r) => (r.props as Props | null)?.env === "production");
+  const rows = data.filter((r) => keep((r.props as Props | null) ?? {}));
   return distinctRooms ? new Set(rows.map((r) => r.room_id)).size : rows.length;
 }
 
+// 폰에서 온 글자는 디스코드 마크다운·링크로 해석되지 않게 막는다 (알림 채널을 꾸며 낸 글로 속이지 못하게)
+export function escapeMd(s: string): string {
+  return s.replace(/[\\*_~`|>\[\]()#-]/g, "\\$&").replace(/:\/\//g, ":\u200b//").replace(/@/g, "@\u200b");
+}
+
 function str(v: unknown) {
-  return v === undefined || v === null || v === "" ? "—" : String(v);
+  return v === undefined || v === null || v === "" ? "—" : escapeMd(String(v));
 }
 
 export async function alertOnEvent(roomId: string | null, actor: string, name: string, p: Props) {
@@ -54,7 +66,7 @@ export async function alertOnEvent(roomId: string | null, actor: string, name: s
       });
       if (!config && (await recentCount("turn_fallback", 30)) >= 3) {
         await notify("alert", {
-          title: "TURN 발급 실패가 30분에 3번 넘게 났어요",
+          title: "TURN 발급 실패가 30분에 3번 이상 났어요",
           lines: [`마지막 원인: ${str(p.reason)}${p.status ? ` (HTTP ${p.status})` : ""}`, "Cloudflare 상태를 확인해 주세요."],
           key: "turn-burst",
           cooldownSec: 3600,
@@ -78,9 +90,9 @@ export async function alertOnEvent(roomId: string | null, actor: string, name: s
         key: `failed-${roomId}-${str(p.stage)}-${actor}`,
         cooldownSec: 300,
       });
-      if (p.stage !== "room_gone" && (await recentCount("call_failed", 60, true)) >= 3) {
+      if (p.stage !== "room_gone" && (await recentCount("call_failed", 60, true, (q) => q.stage !== "room_gone")) >= 3) {
         await notify("alert", {
-          title: "1시간 안에 상담 3건 넘게 연결이 실패했어요",
+          title: "1시간 안에 상담 3건 이상 연결이 실패했어요",
           lines: [`마지막: ${str(p.stage)} · ${str(p.reason)} · ${roomLink(roomId)}`, "평소 채널에서 실패 내역을 확인해 주세요."],
           key: "failed-burst",
           cooldownSec: 3600,
@@ -105,7 +117,7 @@ export async function alertOnEvent(roomId: string | null, actor: string, name: s
       });
       if ((await recentCount("client_error", 10)) >= 10) {
         await notify("alert", {
-          title: "화면 오류가 10분에 10번 넘게 났어요",
+          title: "화면 오류가 10분에 10번 이상 났어요",
           lines: [`마지막: ${sig}`, "최근 배포를 확인해 주세요."],
           key: "cerr-burst",
           cooldownSec: 3600,

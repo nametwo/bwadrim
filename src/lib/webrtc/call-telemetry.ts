@@ -2,7 +2,7 @@
 // 제한 시간을 재고, 실패는 연결 시도마다 처음 것 하나만 골라 onSignal로 내보낸다. 화면 동작은 바꾸지 않는다(기록만).
 // 미디어 로직이라 webrtc 폴더 안에 둔다 — UI는 CallSignal만 받아 /api/events로 보낸다.
 
-export type CallStage = "signaling" | "denied" | "presence" | "negotiation" | "ice" | "in_call";
+export type CallStage = "room_gone" | "signaling" | "denied" | "presence" | "negotiation" | "ice" | "in_call";
 
 export interface LaneCounts {
   // 채널 상태별 횟수 (SUBSCRIBED 두 번째부터 = 다시 들어감)
@@ -332,6 +332,19 @@ export class CallTelemetry {
     });
   }
 
+  // 이쪽이 연결을 닫았다(상대 종료 bye·상대 이탈·기기 바뀜). 정상 종료 뒤에 제한 시간 알림이 늦게 뜨지 않게
+  // 단계 타이머를 멈추고, 열려 있던 끊김 시간을 닫는다
+  peerClosed() {
+    this.stopTimer("ice");
+    this.stopTimer("negotiation");
+    this.stopTimer("inCall");
+    this.stopTimer("offerHold");
+    if (this.disconnectedSince !== null) {
+      this.c.disconnectedMs += this.now() - this.disconnectedSince;
+      this.disconnectedSince = null;
+    }
+  }
+
   // 연결 중에 상대 presence가 사라졌다 — 이쪽이 멀쩡한 연결을 닫는다. 끊김의 흔한 경로라 실패로 남긴다
   presenceLost(pcState: RTCPeerConnectionState | null) {
     this.c.peerLeft++;
@@ -345,9 +358,10 @@ export class CallTelemetry {
   }
 
   // 실패. 시도마다 처음 것만 — 뒤따르는 실패(채널이 닫혀 곧 ICE도 실패 등)는 보내지 않는다.
+  // 채널 권한 거부(denied)는 세션을 끝내므로 앞선 실패가 있어도 남긴다(한 세션에 한 번뿐).
   // stage가 없으면(ICE failed) 연결된 적 있으면 in_call, 없으면 ice
   fail(stage: CallStage | null, reason: string, err?: unknown, pcState: RTCPeerConnectionState | null = null) {
-    if (this.failedAttempts.has(this.attempt)) return;
+    if (stage !== "denied" && this.failedAttempts.has(this.attempt)) return;
     this.failedAttempts.add(this.attempt);
     const s: CallStage = stage ?? (this.connectedThisAttempt ? "in_call" : "ice");
     this.failedList.push(`${s}:${reason}`);

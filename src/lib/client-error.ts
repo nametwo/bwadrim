@@ -9,8 +9,8 @@ const MAX_REPORTS = 5;
 const pid = typeof window === "undefined" ? "" : newPageId();
 const seen = new Set<string>();
 
-// 지금 화면 단계 (예: 'call:connecting'). 통화 화면이 바꿔 둔다 — 오류가 어디서 났는지 보려고
-export const errorContext: { phase: string | null } = { phase: null };
+// 지금 화면 단계(예: 'call:connecting')와 화면 pid. 통화 화면이 바꿔 둔다 — 오류가 어디서 났는지, 같은 화면의 다른 기록과 묶으려고
+export const errorContext: { phase: string | null; pid: string | null } = { phase: null, pid: null };
 
 function targetFromPath(path: string): TelemetryTarget | null {
   const join = /^\/join\/([0-9a-f]{32})(?:\/|$)/i.exec(path);
@@ -34,7 +34,7 @@ export function reportClientError(kind: "error" | "rejection" | "render", error:
   const src = err?.stack
     ? redactText(err.stack.split("\n").slice(1, 3).map((l) => l.trim()).join(" | "), 240)
     : undefined;
-  sendTelemetry(target, pid, "client_error", {
+  sendTelemetry(target, errorContext.pid ?? pid, "client_error", {
     kind,
     name,
     msg,

@@ -5,6 +5,7 @@ import { CallSession, type CallQuality, type CallSignal, type CallState } from "
 import { fetchIceServers, type IceConfig } from "@/lib/webrtc/ice";
 import { createTelemetry } from "@/lib/telemetry";
 import { CallReport } from "@/lib/call-report";
+import { errorContext } from "@/lib/client-error";
 import { keepScreenOn } from "@/lib/wake-lock";
 import { PointerMarker, usePointerMarker } from "@/components/pointer-marker";
 import { FreezeCanvas } from "@/components/freeze-canvas";
@@ -194,6 +195,9 @@ export function CameraStart({
   async function start() {
     setPhase("starting");
     const attempt = ++attemptRef.current;
+    // 다시 시도하면 앞 시도의 끝 상태·통화 관찰값을 지운다
+    report.set("exit", null);
+    report.attach(null);
     // 폰을 비추기만 하고 화면을 안 건드려서 자동 잠금으로 끊기기 쉽다 — 버튼 탭 안에서 요청
     releaseWakeLock();
     releaseWakeLockRef.current = keepScreenOn();
@@ -241,6 +245,9 @@ export function CameraStart({
       releaseWakeLock();
       setCallState("failed");
       setPhase("call");
+      report.setPhase("call:failed");
+      report.set("exit", "failed");
+      report.flush("failed", true);
       return;
     }
     sessionRef.current = session;
@@ -292,7 +299,7 @@ export function CameraStart({
         }
         if (s === "ended" || s === "failed" || s === "denied" || s === "replaced") {
           report.set("exit", s === "ended" ? "bye" : s);
-          report.flush(s);
+          report.flush(s, true);
           streamRef.current?.getTracks().forEach((t) => t.stop());
           releaseWakeLock();
           setConfirmEnd(false);
@@ -364,7 +371,6 @@ export function CameraStart({
     setGuideLink(null);
     resetGuide();
     report.inc("restarts");
-    report.set("exit", null);
     start();
   }
 
@@ -453,6 +459,13 @@ export function CameraStart({
 
   // 화면 요약(call_summary): 숨겨질 때·떠날 때 보낸다. 통화 밖 단계(시작·거부·끝남)도 기록
   useEffect(() => report.listen(), [report]);
+  // 이 화면의 JS 오류도 같은 pid로 묶는다
+  useEffect(() => {
+    errorContext.pid = tel.pid;
+    return () => {
+      if (errorContext.pid === tel.pid) errorContext.pid = null;
+    };
+  }, [tel]);
   useEffect(() => {
     if (phase !== "call") report.setPhase(phase);
   }, [phase, report]);

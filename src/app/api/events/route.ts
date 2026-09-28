@@ -123,13 +123,15 @@ export async function POST(request: Request) {
     return bad(404, "room not found");
   }
 
-  // 상담마다 개수 제한 — 링크를 가진 누구나 부를 수 있어서 (BUG-15). 셀 수 없으면(오류) 받는다
+  // 상담·쪽(고객/엔지니어)마다 개수 제한 — 링크를 가진 누구나 부를 수 있어서 (BUG-15).
+  // 쪽마다 따로 세야 고객 쪽 기록이 엔지니어 기록 자리를 다 쓰지 못한다. 셀 수 없으면(오류) 받는다
   if (LATE_OK.has(name)) {
     if (name === "call_summary") {
       const { data: existing } = await admin
         .from("call_reports")
         .select("pid")
         .eq("room_id", room.id)
+        .eq("actor", role)
         .limit(MAX_REPORTS_PER_ROOM + 1);
       if (existing && existing.length >= MAX_REPORTS_PER_ROOM && !existing.some((r) => r.pid === pid)) {
         return bad(429, "too many");
@@ -139,6 +141,7 @@ export async function POST(request: Request) {
         .from("events")
         .select("id", { count: "exact", head: true })
         .eq("room_id", room.id)
+        .eq("actor", role)
         .eq("name", name);
       if ((count ?? 0) >= MAX_PER_ROOM) return bad(429, "too many");
     }

@@ -156,7 +156,7 @@ export function computeDigest(rooms: DigestRoom[], events: DigestEvent[], report
   const rtts: number[] = [];
   const losses: number[] = [];
   for (const r of reports) {
-    if (!ids.has(r.room_id) || !isProd(r.report)) continue;
+    if (!ids.has(r.room_id) || r.actor !== "engineer" || !isProd(r.report)) continue;
     const q = r.report?.quality as Record<string, unknown> | undefined;
     if (!q) continue;
     if (typeof q.rtt_p50 === "number") rtts.push(q.rtt_p50);

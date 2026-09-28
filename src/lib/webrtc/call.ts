@@ -171,6 +171,11 @@ export class CallSession {
     });
   }
 
+  // 통화 밖에서 알게 된 실패를 같은 규칙(시도마다 처음 것 하나)으로 남긴다. 예: 끝난 상담이라 TURN 발급이 404
+  markFailed(stage: "room_gone", reason: string) {
+    this.tel.fail(stage, reason);
+  }
+
   // 화면 요약(call_summary)용 관찰값
   telemetry(): CallTelemetryReport {
     return { ...this.tel.snapshot(), quality: this.sampler.summary() };
@@ -342,6 +347,8 @@ export class CallSession {
   }
 
   private createPeer(peerId: string): RTCPeerConnection {
+    // 연결 시도 번호는 만들기 전에 올린다 — 생성자가 예외를 내도 새 시도의 실패로 센다
+    this.tel.pcCreated();
     const pc = new RTCPeerConnection({ iceServers: this.opts.iceServers });
 
     const stream = this.localStream;
@@ -370,7 +377,6 @@ export class CallSession {
 
     this.pc = pc;
     this.pcPeer = peerId;
-    this.tel.pcCreated();
     this.sampler.start(pc);
     return pc;
   }
@@ -667,6 +673,7 @@ export class CallSession {
   private resetPeer() {
     const old = this.pcPeer;
     this.sampler.stop();
+    this.tel.peerClosed();
     this.pc?.close();
     this.pc = null;
     this.pcPeer = null;
@@ -692,6 +699,7 @@ export class CallSession {
   private onBye() {
     if (this.closed) return;
     this.sampler.stop();
+    this.tel.peerClosed();
     this.pc?.close();
     this.pc = null;
     this.pcPeer = null;

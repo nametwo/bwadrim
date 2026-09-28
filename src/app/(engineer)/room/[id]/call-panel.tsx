@@ -7,6 +7,7 @@ import { CallSession, sendBye, type CallQuality, type CallSignal, type CallState
 import { fetchIceServers, type IceConfig } from "@/lib/webrtc/ice";
 import { createTelemetry } from "@/lib/telemetry";
 import { CallReport } from "@/lib/call-report";
+import { errorContext } from "@/lib/client-error";
 import { toVideoPos } from "@/lib/webrtc/pointer";
 import {
   applyDrawCommand,
@@ -197,6 +198,13 @@ export function CallPanel({
 
   // 화면 요약(call_summary): 숨겨질 때·떠날 때(대시보드로 이동 포함) 보낸다
   useEffect(() => report.listen(), [report]);
+  // 이 화면의 JS 오류도 같은 pid로 묶는다
+  useEffect(() => {
+    errorContext.pid = tel.pid;
+    return () => {
+      if (errorContext.pid === tel.pid) errorContext.pid = null;
+    };
+  }, [tel]);
   useEffect(() => {
     report.setPhase(state.phase === "call" ? `call:${state.call}` : state.phase);
   }, [state, report]);
@@ -320,8 +328,6 @@ export function CallPanel({
       releaseWakeLockRef.current?.();
       return;
     }
-    // 이미 끝났거나 만료된 상담에서 '연결 준비' — 화면은 채널 거부로 알게 된다(기존 동작). 원인은 여기서 남긴다
-    if (ice.roomGone) tel.post("call_failed", { stage: "room_gone", reason: "turn_404", ...callContext() });
     micStreamRef.current = mic;
     setMicOn(!!mic);
     setTurnError(ice.turnError);
@@ -338,6 +344,9 @@ export function CallPanel({
       throw e;
     }
     sessionRef.current = session;
+    // 이미 끝났거나 만료된 상담에서 '연결 준비' — 화면은 곧 채널 거부로 알게 된다(기존 동작).
+    // 원인은 여기서 같은 실패 규칙으로 남긴다(뒤따르는 denied는 따로 남음)
+    if (ice.roomGone) session.markFailed("room_gone", "turn_404");
     report.attach(() => {
       const { quality, ...call } = session.telemetry();
       return { quality, call, usage: { ...usageRef.current }, photos: photosRef.current.length };
@@ -389,7 +398,7 @@ export function CallPanel({
         if (call === "connecting") setSaveError(false);
         if (call === "denied" || call === "replaced") {
           report.set("exit", call);
-          report.flush(call);
+          report.flush(call, true);
           // 채널 권한이 없거나 다른 기기가 이어받았다 — 세션은 스스로 닫혔다.
           // 마이크·화면 켜짐도 풀고, '여기서 다시 받기'로 새 세션을 열 수 있게 비운다
           sessionRef.current = null;

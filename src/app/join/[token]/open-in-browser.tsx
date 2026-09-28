@@ -114,7 +114,10 @@ export function OpenInBrowser({
           <button
             type="button"
             onClick={() => {
+              // 이 안내 화면의 요약은 여기서 끝낸다 — 통화 화면이 자기 요약을 새로 쓴다
               report.set("exit", "stay");
+              report.flush("stay", true);
+              report.dispose();
               setStay(true);
             }}
             className="min-h-touch text-body-m text-text-secondary underline underline-offset-4"

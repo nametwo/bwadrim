@@ -20,8 +20,9 @@ export interface AlertMessage {
 
 const COLORS: Record<AlertLevel, number> = { info: 0x3b82f6, alert: 0xef4444 };
 
+// production은 Vercel이 운영 배포라고 알려 줄 때만. 로컬에서 next start로 띄워도 development
 export function appEnv(): string {
-  return process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "development";
+  return process.env.VERCEL_ENV ?? "development";
 }
 
 export function appVersion(): string {
@@ -112,18 +113,33 @@ export async function notify(level: AlertLevel, msg: AlertMessage): Promise<void
       console.warn(`[alerts] ${level} 웹훅 주소가 없어 보내지 않음: ${msg.title}`);
       return;
     }
-    if (msg.key && !(await claim(`${level}:${msg.key}`, msg.cooldownSec ?? 600))) return;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(discordPayload(level, msg)),
-      signal: AbortSignal.timeout(5000),
-      cache: "no-store",
-    });
-    if (!res.ok) {
-      console.error(`[alerts] 디스코드 ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
+    const key = msg.key ? `${level}:${msg.key}` : null;
+    if (key && !(await claim(key, msg.cooldownSec ?? 600))) return;
+    let ok = false;
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(discordPayload(level, msg)),
+        signal: AbortSignal.timeout(5000),
+        cache: "no-store",
+      });
+      ok = res.ok;
+      if (!ok) console.error(`[alerts] 디스코드 ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
+    } finally {
+      // 못 보냈으면 쿨다운을 되돌린다 — 안 그러면 실패한 알림이 쿨다운 동안 다시 안 간다
+      if (!ok && key) await release(key);
     }
   } catch (e) {
     console.error("[alerts] 보내기 실패:", e);
+  }
+}
+
+async function release(key: string) {
+  localSent.delete(key);
+  try {
+    await createAdminClient().rpc("release_alert", { p_key: key });
+  } catch {
+    // 되돌리지 못하면 쿨다운이 끝날 때까지 기다린다
   }
 }

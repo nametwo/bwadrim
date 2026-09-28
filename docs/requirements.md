@@ -440,7 +440,7 @@
 - **동작**: TURN을 못 받으면(키 미설정, Cloudflare 오류 등) STUN만으로 연결을 시도한다. 엔지니어 대기 화면에 노란 경고 '중계 서버 없이 연결하고 있어요 / 모바일 데이터끼리는 연결이 안 될 수 있어요 (원인)'이 뜬다. 통화 화면에서는 위쪽 오른쪽에 노란 경고 아이콘만 있고, 누르면 같은 문구가 영상 위에 펼쳐진다(영상을 가리지 않게).
 - **확인**: 경고의 괄호 안이 원인이다. `미설정`은 Vercel 환경 변수 누락, `cloudflare 401/403`은 토큰 오류, `cloudflare 404`는 Key ID 오류.
 - **기록·알림**: STUN만 내려갈 때마다 서버가 `turn_fallback`(원인 코드, Cloudflare 응답 코드, 누가 받았는지)을 남긴다. 키 미설정·Cloudflare 401/403/404처럼 모든 상담이 영향받는 원인은 응급 채널, 그 밖의 원인은 평소 채널로 알린다([OPS-06](#ops-06--디스코드-운영-알림-)). Cloudflare가 5초 안에 답하지 않으면 기다리지 않고 STUN으로 간다(`cf_timeout`). 폰 쪽에서 /api/turn 호출 자체가 실패하면(망 끊김, 10초 초과) 서버는 모르므로 연결 기록의 `turn_err`로 남는다.
-- **제약**: 고객 화면에는 경고가 없다. 세션 화면을 열어 둔 채 24시간이 지나면 '연결 준비' 때 '상담이 끝났거나 만료됐어요' 경고가 뜬다(새로 열면 만료 안내 화면이 나온다). 이때 `call_failed`(`room_gone`)를 남긴다.
+- **제약**: 고객 화면에는 경고가 없다. 세션 화면을 열어 둔 채 24시간이 지나면 '연결 준비' 때 '상담이 끝났거나 만료됐어요' 경고가 뜬다(새로 열면 만료 안내 화면이 나온다). 이때 `call_failed`(`room_gone`)를 남기고, 곧이어 채널 거부로 `call_failed`(`denied`)도 남는다.
 
 ### NET-04 · 서울 리전 ✅
 - **동작**: 서버 기능은 Vercel 서울(icn1)에서 실행된다. Supabase도 서울 리전으로 만들었다.
@@ -462,7 +462,7 @@
 ### DATA-01 · 지표 이벤트 목록 🚧
 - **동작**: 아래 이벤트를 Supabase `events` 표에 남긴다. 각 줄에는 세션, 누가(`engineer`/`customer`/`system`), 이름, 부가정보(`props`), 시각이 들어간다.
   - 모든 기록의 부가정보에 `v`(배포 버전, 커밋 앞 7자리)와 `env`(`production`·`preview`·`development`)를 붙인다. 바꾸기 전후를 나누고, 로컬·미리보기 기록을 지표에서 빼려고.
-  - 폰(고객·엔지니어 화면)에서 온 기록에는 `pid`(화면을 열 때마다 만드는 무작위 16자리)를 붙여 같은 화면의 기록을 묶는다. 폰에 저장하지 않는다([NFR-04](#nfr-04--폰에-세션-정보-저장-안-함-)).
+  - 폰(고객·엔지니어 화면)에서 온 기록에는 `pid`(화면을 열 때마다 만드는 무작위 16자리)를 붙여 같은 화면의 기록을 묶는다. JS가 붙기 전 감시 스크립트가 보내는 `client_error`(`no_hydration`)에는 없다. 폰에 저장하지 않는다([NFR-04](#nfr-04--폰에-세션-정보-저장-안-함-)).
   - 글자 값에 섞인 링크 토큰(32자리)은 `[token]`으로 지운다. 고객 이름·전화번호는 어떤 기록에도 넣지 않는다([NFR-07](#nfr-07--고객-연락처는-저장하지-않음-)).
   - 연결 과정 기록(`call_ready`·`call_stuck`·`call_failed`·`connected`)은 공통으로 `turn`(TURN을 받았는지)·`turn_err`(못 받은 원인 코드)를 붙이고, 고객은 `ms_since_camera`(카메라를 켠 뒤 지난 시간)·`gum_attempt`, 엔지니어는 `mic`·`ms_since_click`('연결 준비'부터)을 붙인다.
 
@@ -473,9 +473,9 @@
   | `link_blocked` | 종료됐거나 만료된 링크를 열어 '상담이 이미 끝났어요'·'링크가 만료됐어요'가 나올 때. 새로고침을 반복해도 세션마다 10분에 1번 | 고객(서버가 기록) | `reason`(`ended`/`expired`), `inapp` |
   | `camera_granted` | 고객 카메라가 켜졌을 때(마이크를 못 써 카메라만 켠 경우 포함, [JOIN-04](#join-04--카메라-켜기-)) | 고객 | `mic`(마이크도 켜졌는지 true/false), `ms_gum`(권한 창에 머문 시간 포함), `attempt`('카메라 켜기'를 누른 횟수) |
   | `camera_denied` | 카메라를 켜지 못했을 때(카메라만 다시 요청해도 실패). 마이크만 못 쓰면 기록하지 않고 `camera_granted`(`mic: false`)가 된다 | 고객 | `reason`(브라우저 오류 이름: `NotAllowedError` 거부·막힘, `NotReadableError` 다른 앱이 사용 중, `NotFoundError` 카메라 없음, `unsupported` 카메라 기능 없는 화면 등, [JOIN-05](#join-05--카메라-거부-안내-)), `ms_gum`(300ms 안에 실패하면 예전 거부가 저장돼 권한 창이 안 뜬 경우로 본다), `attempt` |
-  | `call_ready` | 통화 신호 채널 두 개에 모두 들어가고 presence 등록 결과를 받았을 때. '카메라 켜고 시작하기'·'연결 준비'마다 1번. 실패가 아니라 기준점이다 — 고객 `call_ready`는 있는데 엔지니어 `call_ready`가 없는 세션은 '엔지니어 미준비'로 따로 센다 | 고객·엔지니어 | `ms`(입장까지), `track`(`ok`/`timed out`), `ms_ice`(/api/turn 왕복) + 공통 |
-  | `call_stuck` | 한 단계가 제한 시간을 넘겼을 때. **화면은 바꾸지 않고 기록만** 한다. 채널 입장 15초(`signaling`, `sub`에 막힌 곳: `auth`·`subscribe:send`·`subscribe:listen`·`track`), presence 확인 20초·엔지니어가 presence를 못 본 고객의 offer를 15초 넘게 맡아 둠(`presence`), offer 뒤 answer 20초(`negotiation`), offer·answer 뒤 연결 45초(`ice`), 연결 뒤 끊김(disconnected)이 15초 이어짐(`in_call`). 연결 시도·단계마다 1번. 뒤에 `connected`가 오면 '느린 연결'이다 | 고객·엔지니어 | `stage`, `reason`, `ms`(그 단계에 들어간 뒤 지난 시간), `attempt` + 공통 |
-  | `call_failed` | 연결 시도가 실패로 끝났을 때. 연결 시도마다 **처음 난 실패 하나만** 남긴다(채널이 닫혀 곧 ICE도 실패하면 첫 원인만). `stage`: `room_gone`(링크를 연 사이 세션이 끝남·만료 — /api/turn 404, [JOIN-03](#join-03--잘못된-링크-안내-)·[NET-03](#net-03--turn-실패해도-통화는-계속--경고-)), `start`(통화 준비 중 예외 — 오래된 브라우저 등. 고객은 '연결이 끊겼어요' 화면으로 간다), `signaling`, `denied`(채널 권한 거부, `reason`: `track_error`·`channel_unauthorized`), `negotiation`(`offer_error`·`answer_error`·`accept_answer_error`), `ice`(연결 실패), `in_call`(연결 뒤 실패. 상대 presence가 사라져 이쪽이 연결을 닫았으면 `reason: peer_gone`) | 고객·엔지니어 | `stage`, `reason`, `err`(오류 앞 160자), `after_connected`, `pc_state`, `turn_age_ms`(TURN을 받은 뒤 지난 시간 — 2시간 만료 판별), 마지막 연결 이후 끊김·화면 숨김·망 전환·채널 문제 횟수 + 공통 |
+  | `call_ready` | 통화 신호 채널 두 개에 모두 들어가고 presence 등록 결과를 받았을 때. '카메라 켜고 시작하기'·'연결 준비'마다 1번. 실패가 아니라 기준점이다 — 고객 `call_ready`는 있는데 엔지니어 `call_ready`가 없는 세션은 '엔지니어 미준비'로 따로 센다 | 고객·엔지니어 | `ms`(입장까지), `track`(`ok`/`timed out`/`error`), `ms_ice`(/api/turn 왕복) + 공통 |
+  | `call_stuck` | 한 단계가 제한 시간을 넘겼을 때. **화면은 바꾸지 않고 기록만** 한다. 채널 입장 15초(`signaling`, `sub`에 막힌 곳: `auth`·`subscribe:send`·`subscribe:listen`·`subscribe:send+listen`·`track`), presence 확인 20초·엔지니어가 presence를 못 본 고객의 offer를 15초 넘게 맡아 둠(`presence`), offer 뒤 answer 20초(`negotiation`), offer·answer 뒤 연결 45초(`ice`), 연결 뒤 끊김(disconnected)이 15초 이어짐(`in_call`). 연결 시도·단계마다 1번. 뒤에 `connected`가 오면 '느린 연결'이다 | 고객·엔지니어 | `stage`, `reason`, `ms`(그 단계에 들어간 뒤 지난 시간), `attempt` + 공통 |
+  | `call_failed` | 연결 시도가 실패로 끝났을 때. 연결 시도마다 **처음 난 실패 하나만** 남긴다(채널이 닫혀 곧 ICE도 실패하면 첫 원인만). 채널 권한 거부(`denied`)는 세션을 끝내므로 앞선 실패가 있어도 남긴다. `stage`: `room_gone`(링크를 연 사이 세션이 끝남·만료 — /api/turn 404, [JOIN-03](#join-03--잘못된-링크-안내-)·[NET-03](#net-03--turn-실패해도-통화는-계속--경고-)), `start`(통화 준비 중 예외 — 오래된 브라우저 등. 고객은 '연결이 끊겼어요' 화면으로 간다), `denied`(채널 권한 거부, `reason`: `track_error`·`channel_unauthorized`), `negotiation`(`offer_error`·`answer_error`·`accept_answer_error`), `ice`(연결 실패), `in_call`(연결 뒤 실패. 상대 presence가 사라져 이쪽이 연결을 닫았으면 `reason: peer_gone`) | 고객·엔지니어 | `stage`, `reason`, `err`(오류 앞 160자), `after_connected`, `pc_state`, `turn_age_ms`(TURN을 받은 뒤 지난 시간 — 2시간 만료 판별), 마지막 연결 이후 끊김·화면 숨김·망 전환·채널 문제 횟수 + 공통 |
   | `connected` | 연결 시도마다 처음 연결되고 1초 뒤에도 연결돼 있을 때. 잠깐 끊겼다 돌아오면 다시 남기지 않는다 | 고객·엔지니어 | `relay`(이쪽 경로가 TURN 경유인지), `path`(내 쪽/상대 쪽 후보 종류, 예: `host/srflx`), `attempt`, `reconnect`(이 화면에서 두 번째 이후 연결), `ms_since_join`, `ms_since_offer` + 공통 |
   | `relay_used` | `connected`에서 이쪽 경로가 TURN을 거쳤을 때 | 고객·엔지니어 | |
   | `turn_fallback` | /api/turn이 TURN 없이 STUN만 돌려줄 때([NET-03](#net-03--turn-실패해도-통화는-계속--경고-)) | 서버(`system`) | `reason`(`env_missing`·`cf_http`·`cf_no_turn_url`·`cf_timeout`·`cf_exception`), `status`(Cloudflare 응답 코드), `ms`, `who`(`engineer`/`customer` — 로그인으로 판단) |
@@ -515,7 +515,7 @@
   - 고객: 링크 토큰이 있을 때 `camera_granted`, `camera_denied`, `call_ready`, `call_stuck`, `call_failed`, `connected`, `relay_used`, `client_error`, `call_summary`([DATA-07](#data-07--화면-요약-call_summary-))
   - 엔지니어: `role: engineer`와 로그인 쿠키가 그 세션의 주인일 때 `call_ready`, `call_stuck`, `call_failed`, `connected`, `relay_used`, `client_error`, `call_summary`
   - 열린(종료·만료 전) 세션에만 받는다. 단 `call_failed`·`client_error`·`call_summary`는 끝나는 순간에 가장 많이 생기므로 만료 뒤 24시간까지 받는다.
-  - 부가정보는 객체만, 4KB(요약은 16KB)까지. 세션마다 `call_failed`·`client_error`는 이름별 50개, 요약은 화면 40개까지(넘으면 429). 링크 토큰은 지운다.
+  - 부가정보는 객체만, 4KB(요약은 16KB)까지. 세션·쪽(고객/엔지니어)마다 `call_failed`·`client_error`는 이름별 50개, 요약은 화면 40개까지(넘으면 429) — 고객 쪽 기록이 엔지니어 쪽 자리를 쓰지 못하게 쪽마다 센다. 링크 토큰은 지운다.
   - `link_opened`·`link_blocked`·`turn_fallback`은 서버가 직접 남긴다.
 - **제약**: 링크를 가진 사람은 한도 안에서 가짜 기록을 보낼 수 있다(연결 상태 기록은 한도 없음) → [BUG-15](#bug-15--고객용-서버-기능에-횟수-제한검사-없음-낮음보안)
 - **관련 코드**: `src/app/api/events/route.ts`
@@ -623,7 +623,7 @@ Supabase → Authentication → Users → Add user → Create new user. **Auto C
 ### OPS-04 · DB 준비 ✅
 Supabase → SQL Editor에서 `supabase/schema.sql` 전체를 실행한다. 여러 번 실행해도 된다.
 - **제약**: 이미 있는 표는 건너뛰므로, 나중에 칸을 바꾸면 이 파일을 다시 실행하는 것만으로는 기존 DB에 반영되지 않는다. 규칙(정책)·함수는 다시 실행하면 새로 반영된다.
-- **운영 로깅 추가분**(2026-09-28): 화면 요약 표 `call_reports`([DATA-07](#data-07--화면-요약-call_summary-)), 알림 쿨다운 표 `private.alert_state`와 함수 `claim_alert`([OPS-06](#ops-06--디스코드-운영-알림-)). 새 코드를 배포하기 **전에** 이 파일을 한 번 더 실행한다. 안 하면 요약이 저장되지 않고 응급 알림이 온다(알림 쿨다운은 서버 인스턴스 안에서만 적용된다).
+- **운영 로깅 추가분**(2026-09-28): 화면 요약 표 `call_reports`([DATA-07](#data-07--화면-요약-call_summary-)), 알림 쿨다운 표 `private.alert_state`와 함수 `claim_alert`·`release_alert`([OPS-06](#ops-06--디스코드-운영-알림-)). 새 코드를 배포하기 **전에** 이 파일을 한 번 더 실행한다. 안 하면 요약이 저장되지 않고 응급 알림이 온다(알림 쿨다운은 서버 인스턴스 안에서만 적용된다).
 
 ### OPS-05 · Realtime 공개 채널 끄기 ✅
 Supabase → Realtime → Settings → **Allow public access(공개 채널 허용) 끄기**. 켜 두면 비공개 설정을 뺀 채널이 [CALL-12](#call-12--엔지니어-사칭-차단-)의 규칙을 거치지 않을 수 있다.
@@ -631,17 +631,18 @@ Supabase → Realtime → Settings → **Allow public access(공개 채널 허�
 - **적용**: 2026-09-24 운영 프로젝트에서 끔.
 
 ### OPS-06 · 디스코드 운영 알림 🚧
-- **동작**: 서버가 디스코드 웹훅 두 곳으로 알린다. 운영 배포(`VERCEL_ENV=production`)에서만 보내고, 로컬·미리보기는 서버 로그에만 남긴다. 같은 알림은 정해진 시간 안에 한 번만 간다(여러 서버 인스턴스가 동시에 보내지 않게 DB 함수 `claim_alert`로 막는다). 멘션(@everyone 등)은 하지 않는다. 링크 토큰은 지우고, 세션은 id 앞 8자리와 세션 화면 링크(방 주인만 열림)로 보인다.
+- **동작**: 서버가 디스코드 웹훅 두 곳으로 알린다. 운영 배포(`VERCEL_ENV=production`)에서만 보내고, 로컬·미리보기는 서버 로그에만 남긴다. 같은 알림은 정해진 시간 안에 한 번만 간다(여러 서버 인스턴스가 동시에 보내지 않게 DB 함수 `claim_alert`로 막고, 디스코드로 못 보냈으면 `release_alert`로 되돌려 다음에 다시 보낸다). 폰에서 온 글자(오류 메시지 등)는 디스코드 마크다운·링크로 해석되지 않게 막는다. 멘션(@everyone 등)은 하지 않는다. 링크 토큰은 지우고, 세션은 id 앞 8자리와 세션 화면 링크(방 주인만 열림)로 보인다.
 
   | 무엇 | 채널 | 다시 보내는 간격 |
   |---|---|---|
   | TURN 설정 오류 — 키 미설정, Cloudflare 401·403·404 (모든 상담이 중계 없이 연결) | 응급 | 30분 |
-  | TURN 발급 실패가 30분에 3번 넘음 | 응급 | 1시간 |
-  | 1시간 안에 세션 3개 넘게 `call_failed`(`room_gone` 빼고) | 응급 | 1시간 |
-  | 화면 오류가 10분에 10번 넘음 | 응급 | 1시간 |
+  | TURN 발급 실패가 30분에 3번 이상 | 응급 | 1시간 |
+  | 1시간 안에 세션 3개 이상 `call_failed`(`room_gone` 빼고) | 응급 | 1시간 |
+  | 화면 오류가 10분에 10번 이상 | 응급 | 1시간 |
   | DB 조회 실패 — 고객 링크를 못 엶(4초 제한 포함), /api/turn·/api/events 조회 오류 | 응급 | 15분 |
   | 지표 기록 실패(`events` 쓰기), 화면 요약 기록 실패(`call_reports`) | 응급 | 30분 · 1시간 |
-  | 하루 요약에서 기준을 넘음 ([OPS-07](#ops-07--하루-운영-요약-)) | 응급 | 하루 한 번 |
+  | 하루 요약에서 기준을 넘음 ([OPS-07](#ops-07--하루-운영-요약-)) | 응급 | 같은 날짜는 하루에 한 번 |
+  | 하루 요약을 만들지 못함 | 응급 | 1시간 |
   | 연결 실패 한 건 — 세션·누구·단계·원인·TURN·오류 | 평소 | 같은 세션·단계·쪽은 5분 |
   | TURN 없이 시작(설정 오류가 아닌 원인) | 평소 | 원인마다 10분 |
   | 화면 오류 한 건 | 평소 | 같은 오류는 1시간 |
@@ -650,14 +651,14 @@ Supabase → Realtime → Settings → **Allow public access(공개 채널 허�
 - **설정**: 디스코드 채널 → 편집 → 연동 → 웹후크 → 새 웹후크 → URL 복사. 평소 채널은 알림을 꺼 두고, 응급 채널은 켜 둔다. 주소를 [OPS-01](#ops-01--환경-변수-)의 `DISCORD_WEBHOOK_INFO`·`DISCORD_WEBHOOK_ALERT`에 넣는다. 주소는 비밀값이다 — 가진 사람은 누구나 그 채널에 글을 올릴 수 있으므로 저장소·대화에 남기지 말고, 새면 디스코드에서 웹후크를 지우고 새로 만든다.
 - **확인**: 운영에서 TURN 키를 잠깐 틀리게 넣고 통화를 시작하면 응급 채널에 'TURN 설정 오류'가 와야 한다. 아직 운영에서 확인하지 않았다.
 - **제약**: 알림 규칙을 바꾸면 이 표도 같이 고친다. 웹훅 주소가 없으면 조용히 건너뛴다(서버 로그에 경고).
-- **관련 코드**: `src/lib/alerts.ts`(보내기·쿨다운), `src/lib/alert-rules.ts`(규칙), `supabase/schema.sql`(`claim_alert`)
+- **관련 코드**: `src/lib/alerts.ts`(보내기·쿨다운), `src/lib/alert-rules.ts`(규칙), `supabase/schema.sql`(`claim_alert`·`release_alert`)
 
 ### OPS-07 · 하루 운영 요약 🚧
 - **동작**: Vercel Cron이 매일 오전 9시(한국 시간, `vercel.json`의 `0 0 * * *` UTC)에 `/api/cron/digest`를 부른다. 전날 한국 시간 0시~24시에 만든 세션을 세어 평소 채널에 보낸다: 세션·링크 연·카메라 켠·연결된 수, 원격 해결률, 실측 연결 실패율, 엔지니어 미준비, 연결까지 걸린 시간 p50·p90, 실패 단계별·제한 시간 초과 단계별 세션 수, 통화 중 끊김률, TURN 중계 비율, TURN 없이 시작한 세션과 원인, 카메라 거부 원인, 화면 오류 수와 많이 난 오류, 통화 품질(엔지니어 요약의 RTT p50 중앙값·손실 평균). 계산법은 [DATA-02](#data-02--핵심-지표-계산법-).
   - 실측 연결 실패율이 5%를 넘거나(세션 20건 이상일 때, [NFR-05](#nfr-05--영상-연결은-브라우저-기본-기능으로-)) TURN 없이 시작한 세션이 1건이라도 있으면 응급 채널에도 한 줄 보낸다.
   - 로컬·미리보기에서 만든 세션(`room_created.env`가 `production`이 아님)은 뺀다.
 - **확인**: `curl -H "Authorization: Bearer <CRON_SECRET>" "<운영 주소>/api/cron/digest?date=2026-09-27"`로 그날 요약을 다시 보낼 수 있다(응답에 계산 결과 JSON). 아직 운영에서 확인하지 않았다.
-- **제약**: `CRON_SECRET`이 없으면 아무도 부를 수 없다(500). Vercel Hobby 요금제의 Cron은 정한 시각 전후 한 시간 안에 돈다. 운영 계정으로 한 테스트 세션도 운영 세션으로 센다. 하루 세션이 1000개를 넘으면 앞 1000개만 센다.
+- **제약**: `CRON_SECRET`이 없으면 아무도 부를 수 없다(500). Vercel Hobby 요금제의 Cron은 정한 시각부터 한 시간 안에(오전 9시~9시 59분) 돈다. 운영 계정으로 한 테스트 세션도 운영 세션으로 센다. 하루 세션이 1000개를 넘으면 앞 1000개만 센다.
 - **관련 코드**: `src/app/api/cron/digest/route.ts`, `src/lib/ops-digest.ts`, `vercel.json`
 
 ---
@@ -772,7 +773,7 @@ TURN 발급과 고객 지표 기록은 유효한 링크 토큰만 있으면 몇 
 
 | 날짜 | 내용 |
 |---|---|
-| 2026-09-28 | 운영 로깅 도입: 실패·지연·준비 이벤트(`call_failed`·`call_stuck`·`call_ready`), 막힌 링크(`link_blocked`), TURN 폴백(`turn_fallback`), 화면 오류(`client_error`, JS 미실행 감시 포함), 화면 요약(`call_summary` → `call_reports`, 통화 품질 getStats 요약), 모든 기록에 배포 버전·환경·화면 id, 토큰 지우기. 디스코드 평소·응급 알림과 하루 요약(Vercel Cron). 엔지니어도 `connected`·`relay_used`를 남기고 `connected`는 시도마다 한 번. 고객 링크 조회 4초 제한, Cloudflare 5초·폰 /api/turn 10초 제한, 고객 통화 준비 예외 시 '연결이 끊겼어요' 화면. 통계 화면은 지표 이벤트만 읽음. 바뀐 요구사항: JOIN-03, NET-03, DATA-01·02·04·06, DATA-07(추가), OPS-01·04, OPS-06·07(추가), BUG-14·15(일부 해결) |
+| 2026-09-28 | 운영 로깅 도입: 실패·지연·준비 이벤트(`call_failed`·`call_stuck`·`call_ready`), 막힌 링크(`link_blocked`), TURN 폴백(`turn_fallback`), 화면 오류(`client_error`, JS 미실행 감시 포함), 화면 요약(`call_summary` → `call_reports`, 통화 품질 getStats 요약), 모든 기록에 배포 버전·환경·화면 id, 토큰 지우기. 디스코드 평소·응급 알림과 하루 요약(Vercel Cron). 엔지니어도 `connected`·`relay_used`를 남기고 `connected`는 시도마다 한 번. 고객 링크 조회 4초 제한, Cloudflare 5초·폰 /api/turn 10초 제한, 고객 통화 준비 예외 시 '연결이 끊겼어요' 화면. 통계 화면은 지표 이벤트만 읽음. 코드 검토 반영: 정상 종료 뒤 엔지니어 쪽 제한 시간 알림이 늦게 뜨던 문제, 기록 한도를 쪽마다, 알림 문구 마크다운 막기, 못 보낸 알림 쿨다운 되돌림, 응급 기준 'N번 이상'. 바뀐 요구사항: JOIN-03, NET-03, DATA-01·02·04·06, DATA-07(추가), OPS-01·04, OPS-06·07(추가), BUG-14·15(일부 해결) |
 | 2026-09-28 | 화면 문구 윤문(기계로 쓴 듯한 말투 걷어 냄): 공식 같은 제목('설치 없이, 링크 하나로' → '고장 난 곳, 기사님이 봐드려요'), 대시(—)·가운데점(·)으로 억지로 이은 두 문장을 띠 두 줄이나 한 문장으로, 괄호 설명('마이크 꺼짐(보기만)' 등)을 풀어 씀, '잠시 연결이 원활하지 않아요'·'이용해 주셔서 감사합니다' 같은 상투어 뺌, '~해 드려요' 반복 줄임, 보조 용언 띄어쓰기 통일('봐 주세요'·'비춰 주세요'), 고객에게 보내는 문자·전화로 읽어 줄 말은 실제 말투로, 탭 제목 '—' → '\|'. 바뀐 요구사항: AUTH-01·02·03·08, ROOM-01·04·05·06·10·11·12, JOIN-02·03·04·05·06·08·09·10·11·12, CALL-01·02·04·07·09·10·13·14·15·16, NET-03, DATA-06, BUG-13(상태 문구) |
 | 2026-09-28 | 토스식 디자인 개편(글은 줄이고 위계를 세움): 화면마다 큰 제목 하나(할 일·지금 상태)와 한두 줄 설명, 누를 것은 아래에 붙는 BottomCta, 테두리 상자 대신 회색 카드·흰 카드, secondary 버튼을 회색 바탕으로. 대시보드(이번 달 카드 한 장에 해결률 막대, 진행 중은 '고객님 기다리는 중'/'결과 기록 전'이 먼저, '새 A/S 시작'을 아래로), 링크 보내기(고객이 받을 문자 미리보기), 고객 기다리는 중(제목 = 지금 단계, 진행 상황 세로선, 실패 띠 → 제목), 결과 기록(질문이 제목, 답 → 사진 → 통화 요약 순), 끝난 상담(결과가 제목), 통계(해결률 큰 카드 + 2×2, 주의점 접기), 첫 화면(엔지니어 로그인 회색 — 요구사항대로), 로그인, 고객 시작 화면(기사님 한 줄 → 제목 → 두 단계, ③ 화살표 안내 뺌), 카메라 거부 안내 문구 줄임, TURN 경고 문구. 바뀐 요구사항: AUTH-01·02, ROOM-04·05·06·07·10·11·13, JOIN-02·05, CALL-01·02·07, NET-03, DATA-06, NFR-02·08 |
 | 2026-09-28 | CALL-16 사진 찍기 추가: 엔지니어가 누르면 고객 폰 카메라로 원본을 찍어 전용 DataChannel `photo`로 받고(고객 화면 '기사님이 사진을 찍었어요'), 통화를 끝낼 때 결과 기록에서 폰에 저장할지 묻는다(공유 창·다운로드, 서버 저장 없음). '영상은 저장하지 않아요' → '통화 영상은 저장하지 않아요'. 바뀐 요구사항: AUTH-01, ROOM-10, JOIN-02, CALL-16(추가), DATA-01(`photo_taken` 추가) |
