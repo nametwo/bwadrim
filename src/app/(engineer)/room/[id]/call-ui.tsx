@@ -1,82 +1,77 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
-import { formatClock } from "@/lib/format";
+import type { ReactNode } from "react";
+import Link from "next/link";
+import type { CallQuality } from "@/lib/webrtc/call";
+import { ChevronLeftIcon } from "@/components/ui/icons";
 
-// 엔지니어 통화 화면(어두운 표면) 조각들 (CALL-04).
+// 엔지니어 세션 화면 조각들 (피그마 E03~E11, P01).
 
-/** 연결된 뒤 흐른 시간 '통화 중 · 3:12'. 1초마다 자기만 다시 그린다(통화 화면 전체를 다시 그리지 않게) */
-export function CallTimer({ since }: { since: number }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  return <span className="tabular-nums">{formatClock((now - since) / 1000)}</span>;
-}
+export { CallTimer } from "@/components/ui/call-timer";
 
-type ToolTone = "default" | "primary" | "danger" | "on";
-
-const TOOL_TONE: Record<ToolTone, string> = {
-  default: "bg-call-control text-call-text active:bg-call-control-pressed",
-  primary: "bg-primary text-on-primary active:bg-primary-pressed",
-  danger: "bg-danger text-on-primary active:bg-danger-pressed",
-  // 손전등 켜짐 — CALL-11 예외 색(노랑)
-  on: "bg-yellow-400 text-gray-900",
-};
-
-/** 십자키 양옆의 도구 버튼: 아이콘 위, 글자 아래. 한 손 엄지로 누르기 좋게 크게 */
-export function ToolButton({
-  icon,
-  label,
-  onClick,
-  disabled,
-  tone = "default",
-  pressed,
-  testId,
-}: {
-  icon: ReactNode;
-  label: ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-  tone?: ToolTone;
-  pressed?: boolean;
-  testId?: string;
-}) {
+/** 통화 상단 오른쪽 알약 — 피그마 CallTopBar의 Quality=좋음·불안정 */
+export function QualityPill({ quality, connecting }: { quality: CallQuality; connecting: boolean }) {
+  const bad = quality === "unstable";
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-pressed={pressed}
-      data-testid={testId}
-      className={`flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-1 rounded-2xl px-1 py-2 text-center text-label-m transition-transform active:scale-[0.97] disabled:opacity-40 ${TOOL_TONE[tone]}`}
+    <span
+      data-testid="eng-quality"
+      className="inline-flex flex-none items-center gap-1.5 rounded-full bg-call-control px-3 py-1.5 text-label-s text-call-text"
     >
-      {icon}
-      <span className="leading-tight">{label}</span>
-    </button>
+      <span aria-hidden="true" className={`size-2 rounded-full ${connecting || bad ? "bg-warning" : "bg-success"}`} />
+      {connecting ? "연결 중" : bad ? "불안정" : "연결 좋음"}
+    </span>
   );
 }
 
-/** 통화 화면 위쪽의 알림 줄 (노랑=주의, 빨강=실패, 회색=안내) */
-export function CallBanner({
-  tone = "info",
-  children,
-  role,
+/** 밝은 화면 위쪽 바 — 피그마 AppBar: 뒤로가기 + 제목, 오른쪽 동작 */
+export function AppBar({
+  title,
+  back = true,
+  right,
 }: {
-  tone?: "info" | "warning" | "danger";
-  children: ReactNode;
-  role?: "alert" | "status";
+  title: ReactNode;
+  back?: boolean;
+  right?: ReactNode;
 }) {
-  const cls =
-    tone === "warning"
-      ? "bg-warning-tint text-text-warning"
-      : tone === "danger"
-        ? "bg-danger-tint text-text-danger"
-        : "bg-black-80 text-call-text";
   return (
-    <p role={role} className={`rounded-xl px-3 py-2 text-body-s font-medium shadow-float ${cls}`}>
-      {children}
-    </p>
+    <header className="flex min-h-14 items-center gap-1">
+      {back && (
+        <Link
+          href="/dashboard"
+          aria-label="상담 목록으로"
+          className="-ml-2 grid size-touch place-items-center rounded-xl text-icon active:bg-bg-muted"
+        >
+          <ChevronLeftIcon className="size-6" />
+        </Link>
+      )}
+      <h1 className="min-w-0 flex-1 truncate text-title-s">{title}</h1>
+      {right}
+    </header>
+  );
+}
+
+/** PC 오른쪽 패널의 키보드 안내 — 피그마 P01 */
+export function ShortcutsBox() {
+  const rows: [string, string][] = [
+    ["← → ↑ ↓", "방향 (누르고 있는 동안)"],
+    ["=  /  -", "가까이 / 멀리"],
+    ["F", "멈추고 그리기 / 라이브로"],
+    ["클릭", "빨간 동그라미 (3초)"],
+    ["길게 클릭", "물체에 붙는 핀"],
+  ];
+  return (
+    <div className="flex w-full flex-col gap-2 rounded-2xl bg-call-control/60 p-4">
+      <p className="text-caption text-call-text-secondary">키보드·마우스</p>
+      <dl className="flex flex-col gap-2">
+        {rows.map(([k, v]) => (
+          <div key={k} className="flex items-center gap-3">
+            <dt className="min-w-[88px]">
+              <kbd className="rounded-md bg-call-control px-2 py-1 font-sans text-caption text-call-text">{k}</kbd>
+            </dt>
+            <dd className="text-body-s text-call-text-secondary">{v}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }

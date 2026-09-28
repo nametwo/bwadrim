@@ -66,7 +66,11 @@ export interface CallSessionOptions {
   onPeerPresent?: (present: boolean) => void;
   // 상대 기기가 바뀌었다 (새로고침 또는 다른 기기에서 링크를 열었음)
   onPeerChanged?: () => void;
+  // 연결된 뒤 잠깐 끊겼다(unstable) / 다시 붙었다(good). 브라우저가 스스로 다시 붙거나, 못 붙으면 failed가 된다
+  onQuality?: (quality: CallQuality) => void;
 }
+
+export type CallQuality = "good" | "unstable";
 
 // presence에 올리는 내 정보. at = 들어온 시각(서버 기준)
 interface Member {
@@ -308,8 +312,13 @@ export class CallSession {
     };
     pc.onconnectionstatechange = () => {
       if (this.closed || this.pc !== pc) return;
-      if (pc.connectionState === "connected") this.opts.onState("connected");
-      else if (pc.connectionState === "failed") this.fail();
+      if (pc.connectionState === "connected") {
+        this.opts.onQuality?.("good");
+        this.opts.onState("connected");
+      } else if (pc.connectionState === "disconnected") {
+        // 망이 잠깐 흔들림(와이파이↔데이터 전환, 엘리베이터 등). 대개 몇 초 안에 connected로 돌아온다
+        this.opts.onQuality?.("unstable");
+      } else if (pc.connectionState === "failed") this.fail();
     };
 
     this.pc = pc;

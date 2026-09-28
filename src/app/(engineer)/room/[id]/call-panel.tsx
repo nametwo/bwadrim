@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CallSession, sendBye, type CallState } from "@/lib/webrtc/call";
+import { CallSession, sendBye, type CallQuality, type CallState } from "@/lib/webrtc/call";
 import { fetchIceServers } from "@/lib/webrtc/ice";
 import { toVideoPos } from "@/lib/webrtc/pointer";
 import {
@@ -13,7 +13,9 @@ import {
   type Stroke,
 } from "@/lib/webrtc/draw";
 import { keepScreenOn } from "@/lib/wake-lock";
+import { takeMicAhead } from "@/lib/webrtc/mic-ahead";
 import type { CameraState } from "@/lib/webrtc/camera";
+import type { GuideCmd, GuideMsg } from "@/lib/webrtc/guide";
 import { PointerMarker, usePointerMarker } from "@/components/pointer-marker";
 import { FreezeCanvas, type DrawHandlers } from "@/components/freeze-canvas";
 import {
@@ -22,42 +24,45 @@ import {
 } from "@/components/anchor/engineer-anchor";
 import { LongPressRing } from "@/components/anchor/long-press-ring";
 import { GuideDpad } from "@/components/guide-dpad";
-import type { GuideMsg } from "@/lib/webrtc/guide";
+import { GuidePill } from "@/components/guide-pill";
+import { Banner } from "@/components/ui/banner";
+import { Brand } from "@/components/ui/brand";
 import { Button } from "@/components/ui/button";
+import { CallControl } from "@/components/ui/call-control";
 import { Sheet } from "@/components/ui/sheet";
 import { NoticeScreen } from "@/components/ui/notice-screen";
 import {
   AlertIcon,
-  CarIcon,
-  CheckIcon,
-  ChevronLeftIcon,
   EraserIcon,
   FlashlightIcon,
   FlipCameraIcon,
+  FreezeIcon,
   MicIcon,
   MicOffIcon,
-  PencilIcon,
   PhoneIcon,
   PhoneOffIcon,
   PlayIcon,
   Spinner,
   UndoIcon,
 } from "@/components/ui/icons";
-import { endRoom, logToolUsed, markRoomActive } from "./actions";
-import { ShareButtons } from "./share-buttons";
-import { CallBanner, CallTimer, ToolButton } from "./call-ui";
+import { endRoom, getJoinProgress, logToolUsed, markRoomActive, type JoinProgress } from "./actions";
+import type { SentVia } from "./share-buttons";
+import { AppBar, CallTimer, QualityPill, ShortcutsBox } from "./call-ui";
+import { WaitingView } from "./waiting-view";
+import { RecordView, type CallSummary } from "./record-view";
 
 type PanelState =
   | { phase: "idle" }
   | { phase: "call"; call: CallState; peerPresent: boolean }
-  // 종료 후 확인. by: 누가 끝냈는지
-  | { phase: "confirm-end"; by: "engineer" | "customer" };
+  // 결과 기록(E11). by: 누가 통화를 끝냈는지
+  | { phase: "record"; by: "engineer" | "customer" }
+  // 연결된 적 없는 상담을 닫는 중(저장)
+  | { phase: "closing" };
 
-// 끝내기 확인 창: end = 해결 여부를 고르면 끝남(연결된 적 있음), close = 연결 없이 닫기
+// 끝내기 확인 창: end = 통화를 끝낼까요?(E10, 연결된 적 있음), close = 연결 없이 닫기
 type EndSheetKind = "end" | "close" | null;
 
-// 확인 화면이 뜬 직후의 탭은 무시한다. 종료 버튼을 두 번 누르면 두 번째 탭이
-// 같은 자리에 뜬 답 버튼에 떨어져 핵심 지표가 잘못 저장된다
+// 확인 창이 뜬 직후의 탭은 무시한다. 종료 버튼을 두 번 누르면 두 번째 탭이 같은 자리에 뜬 버튼에 떨어진다
 const CONFIRM_ARM_MS = 600;
 
 // 길게 누르기(AR 핀, CALL-14) 판정: 이 시간 이상 누르고, 그동안 손가락이 이 거리 안에 있으면 핀.
@@ -65,8 +70,20 @@ const CONFIRM_ARM_MS = 600;
 const LONG_PRESS_MS = 500;
 const PRESS_SLOP_PX = 12;
 
-// 엔지니어 통화 패널 (ROOM-05, CALL-01·04). 화면은 상태마다 하나의 할 일만 보여 준다:
-//   준비(마이크 켜기) → 대기(고객님께 링크 보내기) → 통화(어두운 전체 화면, 영상 + 십자키·도구) → 해결 여부
+// 고객 진행 상황(ROOM-13)을 묻는 간격
+const PROGRESS_POLL_MS = 3000;
+
+const NO_SUMMARY: CallSummary = { talkSec: null, pointer: 0, guide: 0, draw: 0 };
+
+// 방향키 등 텍스트 입력 중인지 (F 단축키가 입력을 가로채지 않게)
+function isTyping(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+}
+
+// 엔지니어 세션 화면 (피그마 E03~E11·P01, ROOM-05·10·13, CALL-01·04).
+//   고객 부르기(링크 보내기 → 고객 진행 상황) → 통화(어두운 전체 화면, 영상 + 십자키·도구) → 통화를 끝낼까요? → 결과 기록
+// 대시보드의 '새 A/S 시작'·'이어하기' 탭에서 마이크를 미리 받아 두면(mic-ahead) 화면이 뜨자마자 통화 대기를 시작한다.
 // 폰 한 손 조작 기준: 누를 것은 아래쪽에, 크게.
 export function CallPanel({
   roomId,
@@ -90,6 +107,8 @@ export function CallPanel({
   const [everConnected, setEverConnected] = useState(initialEverConnected);
   const [micOn, setMicOn] = useState(false);
   const [starting, setStarting] = useState(false);
+  // 대시보드에서 마이크를 미리 받아 와 스스로 시작하는 중 (버튼 없이 링크 보내기 화면을 먼저 보여 준다)
+  const [autoStarting, setAutoStarting] = useState(false);
   const [sheet, setSheet] = useState<EndSheetKind>(null);
   const [ending, setEnding] = useState(false);
   const [saveError, setSaveError] = useState(false);
@@ -97,11 +116,19 @@ export function CallPanel({
   const [turnOpen, setTurnOpen] = useState(false);
   // 처음 연결된 시각 — 통화 시간 표시
   const [connectedAt, setConnectedAt] = useState<number | null>(null);
+  // 연결된 뒤 잠깐 끊김 (피그마 E09)
+  const [quality, setQuality] = useState<CallQuality>("good");
   // 고객 쪽 소리가 오는지. 고객이 전화 통화 중이라 마이크 없이 카메라만 켰으면 false (JOIN-04)
   const [peerMic, setPeerMic] = useState<boolean | null>(null);
-  // 처음 쓰기 전까지만 보이는 사용법 안내 (영상 제스처, 십자키)
+  // 처음 쓰기 전까지만 보이는 사용법 안내 (영상 제스처)
   const [gestureLearned, setGestureLearned] = useState(false);
-  const [dpadLearned, setDpadLearned] = useState(false);
+  // 지금 고객 화면에 떠 있는 방향 지시 (피그마 GuidePill)
+  const [guideCmd, setGuideCmd] = useState<GuideCmd | null>(null);
+  // 링크를 어떻게 보냈는지(E03 → E04), 고객이 어디까지 왔는지 (ROOM-13)
+  const [sentVia, setSentVia] = useState<SentVia | null>(null);
+  const [progress, setProgress] = useState<JoinProgress | null>(null);
+  // 결과 기록 화면에 보여 줄 통화 요약
+  const [summary, setSummary] = useState<CallSummary>(NO_SUMMARY);
   // 고객 쪽 기기가 바뀐 직후 잠깐 알린다 (BUG-04: 링크가 새서 다른 사람이 들어온 경우를 알아채게)
   const [peerChanged, setPeerChanged] = useState(false);
   const peerChangedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -111,12 +138,16 @@ export function CallPanel({
   const remoteStreamRef = useRef<MediaStream | null>(null);
   // 화면을 떠난 뒤 늦게 끝난 start()·finish()가 세션을 만들거나 화면을 옮기지 않게 한다
   const unmountedRef = useRef(false);
-  // 저장 중에는 고객이 다시 들어와도 확인 화면에 머문다
+  // 저장 중에는 고객이 다시 들어와도 기록 화면에 머문다
   const endingRef = useRef(false);
   const lastCallRef = useRef<CallState>("waiting");
   const confirmShownAtRef = useRef(0);
   const releaseWakeLockRef = useRef<(() => void) | null>(null);
   const toolsLoggedRef = useRef(new Set<"pointer_used" | "freeze_used" | "anchor_used" | "guide_used">());
+  // 통화 요약용 횟수 (가리키기·핀, 방향 지시 누름, 그린 선)
+  const usageRef = useRef({ pointer: 0, guide: 0, draw: 0 });
+  const lastGuideRef = useRef<GuideCmd | null>(null);
+  const connectedAtRef = useRef<number | null>(null);
   // 화면 멈춤 + 그리기 (CALL-09)
   const [frozen, setFrozen] = useState<string | null>(null);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
@@ -155,6 +186,18 @@ export function CallPanel({
     };
   }, []);
 
+  // 대시보드 탭에서 미리 받아 둔 마이크가 있으면 버튼 없이 바로 통화 대기를 시작한다 (CALL-01)
+  useEffect(() => {
+    const ahead = takeMicAhead(roomId);
+    if (!ahead) return;
+    queueMicrotask(() => {
+      setAutoStarting(true);
+      start(ahead);
+    });
+    // start는 이 화면이 처음 뜰 때 한 번만
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId]);
+
   // remote stream을 video에 연결
   useEffect(() => {
     if (
@@ -167,17 +210,42 @@ export function CallPanel({
     }
   });
 
-  // 마이크 요청은 반드시 버튼 탭(제스처) 이후
-  async function start() {
+  // 고객 진행 상황: 고객을 기다리는 동안 몇 초마다 묻는다 (링크 열림 → 카메라 허용·거부)
+  const waitingForCustomer =
+    (state.phase === "call" && state.call !== "connected" && !(state.call === "connecting" && state.peerPresent)) ||
+    (state.phase === "idle" && autoStarting);
+  useEffect(() => {
+    if (!waitingForCustomer) return;
+    let stopped = false;
+    const poll = async () => {
+      if (document.hidden) return;
+      const p = await getJoinProgress(roomId).catch(() => null);
+      if (!stopped && p) setProgress(p);
+    };
+    poll();
+    const id = setInterval(poll, PROGRESS_POLL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
+  }, [waitingForCustomer, roomId]);
+
+  // 마이크 요청은 반드시 탭(제스처) 이후 — 여기서 직접 누른 '연결 준비' 또는 대시보드에서 받아 둔 것(ahead)
+  async function start(ahead?: { mic: Promise<MediaStream | null>; releaseWakeLock: () => void } | null) {
     if (starting || sessionRef.current) return;
     setStarting(true);
     releaseWakeLockRef.current?.();
-    releaseWakeLockRef.current = keepScreenOn();
     let mic: MediaStream | null = null;
-    try {
-      mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      // 마이크 거부/없음 — 영상 보기만이라도 진행
+    if (ahead) {
+      releaseWakeLockRef.current = ahead.releaseWakeLock;
+      mic = await ahead.mic;
+    } else {
+      releaseWakeLockRef.current = keepScreenOn();
+      try {
+        mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch {
+        // 마이크 거부/없음 — 영상 보기만이라도 진행
+      }
     }
     const ice = await fetchIceServers(joinToken);
     if (unmountedRef.current) {
@@ -202,19 +270,23 @@ export function CallPanel({
           setStrokes([]);
           setCamState(null);
           setCamPending(false);
+          setQuality("good");
+          setGuideCmd(null);
         }
         if (call === "connected") {
           setEverConnected(true);
-          setConnectedAt((t) => t ?? Date.now());
+          if (connectedAtRef.current === null) connectedAtRef.current = Date.now();
+          setConnectedAt(connectedAtRef.current);
           // 연결된 적 없는 세션의 '닫을까요?'는 더 맞지 않다 (해결 여부를 물어야 한다)
           setSheet((s) => (s === "close" ? null : s));
           markRoomActive(roomId);
         }
         if (call === "ended") {
-          // 고객이 끊으면 열려 있던 확인 창은 해결 여부 화면으로 대체된다
+          // 고객이 끊으면 열려 있던 확인 창은 결과 기록 화면으로 대체된다
           confirmShownAtRef.current = Date.now();
           setSaveError(false);
           setSheet(null);
+          setSummary(snapshotSummary());
         }
         if (call === "connecting") setSaveError(false);
         if (call === "denied" || call === "replaced") {
@@ -228,7 +300,7 @@ export function CallPanel({
           setSheet(null);
         }
         setState((prev) => {
-          if (prev.phase === "confirm-end") {
+          if (prev.phase === "record") {
             // 답하기 전에 다른 기기가 이어받았으면 여기서는 답하지 않는다 (이어받은 기기가 계속한다)
             if (call === "replaced" && !endingRef.current) {
               return { phase: "call", call, peerPresent: false };
@@ -240,7 +312,8 @@ export function CallPanel({
               ? { phase: "call", call, peerPresent: true }
               : prev;
           }
-          if (call === "ended") return { phase: "confirm-end", by: "customer" };
+          if (prev.phase === "closing") return prev;
+          if (call === "ended") return { phase: "record", by: "customer" };
           return {
             phase: "call",
             call,
@@ -248,6 +321,7 @@ export function CallPanel({
           };
         });
       },
+      onQuality: setQuality,
       onCameraState: (cs) => {
         clearTimeout(camTimerRef.current);
         setCamPending(false);
@@ -276,8 +350,9 @@ export function CallPanel({
     setAnchorLink(session.anchorLink);
     setGuideLink(session.guideLink);
     session.join();
-    setState({ phase: "call", call: "waiting", peerPresent: false });
+    setState((prev) => (prev.phase === "idle" ? { phase: "call", call: "waiting", peerPresent: false } : prev));
     setStarting(false);
+    setAutoStarting(false);
   }
 
   function stopSession() {
@@ -291,6 +366,12 @@ export function CallPanel({
     releaseWakeLockRef.current = null;
   }
 
+  function snapshotSummary(): CallSummary {
+    const u = usageRef.current;
+    const at = connectedAtRef.current;
+    return { talkSec: at === null ? null : (Date.now() - at) / 1000, pointer: u.pointer, guide: u.guide, draw: u.draw };
+  }
+
   // 영상을 탭한 곳을 고객 화면에 표시한다. 영상 밖 검은 여백은 무시
   function pointAt(clientX: number, clientY: number) {
     const video = videoRef.current;
@@ -301,6 +382,7 @@ export function CallPanel({
     if (!pos) return;
     session.sendPointer(pos);
     showMarker(video, pos);
+    usageRef.current.pointer++;
     setGestureLearned(true);
     logToolOnce("pointer_used");
   }
@@ -325,6 +407,7 @@ export function CallPanel({
       setPress(null);
       if (anchorApiRef.current?.pinAt(x, y)) {
         navigator.vibrate?.(15);
+        usageRef.current.pointer++;
         setGestureLearned(true);
         logToolOnce("anchor_used");
       }
@@ -361,9 +444,18 @@ export function CallPanel({
 
   // 방향 지시(CALL-15): 누르는 동안 십자키가 0.4초마다 hold를 보낸다. 닫혀 있으면 send가 false(버림)
   function sendGuide(msg: GuideMsg) {
+    if (msg.kind === "release") {
+      lastGuideRef.current = null;
+      setGuideCmd(null);
+      if (guideLink && lastCallRef.current === "connected") guideLink.send(JSON.stringify(msg));
+      return;
+    }
     if (!guideLink || lastCallRef.current !== "connected") return;
-    if (guideLink.send(JSON.stringify(msg)) && msg.kind === "hold") {
-      setDpadLearned(true);
+    if (guideLink.send(JSON.stringify(msg))) {
+      // 0.4초마다 다시 오는 hold는 세지 않고, 새로 누르거나 방향을 바꿀 때만 센다
+      if (lastGuideRef.current !== msg.cmd) usageRef.current.guide++;
+      lastGuideRef.current = msg.cmd;
+      setGuideCmd(msg.cmd);
       logToolOnce("guide_used");
     }
   }
@@ -388,6 +480,7 @@ export function CallPanel({
     setFreezeError(false);
     setFrozen(image);
     setStrokes([]);
+    setGuideCmd(null);
     logToolOnce("freeze_used");
   }
 
@@ -445,8 +538,26 @@ export function CallPanel({
     end: () => {
       flushStroke();
       strokeRef.current = null;
+      usageRef.current.draw++;
     },
   };
+
+  // PC: F = 멈추고 그리기 / 라이브로 (피그마 P01 키보드 안내)
+  const connectedNow = state.phase === "call" && state.call === "connected";
+  const freezeToggleRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    freezeToggleRef.current = () => (frozen ? resume() : freeze());
+  });
+  useEffect(() => {
+    if (!connectedNow || sheet) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "KeyF" || e.repeat || e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
+      e.preventDefault();
+      freezeToggleRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [connectedNow, sheet]);
 
   // 고객에게 종료를 알리고 이쪽 연결·마이크를 정리한다.
   // 세션이 없어도(연결 준비 전, 새로고침 후) 기다리던 고객 화면이 '상담이 끝났어요'로 바뀌어야 한다
@@ -460,7 +571,7 @@ export function CallPanel({
     return Date.now() - confirmShownAtRef.current < CONFIRM_ARM_MS;
   }
 
-  // 끝내기: 연결된 적 있으면 해결 여부를 고르는 창, 없으면 닫을지 확인하는 창 (ROOM-10)
+  // 끝내기: 연결된 적 있으면 '통화를 끝낼까요?'(E10), 없으면 '상담을 닫을까요?' (ROOM-10)
   function requestEnd() {
     confirmShownAtRef.current = Date.now();
     setSaveError(false);
@@ -472,14 +583,24 @@ export function CallPanel({
     setSheet(null);
   }
 
-  // 확인 창에서 답을 고르면 그때 통화를 끊고 저장한다. 고르기 전에는 통화가 이어진다
-  function answerAndEnd(resolvedRemotely: boolean | null) {
+  // E10 '통화 끝내기': 고객 화면도 끝나고 결과 기록(E11)으로
+  function endCall() {
+    if (justShown()) return;
+    setSummary(snapshotSummary());
+    hangupAndStop();
+    setSheet(null);
+    confirmShownAtRef.current = 0;
+    setState({ phase: "record", by: "engineer" });
+  }
+
+  // 연결된 적 없는 상담 닫기. 고객에게 알리고 해결 여부 없이 저장
+  function closeSession() {
     if (justShown() || endingRef.current) return;
     hangupAndStop();
     setSheet(null);
-    setState({ phase: "confirm-end", by: "engineer" });
+    setState({ phase: "closing" });
     confirmShownAtRef.current = 0; // 방금 확인한 결정이므로 대기 없이 저장
-    finish(resolvedRemotely);
+    finish(null);
   }
 
   // 연결은 저장이 성공해 화면을 떠날 때 정리된다(언마운트). 그래야 저장에 실패해도
@@ -497,7 +618,7 @@ export function CallPanel({
     }
     if (unmountedRef.current) return;
     if (result?.ok) {
-      // 확인 화면에 있는 동안 고객이 다시 들어왔을 수 있다 — 세션이 없어도 떠나기 전에 종료를 알린다
+      // 기록 화면에 있는 동안 고객이 다시 들어왔을 수 있다 — 세션이 없어도 떠나기 전에 종료를 알린다
       hangupAndStop();
       router.replace("/dashboard");
       return;
@@ -514,233 +635,218 @@ export function CallPanel({
     const last = lastCallRef.current;
     if (sessionRef.current && (last === "connecting" || last === "connected")) {
       setState((prev) =>
-        prev.phase === "confirm-end" && prev.by === "customer"
+        prev.phase === "record" && prev.by === "customer"
           ? { phase: "call", call: last, peerPresent: true }
           : prev,
       );
     }
   }
 
-  const saveErrorText = saveError && (
-    <p role="alert" className="text-center text-body-m font-medium text-text-danger">
-      저장에 실패했어요. 다시 눌러 주세요.
-    </p>
-  );
-
-  // 해결 여부 두 답은 같은 무게로 보여 준다 — 한쪽을 강조하면 핵심 지표(원격 해결률)가 기운다
-  const answerButtons = (dark: boolean) => (
-    <>
-      <Button
-        variant={dark ? "call" : "secondary"}
-        size="xl"
-        block
-        disabled={ending}
-        onClick={() => (state.phase === "confirm-end" ? finish(true) : answerAndEnd(true))}
-        icon={<CheckIcon className="size-6 text-success" />}
-        className="justify-start"
-      >
-        네, 원격으로 해결했어요
-      </Button>
-      <Button
-        variant={dark ? "call" : "secondary"}
-        size="xl"
-        block
-        disabled={ending}
-        onClick={() => (state.phase === "confirm-end" ? finish(false) : answerAndEnd(false))}
-        icon={<CarIcon className="size-6 text-text-warning" />}
-        className="justify-start"
-      >
-        아니요, 출장이 필요해요
-      </Button>
-    </>
-  );
-
   const endLabel = everConnected ? "통화 종료" : "상담 닫기";
 
-  // 끝내기 확인 창 (통화 중이면 어두운 창)
-  const endSheet = (dark: boolean) => (
+  // 끝내기 확인 창 (통화 중이면 통화가 계속되는 채로 위에 뜬다)
+  const endSheets = (inCall: boolean) => (
     <>
       <Sheet
         open={sheet === "end"}
         onClose={() => setSheet(null)}
-        tone={dark ? "dark" : "light"}
-        title="출장 없이 해결됐나요?"
-        description={dark ? "고르면 통화가 끝나고 저장돼요." : "고르면 상담이 끝나고 저장돼요."}
+        title={inCall ? "통화를 끝낼까요?" : "상담을 끝낼까요?"}
+        description={inCall ? "고객 화면도 함께 끝나요. 끝낸 뒤 결과를 기록해요." : "끝낸 뒤 결과를 기록해요."}
         testId="eng-end-sheet"
       >
-        {answerButtons(dark)}
-        <Button variant={dark ? "call-ghost" : "ghost"} size="l" block onClick={cancelEnd}>
-          {dark ? "계속 통화하기" : "취소"}
+        <Button variant="danger" size="xl" block onClick={endCall}>
+          {inCall ? "통화 끝내기" : "끝내기"}
         </Button>
-        {saveErrorText}
+        <Button variant="secondary" size="xl" block onClick={cancelEnd}>
+          {inCall ? "계속 통화하기" : "취소"}
+        </Button>
       </Sheet>
       <Sheet
         open={sheet === "close"}
         onClose={() => setSheet(null)}
-        tone={dark ? "dark" : "light"}
         title="상담을 닫을까요?"
         description="고객님께 보낸 링크도 더 이상 열리지 않아요."
         testId="eng-close-sheet"
       >
-        <Button variant="danger" size="xl" block disabled={ending} onClick={() => answerAndEnd(null)}>
+        <Button variant="danger" size="xl" block disabled={ending} onClick={closeSession}>
           네, 닫기
         </Button>
-        <Button variant={dark ? "call-ghost" : "ghost"} size="l" block onClick={cancelEnd}>
+        <Button variant="secondary" size="xl" block onClick={cancelEnd}>
           취소
         </Button>
-        {saveErrorText}
       </Sheet>
     </>
   );
 
-  const header = <RoomHeader createdLabel={createdLabel} micOn={state.phase === "call" ? micOn : null} />;
-
   // TURN 없이 STUN만으로 동작 중 — 모바일망(5G/LTE)끼리는 연결이 실패할 수 있다
-  const turnText = turnError && (
-    <span className="flex gap-2">
-      <AlertIcon className="mt-0.5 size-4 flex-none" />
-      <span>TURN 서버 없이 연결 중 — 모바일망끼리는 실패할 수 있어요 ({turnError})</span>
-    </span>
+  const turnBanner = turnError && (
+    <Banner tone="warning" icon={<AlertIcon className="size-[22px]" />}>
+      TURN 서버 없이 연결 중 — 모바일망끼리는 실패할 수 있어요 ({turnError})
+    </Banner>
   );
 
   const peerNotice = peerChanged && (
-    <CallBanner tone="warning" role="alert">
+    <Banner tone="warning" role="alert" icon={<AlertIcon className="size-[22px]" />}>
       고객 쪽 연결이 새로 바뀌었어요 (고객 새로고침 또는 다른 기기). 모르는 사람이면 종료하세요.
-    </CallBanner>
+    </Banner>
   );
 
-  const endLink = (
-    <Button variant="ghost" size="m" block onClick={requestEnd} disabled={starting}>
-      {endLabel}
-    </Button>
-  );
-
-  if (state.phase === "idle") {
+  if (state.phase === "record") {
     return (
-      <LightLayout header={header}>
+      <RecordView
+        createdLabel={createdLabel}
+        byCustomer={state.by === "customer"}
+        summary={summary}
+        saving={ending}
+        saveError={saveError}
+        onSubmit={finish}
+      />
+    );
+  }
+
+  if (state.phase === "closing") {
+    return (
+      <NoticeScreen
+        tone="neutral"
+        icon={ending ? <Spinner className="size-10" /> : <AlertIcon className="size-10" />}
+        title={ending ? "상담을 닫는 중이에요" : "상담을 닫지 못했어요"}
+        actions={
+          !ending && (
+            <Button size="xl" block variant="danger" onClick={() => finish(null)}>
+              다시 닫기
+            </Button>
+          )
+        }
+      >
+        {saveError ? "저장에 실패했어요. 다시 눌러 주세요." : "잠시만 기다려 주세요."}
+      </NoticeScreen>
+    );
+  }
+
+  // 대시보드 탭에서 마이크를 받아 스스로 시작하는 중이면 바로 링크 보내기 화면
+  if (state.phase === "idle" && !autoStarting) {
+    return (
+      <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pt-[max(8px,env(safe-area-inset-top))]">
+        <AppBar
+          title={everConnected ? "원격 A/S" : "새 A/S 시작"}
+          right={
+            <button
+              type="button"
+              onClick={requestEnd}
+              disabled={starting}
+              className="-mr-2 h-touch rounded-xl px-3 text-label-m text-text-secondary active:bg-bg-muted disabled:opacity-40"
+            >
+              {endLabel}
+            </button>
+          }
+        />
         <section className="flex flex-1 flex-col justify-center gap-6 py-8">
           <div className="grid size-20 place-items-center rounded-full bg-primary-tint text-icon-brand">
             <MicIcon className="size-10" />
           </div>
           <div className="flex flex-col gap-2">
-            <h1 className="text-title-l">{everConnected ? "다시 연결할까요?" : "먼저 마이크를 켜 주세요"}</h1>
+            <h2 className="text-title-l">{everConnected ? "다시 연결할까요?" : "마이크를 켜고 시작해요"}</h2>
             <p className="text-body-m text-text-secondary">
               {everConnected
                 ? "고객님 화면이 열려 있으면 누르는 대로 바로 이어져요."
-                : "마이크를 켜고 고객님께 링크를 보내면, 고객님이 카메라를 켜는 대로 자동으로 연결돼요."}
+                : "마이크를 켜면 고객님께 보낼 링크가 나와요. 고객님이 카메라를 켜는 대로 자동으로 연결돼요."}
             </p>
           </div>
-          {!everConnected && (
-            <ol className="flex flex-col gap-3 rounded-2xl bg-bg-subtle p-4 text-body-m">
-              <FlowStep n={1} active>
-                마이크 켜기 <span className="text-text-secondary">(지금)</span>
-              </FlowStep>
-              <FlowStep n={2}>고객님께 문자로 링크 보내기</FlowStep>
-              <FlowStep n={3}>고객님이 카메라를 켜면 자동 연결</FlowStep>
-            </ol>
-          )}
         </section>
-        <BottomActions>
-          <Button
-            size="xl"
-            block
-            onClick={start}
-            disabled={starting}
-            icon={starting ? <Spinner className="size-6" /> : <MicIcon className="size-6" />}
-          >
+        <div className="sticky bottom-0 -mx-5 mt-auto bg-bg-page/95 px-5 pt-3 pb-[max(16px,env(safe-area-inset-bottom))] backdrop-blur">
+          <Button size="xl" block onClick={() => start()} loading={starting} icon={<MicIcon className="size-6" />}>
             {starting ? "준비 중…" : everConnected ? "마이크 켜고 다시 연결" : "마이크 켜고 연결 준비"}
           </Button>
-          {endLink}
-        </BottomActions>
-        {endSheet(false)}
-      </LightLayout>
+        </div>
+        {endSheets(false)}
+      </main>
     );
   }
 
-  if (state.phase === "confirm-end") {
-    const byCustomer = state.by === "customer";
-    return (
-      <LightLayout header={<RoomHeader createdLabel={createdLabel} micOn={null} back={false} />}>
-        <section className="flex flex-1 flex-col items-center justify-center gap-4 py-8 text-center">
-          <div className="grid size-20 place-items-center rounded-full bg-bg-muted text-icon-secondary">
-            <PhoneOffIcon className="size-10" />
-          </div>
-          <p className="text-title-s text-text-secondary">
-            {byCustomer ? "고객님이 통화를 끝냈어요" : ending ? "저장하는 중…" : "통화를 끝냈어요"}
-          </p>
-          {everConnected ? (
-            <h1 className="text-title-l">출장 없이 해결됐나요?</h1>
-          ) : (
-            <h1 className="text-title-l">고객님과 연결되지 않은 상담이에요</h1>
-          )}
-          {byCustomer && (
-            <p className="text-body-m text-text-secondary">고객님이 링크를 다시 열면 통화로 돌아가요.</p>
-          )}
-        </section>
-        <BottomActions>
-          {everConnected ? (
-            answerButtons(false)
-          ) : (
-            <Button size="xl" block variant="danger" onClick={() => finish(null)} disabled={ending}>
-              상담 닫기
-            </Button>
-          )}
-          {saveErrorText}
-        </BottomActions>
-      </LightLayout>
-    );
-  }
-
-  const { call, peerPresent } = state;
+  const call = state.phase === "call" ? state.call : "waiting";
+  const peerPresent = state.phase === "call" ? state.peerPresent : false;
 
   if (call === "connected" || (call === "connecting" && peerPresent)) {
     const connected = call === "connected";
+    const unstable = connected && quality === "unstable";
+    const endControl = (
+      <CallControl state="danger" icon={<PhoneOffIcon />} label="종료" onClick={requestEnd} testId="eng-end" />
+    );
+    const toolsLeft = frozen ? (
+      <>
+        <CallControl icon={<UndoIcon />} label="되돌리기" onClick={undo} disabled={!strokes.length} />
+        <CallControl icon={<EraserIcon />} label="모두 지우기" onClick={clearDrawing} disabled={!strokes.length} />
+      </>
+    ) : (
+      <>
+        <CallControl icon={<FreezeIcon />} label="멈추고 그리기" onClick={freeze} disabled={!connected} />
+        <CallControl
+          icon={<FlipCameraIcon />}
+          label="카메라 바꾸기"
+          onClick={() => sendCamera("flip")}
+          disabled={!connected || camPending}
+        />
+      </>
+    );
+    const torchControl = !frozen && (
+      <CallControl
+        icon={<FlashlightIcon />}
+        label={camState && !camState.torchSupported ? "손전등 없음" : camState?.torch ? "손전등 끄기" : "손전등"}
+        state={camState?.torch ? "active" : "default"}
+        pressed={camState?.torchSupported ? camState.torch : undefined}
+        onClick={() => sendCamera("torch")}
+        disabled={!connected || camPending || !camState?.torchSupported}
+      />
+    );
+    const center = frozen ? (
+      // 멈춘 동안 지금 누를 것은 '라이브로' 하나라 파랑, 방향 지시는 없다 (피그마 E08)
+      <div className="flex h-[196px] w-[196px] flex-col items-center justify-center gap-3">
+        <Button size="xl" block onClick={resume} icon={<PlayIcon className="size-6" />}>
+          라이브로
+        </Button>
+        <p className="text-center text-caption text-call-text-secondary">멈춘 화면에서는 방향을 알려 줄 수 없어요</p>
+      </div>
+    ) : (
+      <GuideDpad onSend={sendGuide} disabled={!connected || unstable} />
+    );
+
     return (
-      <main className="fixed inset-0 z-30 flex flex-col bg-call-bg text-call-text lg:flex-row">
-        <div className="relative flex min-h-0 flex-1 flex-col">
-          {/* 위쪽 상태 줄: 통화 시간, 마이크, 경고 */}
-          <div className="flex flex-wrap items-center gap-2 px-3 pt-[max(10px,env(safe-area-inset-top))] pb-2">
-            <span
-              data-testid="eng-call-status"
-              className="inline-flex items-center gap-2 rounded-full bg-call-control px-3 py-1.5 text-label-s"
-            >
+      <main className="fixed inset-0 z-30 flex flex-col bg-call-bg text-call-text">
+        {/* 위쪽 바 (피그마 CallTopBar · PC는 P01처럼 로고와 종료 버튼) */}
+        <header className="flex items-center gap-3 border-b border-call-border/60 bg-call-surface px-4 pt-[max(8px,env(safe-area-inset-top))] pb-2">
+          <span className="hidden lg:block">
+            <Brand tone="dark" />
+          </span>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate text-label-l">원격 A/S · {createdLabel}</span>
+            <span data-testid="eng-call-status" className="text-body-s text-call-text-secondary">
               {connected ? (
-                <>
-                  <span aria-hidden="true" className="size-2.5 rounded-full bg-success" />
-                  통화 중 · {connectedAt && <CallTimer since={connectedAt} />}
-                </>
+                <>통화 중 · {connectedAt && <CallTimer since={connectedAt} />}</>
               ) : (
-                <>
-                  <Spinner className="size-3.5" />
-                  연결 중…
-                </>
+                "고객님 영상 연결 중…"
               )}
             </span>
-            {!micOn && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-warning-tint px-3 py-1.5 text-label-s text-text-warning">
-                <MicOffIcon className="size-4" />
-                마이크 꺼짐(보기만)
-              </span>
-            )}
-            {connected && peerMic === false && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-call-control px-3 py-1.5 text-label-s text-call-text">
-                <MicOffIcon className="size-4" />
-                고객 마이크 없음 · 전화로 말씀하세요
-              </span>
-            )}
-            {turnError && (
-              <button
-                type="button"
-                onClick={() => setTurnOpen((o) => !o)}
-                aria-expanded={turnOpen}
-                aria-label="연결 경고 보기"
-                className="ml-auto grid size-9 place-items-center rounded-full bg-warning-tint text-text-warning"
-              >
-                <AlertIcon className="size-5" />
-              </button>
-            )}
           </div>
+          {turnError && (
+            <button
+              type="button"
+              onClick={() => setTurnOpen((o) => !o)}
+              aria-expanded={turnOpen}
+              aria-label="연결 경고 보기"
+              className="grid size-9 flex-none place-items-center rounded-full bg-warning-tint text-text-warning"
+            >
+              <AlertIcon className="size-5" />
+            </button>
+          )}
+          <QualityPill quality={quality} connecting={!connected} />
+          <span className="hidden lg:block">
+            <Button variant="call-danger" size="m" onClick={requestEnd} icon={<PhoneOffIcon className="size-5" />}>
+              통화 종료
+            </Button>
+          </span>
+        </header>
 
+        <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
           <div
             data-testid="eng-stage"
             onPointerDown={frozen ? undefined : onPressDown}
@@ -778,112 +884,93 @@ export function CallPanel({
             ) : (
               <PointerMarker marker={marker} size={56} />
             )}
-            {!connected && (
-              <p className="absolute inset-0 flex items-center justify-center gap-2 text-body-m text-call-text-secondary">
-                <Spinner className="size-5" />
-                고객님 영상 연결 중…
-              </p>
-            )}
-            {connected && (frozen || !gestureLearned) && (
-              <p className="pointer-events-none absolute inset-x-0 bottom-3 mx-auto w-fit max-w-[92%] rounded-full bg-black-80 px-4 py-2 text-center text-label-s text-call-text">
-                {frozen ? (
-                  "손가락으로 그리면 고객님 화면에도 보여요"
-                ) : (
-                  <>
-                    <b className="text-gray-0">톡</b> 빨간 동그라미 3초 · <b className="text-gray-0">꾹</b> 물체에 붙는 핀
-                  </>
-                )}
-              </p>
+            {(!connected || unstable) && (
+              // 피그마 E09: 다시 연결하는 중
+              <div className="absolute inset-0 grid place-items-center bg-black-50">
+                <div className="flex flex-col items-center gap-3 rounded-2xl bg-black-80 px-6 py-5 text-label-l">
+                  <Spinner className="size-7" />
+                  {connected ? "다시 연결하는 중…" : "연결하는 중…"}
+                </div>
+              </div>
             )}
             {/* 알림은 영상 위쪽에 겹친다 (AR 상태 칩 아래) */}
             <div className="pointer-events-none absolute inset-x-3 top-14 z-20 flex flex-col gap-2">
-              {turnOpen && turnText && <CallBanner tone="warning">{turnText}</CallBanner>}
+              {unstable && (
+                <Banner tone="warning" role="status">
+                  연결이 불안정해요 · 다시 연결하는 중
+                </Banner>
+              )}
+              {frozen && (
+                <Banner tone="info" icon={<FreezeIcon className="size-[22px]" />}>
+                  화면을 멈췄어요 · 손가락으로 그리면 고객님 화면에도 보여요
+                </Banner>
+              )}
+              {turnOpen && turnBanner}
               {peerNotice}
               {freezeError && !frozen && (
-                <CallBanner tone="danger" role="alert">
+                <Banner tone="error" role="alert">
                   연결이 불안정해 화면을 멈추지 못했어요. 다시 눌러 주세요.
-                </CallBanner>
+                </Banner>
               )}
               {connected && camState?.error === "needs_tap" && (
-                <CallBanner tone="warning" role="alert">
+                <Banner tone="warning" role="alert" icon={<FlipCameraIcon className="size-[22px]" />}>
                   고객님께 화면의 &lsquo;카메라 바꾸기&rsquo;를 눌러 달라고 말씀해 주세요
-                </CallBanner>
+                </Banner>
               )}
               {connected && camState?.error === "failed" && (
-                <CallBanner tone="danger" role="alert">
+                <Banner tone="error" role="alert">
                   고객 폰에서 바꾸지 못했어요
-                </CallBanner>
+                </Banner>
+              )}
+              {!micOn && (
+                <Banner tone="warning" icon={<MicOffIcon className="size-[22px]" />}>
+                  마이크 꺼짐(보기만) · 고객님은 기사님 목소리를 못 들어요
+                </Banner>
+              )}
+              {connected && peerMic === false && (
+                <Banner tone="info" icon={<MicOffIcon className="size-[22px]" />}>
+                  고객 마이크 없음 · 전화로 말씀하세요
+                </Banner>
               )}
             </div>
+            {/* 아래: 처음 쓸 때만 제스처 안내, 그리고 지금 고객 화면에 뜬 방향 지시 (PC는 오른쪽 패널에) */}
+            {connected && (
+              <div className="pointer-events-none absolute inset-x-0 bottom-3 flex flex-col items-center gap-2 px-3">
+                {!frozen && !gestureLearned && (
+                  <p className="w-fit max-w-full rounded-full bg-black-80 px-4 py-2 text-center text-label-s text-call-text">
+                    <b className="text-gray-0">톡</b> 빨간 동그라미 3초 · <b className="text-gray-0">꾹</b> 물체에 붙는 핀
+                  </p>
+                )}
+                <span className="lg:hidden">
+                  <GuidePill cmd={guideCmd} frozen={!!frozen} />
+                </span>
+              </div>
+            )}
           </div>
-        </div>
 
-        {/* 아래 도구: 가운데 십자키, 양옆에 도구. 엄지가 닿는 곳 */}
-        <aside className="relative z-10 rounded-t-3xl bg-call-surface px-3 pt-3 pb-[max(12px,env(safe-area-inset-bottom))] lg:flex lg:w-[400px] lg:flex-col lg:justify-center lg:rounded-none lg:border-l lg:border-call-border">
-          <div className="mx-auto grid w-full max-w-[440px] grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-2">
-            <div className="flex flex-col gap-2">
-              {frozen ? (
-                <>
-                  <ToolButton tone="primary" icon={<PlayIcon className="size-7" />} label="다시 보기" onClick={resume} />
-                  <ToolButton
-                    icon={<UndoIcon className="size-7" />}
-                    label="되돌리기"
-                    onClick={undo}
-                    disabled={!strokes.length}
-                  />
-                </>
-              ) : (
-                <>
-                  <ToolButton
-                    icon={<PencilIcon className="size-7" />}
-                    label="멈추고 그리기"
-                    onClick={freeze}
-                    disabled={!connected}
-                  />
-                  <ToolButton
-                    icon={<FlipCameraIcon className="size-7" />}
-                    label="카메라 바꾸기"
-                    onClick={() => sendCamera("flip")}
-                    disabled={!connected || camPending}
-                  />
-                </>
-              )}
+          {/* 도구판 (피그마 E05: 가운데 십자키, 양옆 원형 버튼) · PC는 오른쪽 패널 (P01) */}
+          <aside className="bg-call-surface px-3 pt-3 pb-[max(12px,env(safe-area-inset-bottom))] lg:flex lg:w-[400px] lg:flex-col lg:gap-5 lg:overflow-y-auto lg:border-l lg:border-call-border lg:p-6">
+            <div className="hidden flex-col gap-1 lg:flex">
+              <h2 className="text-title-s">방향 지시</h2>
+              <p className="text-body-s text-call-text-secondary">누르고 있는 동안만 고객 화면에 표시돼요. 떼면 사라져요.</p>
+              <span className="mt-2">
+                <GuidePill cmd={guideCmd} frozen={!!frozen} />
+              </span>
             </div>
-            <GuideDpad onSend={sendGuide} disabled={!!frozen || !connected} />
-            <div className="flex flex-col gap-2">
-              {frozen ? (
-                <ToolButton
-                  icon={<EraserIcon className="size-7" />}
-                  label="지우기"
-                  onClick={clearDrawing}
-                  disabled={!strokes.length}
-                />
-              ) : (
-                <ToolButton
-                  icon={<FlashlightIcon className="size-7" />}
-                  label={camState && !camState.torchSupported ? "손전등 없음" : camState?.torch ? "손전등 끄기" : "손전등"}
-                  tone={camState?.torch ? "on" : "default"}
-                  pressed={camState?.torchSupported ? camState.torch : undefined}
-                  onClick={() => sendCamera("torch")}
-                  disabled={!connected || camPending || !camState?.torchSupported}
-                />
-              )}
-              <ToolButton tone="danger" icon={<PhoneOffIcon className="size-7" />} label="종료" onClick={requestEnd} />
+            <div className="mx-auto grid w-full max-w-[420px] grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-1">
+              <div className="flex flex-col items-center gap-3">{toolsLeft}</div>
+              {center}
+              <div className="flex flex-col items-center gap-3">
+                {torchControl}
+                <span className="contents lg:hidden">{endControl}</span>
+              </div>
             </div>
-          </div>
-          {/* 안내가 사라져도 자리는 남긴다 — 십자키가 엄지 밑에서 움직이지 않게 */}
-          <p
-            aria-hidden={!(connected && (frozen || !dpadLearned))}
-            className={`mt-2 text-center text-caption text-call-text-secondary ${
-              connected && (frozen || !dpadLearned) ? "" : "invisible"
-            }`}
-          >
-            {frozen
-              ? "멈춘 화면에서는 방향을 알려 줄 수 없어요"
-              : "십자키를 누르고 있는 동안 고객님 화면에 방향이 떠요"}
-          </p>
-        </aside>
-        {endSheet(true)}
+            <div className="hidden lg:block">
+              <ShortcutsBox />
+            </div>
+          </aside>
+        </div>
+        {endSheets(true)}
       </main>
     );
   }
@@ -896,7 +983,7 @@ export function CallPanel({
         title="다른 기기에서 이어받았어요"
         actions={
           <>
-            <Button size="xl" block onClick={start} disabled={starting}>
+            <Button size="xl" block onClick={() => start()} loading={starting}>
               {starting ? "준비 중…" : "여기서 다시 받기"}
             </Button>
             <Link href="/dashboard" className="py-3 text-center text-body-m text-text-secondary underline underline-offset-4">
@@ -931,146 +1018,28 @@ export function CallPanel({
     );
   }
 
-  // 대기(고객 미접속) · 연결 실패: 고객님께 링크를 (다시) 보내는 화면
-  const failed = call === "failed";
+  // 고객 부르기: 링크 보내기(E03) → 고객 진행 상황(E04). 연결 실패도 여기서 링크를 다시 보낸다
   return (
-    <LightLayout header={header}>
-      <div className="flex flex-col gap-2 pt-2">
-        {turnText && <CallBanner tone="warning">{turnText}</CallBanner>}
-        {peerNotice}
-      </div>
-      <section className="flex items-center gap-4 py-6" aria-live="polite">
-        <WaitingDot tone={failed ? "danger" : peerPresent ? "success" : "brand"} />
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <h1 className="text-title-m" data-testid="eng-wait-title">
-            {failed
-              ? "연결에 실패했어요"
-              : peerPresent
-                ? "고객님이 들어왔어요"
-                : everConnected
-                  ? "고객님을 다시 기다리고 있어요"
-                  : "고객님을 기다리고 있어요"}
-          </h1>
-          <p className="text-body-m text-text-secondary">
-            {failed
-              ? "고객님께 링크를 다시 열어 달라고 말씀해 주세요."
-              : peerPresent
-                ? "연결하는 중이에요…"
-                : "고객님이 링크를 열고 카메라를 켜면 자동으로 연결돼요."}
-          </p>
-        </div>
-      </section>
-
-      <section className="flex flex-col gap-3 rounded-3xl bg-bg-page p-4 shadow-card ring-1 ring-border">
-        <h2 className="text-title-s">고객님께 링크 보내기</h2>
-        <ShareButtons joinUrl={joinUrl} />
-      </section>
-
-      <details className="group mt-4 rounded-2xl bg-bg-subtle px-4 py-3 text-body-m">
-        <summary className="flex min-h-touch cursor-pointer list-none items-center justify-between font-semibold">
-          고객님께 이렇게 말씀해 주세요
-          <ChevronLeftIcon className="size-5 -rotate-90 text-icon-secondary transition-transform group-open:rotate-90" />
-        </summary>
-        <p className="pb-1 text-text-secondary">
-          &ldquo;문자로 보내 드린 링크를 누르시고, 파란색 <b className="text-text-primary">카메라 켜기</b>를 누른 다음{" "}
-          <b className="text-text-primary">허용</b>을 눌러 주세요. 그리고 고장 난 곳을 비춰 주세요.&rdquo;
-        </p>
-      </details>
-
-      <BottomActions sticky={false}>{endLink}</BottomActions>
-      {endSheet(false)}
-    </LightLayout>
-  );
-}
-
-// ───────────── 밝은 화면(준비·대기·해결 여부) 공용 틀 ─────────────
-
-function LightLayout({ header, children }: { header: ReactNode; children: ReactNode }) {
-  return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pt-[max(8px,env(safe-area-inset-top))]">
-      {header}
-      {children}
-    </main>
-  );
-}
-
-function RoomHeader({
-  createdLabel,
-  micOn,
-  back = true,
-}: {
-  createdLabel: string;
-  /** null이면 마이크 표시 없음 */
-  micOn: boolean | null;
-  back?: boolean;
-}) {
-  return (
-    <header className="flex min-h-14 items-center gap-2">
-      {back ? (
-        <Link
-          href="/dashboard"
-          className="-ml-2 flex h-touch items-center gap-0.5 rounded-xl pr-3 pl-1 text-body-m text-text-secondary active:bg-bg-muted"
-        >
-          <ChevronLeftIcon className="size-6" />
-          상담 목록
-        </Link>
-      ) : (
-        <span className="text-label-l">원격 A/S</span>
-      )}
-      <div className="ml-auto flex items-center gap-2">
-        {micOn !== null && (
-          <span
-            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-label-s ${
-              micOn ? "bg-success-tint text-text-success" : "bg-warning-tint text-text-warning"
-            }`}
-          >
-            {micOn ? <MicIcon className="size-4" /> : <MicOffIcon className="size-4" />}
-            {micOn ? "마이크 켜짐" : "마이크 꺼짐(보기만)"}
-          </span>
-        )}
-        <span className="text-body-s text-text-secondary">{createdLabel}</span>
-      </div>
-    </header>
-  );
-}
-
-function BottomActions({ children, sticky = true }: { children: ReactNode; sticky?: boolean }) {
-  return (
-    <div
-      className={`-mx-5 mt-auto flex flex-col gap-2 px-5 pt-3 pb-[max(16px,env(safe-area-inset-bottom))] ${
-        sticky ? "sticky bottom-0 bg-bg-page/95 backdrop-blur" : ""
-      }`}
-    >
-      {children}
-    </div>
-  );
-}
-
-function FlowStep({ n, active = false, children }: { n: number; active?: boolean; children: ReactNode }) {
-  return (
-    <li className="flex items-center gap-3">
-      <span
-        aria-hidden="true"
-        className={`grid size-7 flex-none place-items-center rounded-full text-label-m ${
-          active ? "bg-primary text-on-primary" : "bg-bg-page text-text-secondary ring-1 ring-border"
-        }`}
-      >
-        {n}
-      </span>
-      <span>{children}</span>
-    </li>
-  );
-}
-
-// 기다리는 중: 점 둘레로 고리가 퍼진다
-function WaitingDot({ tone }: { tone: "brand" | "success" | "danger" }) {
-  const color = tone === "danger" ? "bg-danger" : tone === "success" ? "bg-success" : "bg-primary";
-  return (
-    <span aria-hidden="true" className="relative grid size-12 flex-none place-items-center">
-      {tone !== "danger" && (
-        <span className={`motion-decor absolute inset-2 rounded-full ${color} animate-[ripple_1.6s_ease-out_infinite]`} />
-      )}
-      <span className={`relative size-5 rounded-full ${color}`} />
-    </span>
+    <WaitingView
+      joinUrl={joinUrl}
+      createdLabel={createdLabel}
+      micOn={state.phase === "call" ? micOn : null}
+      sentVia={sentVia}
+      onSent={setSentVia}
+      progress={progress}
+      peerPresent={peerPresent}
+      failed={call === "failed"}
+      everConnected={everConnected}
+      banners={
+        <>
+          {turnBanner}
+          {peerNotice}
+        </>
+      }
+      onClose={requestEnd}
+      closeLabel={endLabel}
+      closeDisabled={starting && !autoStarting}
+      sheets={endSheets(false)}
+    />
   );
 }

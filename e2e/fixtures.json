@@ -13,7 +13,9 @@
     "app_metadata": {
       "provider": "email"
     },
-    "user_metadata": {},
+    "user_metadata": {
+      "name": "김도현"
+    },
     "created_at": "2026-01-01T00:00:00Z"
   },
   "rooms": [

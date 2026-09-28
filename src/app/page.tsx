@@ -2,8 +2,8 @@ import { Brand } from "@/components/ui/brand";
 import { ButtonLink } from "@/components/ui/button";
 import { CameraIcon, HandTapIcon, MessageIcon, ShieldIcon } from "@/components/ui/icons";
 
-// 첫 화면 (AUTH-01). 여기 오는 사람은 둘: 링크 대신 주소를 친 고객(사장님)과 로그인하려는 엔지니어.
-// 고객에게는 할 일이 없다는 것(문자 속 링크를 누르면 된다)을 먼저, 엔지니어 로그인은 그 아래에.
+// 첫 화면 (AUTH-01, 피그마 E00). 여기 오는 사람은 둘: 로그인하려는 엔지니어와 링크 대신 주소를 친 고객(사장님).
+// 파란 버튼은 엔지니어 로그인 하나. 고객에게는 할 일이 없다는 것(문자 속 링크를 누르면 된다)을 따로 알려 준다.
 export default function Home() {
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pt-[max(16px,env(safe-area-inset-top))] pb-[max(24px,env(safe-area-inset-bottom))]">
@@ -22,7 +22,7 @@ export default function Home() {
         </p>
       </section>
 
-      <section className="flex flex-col gap-4 rounded-3xl bg-primary-tint p-5">
+      <section className="flex flex-col gap-4 rounded-3xl bg-bg-subtle p-5">
         <div className="flex items-center gap-3">
           <span className="grid size-11 place-items-center rounded-full bg-bg-page text-icon-brand">
             <MessageIcon className="size-6" />
@@ -50,7 +50,8 @@ export default function Home() {
 
       <div className="mt-auto flex flex-col gap-2 pt-10">
         <p className="text-center text-body-s text-text-secondary">기사님(엔지니어)이신가요?</p>
-        <ButtonLink href="/login" variant="secondary" size="l" block>
+        {/* 피그마 E00: 이 화면의 파란 버튼은 엔지니어 로그인 하나 */}
+        <ButtonLink href="/login" size="xl" block>
           엔지니어 로그인
         </ButtonLink>
       </div>

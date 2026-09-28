@@ -5,7 +5,7 @@ import { NoticeScreen } from "@/components/ui/notice-screen";
 import { Button } from "@/components/ui/button";
 import { AlertIcon, CameraIcon, CopyIcon, PhoneIcon, RefreshIcon } from "@/components/ui/icons";
 
-// 카메라를 켜지 못했을 때 (JOIN-05). 원인마다 할 일이 달라서 나눠 안내한다.
+// 카메라를 켜지 못했을 때 (JOIN-05, 피그마 C04). 원인마다 할 일이 달라서 나눠 안내하고, 기기별 설정 경로를 짧게.
 //  - blocked: '허용 안 함'을 눌렀거나 폰 설정에서 막힘 → 이 폰에서 권한을 켜는 방법(아이폰·안드로이드 따로)
 //  - busy: 다른 앱이 카메라를 쓰는 중 → 그 앱을 닫기
 //  - missing: 카메라가 없음 → 다른 폰으로
@@ -43,7 +43,7 @@ const STEPS: Record<Platform, React.ReactNode[]> = {
       <b>카메라</b>와 <b>마이크</b>를 <b>허용</b>으로 바꾸세요
     </>,
     <>
-      아래 <b>다시 시도</b>를 누르세요
+      아래 <b>다시 시도하기</b>를 누르세요
     </>,
   ],
   android: [
@@ -78,8 +78,8 @@ export function CameraHelp({ failure, onRetry }: { failure: CameraFailure; onRet
   const platform = platformOf(navigator.userAgent);
 
   const retry = (
-    <Button size="xl" block onClick={onRetry} icon={<CameraIcon className="size-7" />}>
-      다시 시도
+    <Button size="xl" block onClick={onRetry} icon={<RefreshIcon className="size-6" />}>
+      다시 시도하기
     </Button>
   );
   const reload = (
@@ -164,7 +164,7 @@ export function CameraHelp({ failure, onRetry }: { failure: CameraFailure; onRet
       testId="cust-camera-help"
       tone="danger"
       icon={<CameraIcon className="size-10" />}
-      title="카메라가 막혀 있어요"
+      title="카메라가 꺼져 있어요"
       actions={
         <>
           {retry}
@@ -172,7 +172,11 @@ export function CameraHelp({ failure, onRetry }: { failure: CameraFailure; onRet
         </>
       }
     >
-      <p>이렇게 하면 다시 켤 수 있어요.</p>
+      <p>
+        기사님이 화면을 보려면 카메라가 필요해요.
+        <br />
+        아래 순서대로 켜 주세요.
+      </p>
       <ol className="mt-4 flex flex-col gap-3 rounded-3xl bg-bg-subtle p-4 text-left text-text-primary">
         {STEPS[platform].map((step, i) => (
           <li key={i} className="flex gap-3">

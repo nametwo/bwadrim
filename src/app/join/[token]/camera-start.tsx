@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CallSession, type CallState } from "@/lib/webrtc/call";
+import { CallSession, type CallQuality, type CallState } from "@/lib/webrtc/call";
 import { fetchIceServers } from "@/lib/webrtc/ice";
 import { keepScreenOn } from "@/lib/wake-lock";
 import { PointerMarker, usePointerMarker } from "@/components/pointer-marker";
@@ -21,6 +21,7 @@ import {
   type CameraState,
   type Facing,
 } from "@/lib/webrtc/camera";
+import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
 import { NoticeScreen } from "@/components/ui/notice-screen";
@@ -28,12 +29,16 @@ import {
   CheckCircleIcon,
   ClockIcon,
   FlipCameraIcon,
+  FreezeIcon,
   PhoneIcon,
   PhoneOffIcon,
   RefreshIcon,
   Spinner,
+  UserIcon,
   WifiOffIcon,
 } from "@/components/ui/icons";
+import { formatDuration } from "@/lib/format";
+import { CallTimer } from "@/components/ui/call-timer";
 import { StartScreen } from "./start-screen";
 import { CameraHelp, cameraFailureOf, type CameraFailure } from "./camera-help";
 
@@ -54,9 +59,12 @@ function errorName(e: unknown) {
 export function CameraStart({
   roomId,
   token,
+  engineerName = null,
 }: {
   roomId: string;
   token: string;
+  /** 기다리고 있는 기사님 이름 (엔지니어 계정의 표시 이름, OPS-03). 없으면 '기사님' */
+  engineerName?: string | null;
 }) {
   const [phase, setPhase] = useState<Phase>("ready");
   const [failure, setFailure] = useState<CameraFailure>("blocked");
@@ -68,6 +76,11 @@ export function CameraStart({
   // 전화 통화 중 등으로 마이크를 못 써 카메라만 연결했다 (JOIN-04)
   const [micOff, setMicOff] = useState(false);
   const [longWait, setLongWait] = useState(false);
+  // 연결된 뒤 잠깐 끊김 (피그마 C10) · 기사님과 처음 연결된 시각(끝난 화면의 '12분 통화했어요')
+  const [quality, setQuality] = useState<CallQuality>("good");
+  const [connectedAt, setConnectedAt] = useState<number | null>(null);
+  const [talkSec, setTalkSec] = useState<number | null>(null);
+  const connectedAtRef = useRef<number | null>(null);
   // 통화 콜백은 시작 시점 값을 기억하므로 지금 카메라 상태는 ref로 읽는다
   const facingRef = useRef<Facing>("environment");
   const torchRef = useRef(false);
@@ -182,8 +195,11 @@ export function CameraStart({
           setFrozen(null);
           setStrokes([]);
           resetGuide();
+          setQuality("good");
         }
         if (s === "connected") {
+          if (connectedAtRef.current === null) connectedAtRef.current = Date.now();
+          setConnectedAt(connectedAtRef.current);
           reportCamera();
           if (prev !== "connected") showNotice("기사님과 연결됐어요");
           // relay(TURN) 경유 여부 — 원가 지표. turn: TURN 자격증명을 받았는지
@@ -197,7 +213,13 @@ export function CameraStart({
           streamRef.current?.getTracks().forEach((t) => t.stop());
           releaseWakeLock();
           setConfirmEnd(false);
+          if (s === "ended") endTalk();
         }
+      },
+      onQuality: (q) => {
+        setQuality(q);
+        // 끊긴 동안 떠 있던 화살표는 지운다 — 다시 붙으면 기사님이 새로 누른다 (피그마 C10)
+        if (q === "unstable") resetGuide();
       },
       onPointer: (pos) => showMarker(videoRef.current, pos),
       onCameraCommand: (cmd) => {
@@ -226,6 +248,12 @@ export function CameraStart({
     setPhase("call");
   }
 
+  // 끝난 화면에 보여 줄 통화 시간
+  function endTalk() {
+    const at = connectedAtRef.current;
+    setTalkSec(at === null ? null : (Date.now() - at) / 1000);
+  }
+
   // 끊긴 뒤·다른 곳에 넘어간 뒤·잘못 끝낸 뒤 다시 연결. 새로고침 없이 이 탭 안에서 카메라부터 다시 연다 (JOIN-08·09·11)
   function restart() {
     sessionRef.current?.destroy();
@@ -234,6 +262,9 @@ export function CameraStart({
     streamRef.current = null;
     remoteStreamRef.current = null;
     lastStateRef.current = "waiting";
+    connectedAtRef.current = null;
+    setConnectedAt(null);
+    setQuality("good");
     facingRef.current = "environment";
     torchRef.current = false;
     setCallState("waiting");
@@ -304,6 +335,7 @@ export function CameraStart({
     releaseWakeLock();
     setConfirmEnd(false);
     setEndedByMe(true);
+    endTalk();
     setCallState("ended");
   }
 
@@ -359,16 +391,19 @@ export function CameraStart({
     };
   }, []);
 
+  const engineerLabel = engineerName ? `${engineerName} 기사님` : "기사님";
+
+  // 채널 권한 거부·링크를 연 뒤 닫힌 세션 (JOIN-03, 피그마 C06)
   const goneScreen = (
     <NoticeScreen
       testId="cust-gone"
       tone="neutral"
       icon={<ClockIcon className="size-10" />}
-      title="이미 끝난 상담 링크예요"
+      title="상담이 이미 끝났어요"
     >
       다시 도움이 필요하면
       <br />
-      기사님께 새 링크를 보내 달라고 말씀해 주세요.
+      기사님께 새 링크를 요청해 주세요.
     </NoticeScreen>
   );
 
@@ -378,6 +413,7 @@ export function CameraStart({
 
   if (phase === "call") {
     if (callState === "ended") {
+      // 피그마 C19: 더 누를 것이 없음. 브라우저 창은 코드로 닫을 수 없어서 '닫아도 돼요'로 안내
       return (
         <NoticeScreen
           testId="cust-ended"
@@ -398,9 +434,8 @@ export function CameraStart({
             )
           }
         >
-          이용해 주셔서 감사합니다.
-          <br />
-          이제 이 화면을 닫으셔도 돼요.
+          {talkSec !== null && talkSec >= 1 ? `${engineerLabel}과 ${formatDuration(talkSec)} 통화했어요.` : "이용해 주셔서 감사합니다."}
+          <br />이 창은 닫아도 돼요.
         </NoticeScreen>
       );
     }
@@ -448,30 +483,29 @@ export function CameraStart({
       );
     }
 
-    // 방향 지시가 떠 있는 동안은 그것만 보여 준다: AR 핀·화살표·카드와 상태 문구를 잠시 숨김 (추적은 계속)
+    // 방향 지시가 떠 있는 동안은 그것만 보여 준다: AR 핀·화살표·카드와 위쪽 바를 잠시 숨김 (추적은 계속)
     const guideShown = !frozen && guideView !== null;
     const connected = callState === "connected";
+    const unstable = connected && quality === "unstable";
     const statusText =
       anchorBanner === "pin" && !frozen
         ? "빨간 동그라미를 봐주세요"
         : frozen
-        ? "기사님이 화면을 멈추고 설명 중이에요"
+        ? "화면을 멈추고 설명 중이에요"
         : connected
         ? "기사님이 보고 있어요"
         : callState === "connecting"
           ? "기사님과 연결하는 중…"
           : "기사님을 기다리는 중…";
-    const hideStatus = anchorBanner === "card" || anchorBanner === "arrow" || guideShown;
-    const hint = connected
-      ? null
-      : longWait
-        ? "오래 걸리면 기사님께 전화로 “카메라 켰어요”라고 알려 주세요."
-        : micOff
-          ? "마이크 없이 연결해요. 기사님과는 전화로 이야기해 주세요."
-          : "곧 연결돼요. 고장 난 곳을 미리 비춰 주세요.";
+    const hideTop = anchorBanner === "card" || anchorBanner === "arrow" || guideShown;
+    const waitHint = longWait
+      ? "오래 걸리면 기사님께 전화로 “카메라 켰어요”라고 알려 주세요."
+      : micOff
+        ? "마이크 없이 연결해요. 기사님과는 전화로 이야기해 주세요."
+        : "카메라는 이미 켜졌어요. 고장 난 곳을 미리 비춰 주세요.";
 
     return (
-      <main className="relative flex h-dvh flex-col overflow-hidden bg-call-bg [--guide-bottom:104px]">
+      <main className="relative flex h-dvh flex-col overflow-hidden bg-call-bg [--guide-bottom:120px]">
         <video
           ref={videoRef}
           data-testid="cust-video"
@@ -494,100 +528,129 @@ export function CameraStart({
         ) : (
           <PointerMarker marker={marker} size={88} />
         )}
-        <GuideOverlay view={frozen ? null : guideView} />
+        <GuideOverlay view={frozen || unstable ? null : guideView} />
         <audio ref={audioRef} autoPlay />
 
+        {/* 위쪽 바 (피그마 C07): 누구와 통화 중인지 + 지금 상태 */}
         <div
-          className={`relative flex flex-col items-center gap-2 px-4 pt-[max(12px,env(safe-area-inset-top))] ${
-            hideStatus ? "invisible" : ""
+          className={`relative flex items-center gap-3 bg-gradient-to-b from-black-80 to-transparent px-4 pt-[max(12px,env(safe-area-inset-top))] pb-6 ${
+            hideTop ? "invisible" : ""
           }`}
         >
-          <span
-            data-testid="cust-status"
-            className={`inline-flex items-center gap-2 rounded-full px-4 py-2.5 text-label-l text-gray-0 shadow-float ${
-              frozen
-                ? "bg-amber-700"
-                : connected
-                  ? "bg-green-600"
-                  : "bg-black-80"
-            }`}
-          >
-            {connected || frozen ? (
-              <span aria-hidden="true" className="size-2.5 rounded-full bg-gray-0" />
-            ) : (
-              <Spinner className="size-4" />
-            )}
-            {statusText}
+          <span className="grid size-11 flex-none place-items-center rounded-full bg-call-control text-call-icon">
+            <UserIcon className="size-[22px]" />
           </span>
-          {hint && (
-            <p className="max-w-xs rounded-2xl bg-black-50 px-4 py-2 text-center text-body-m text-call-text">
-              {hint}
-            </p>
+          <div className="flex min-w-0 flex-col">
+            <span className="truncate text-title-s text-call-text">{engineerLabel}</span>
+            <span className="flex items-center gap-1.5 text-label-l text-call-text">
+              {connected || frozen ? (
+                <span aria-hidden="true" className={`size-2.5 flex-none rounded-full ${unstable ? "bg-warning" : "bg-success"}`} />
+              ) : (
+                <Spinner className="size-4 flex-none" />
+              )}
+              <span data-testid="cust-status">{statusText}</span>
+              {connected && connectedAt && !frozen && (
+                <span className="font-normal text-call-text-secondary">
+                  · <CallTimer since={connectedAt} />
+                </span>
+              )}
+            </span>
+          </div>
+        </div>
+
+        <div className="relative mx-4 flex flex-col gap-3">
+          {/* 피그마 C10: 잠깐 끊김 */}
+          {unstable && (
+            <Banner tone="warning" role="status" sub="창을 닫지 말고 기다려 주세요">
+              연결이 잠깐 끊겼어요
+            </Banner>
+          )}
+          {/* 피그마 C09: 멈춘 동안은 폰을 내려놔도 된다 — 팔 떨림을 없앤다 */}
+          {frozen && !unstable && (
+            <Banner tone="info" role="status" icon={<FreezeIcon className="size-[22px]" />} sub="폰은 편하게 두셔도 돼요">
+              기사님이 화면을 멈췄어요
+            </Banner>
+          )}
+          {notice && (
+            <div
+              role="status"
+              className="animate-[sheet-up_0.2s_ease-out] rounded-3xl bg-black-80 px-5 py-5 text-center text-title-m text-gray-0 shadow-float"
+            >
+              {notice}
+            </div>
+          )}
+          {flipRequested && (
+            <div className="flex flex-col items-center gap-3 rounded-3xl bg-bg-page px-5 py-5 text-center shadow-float">
+              <p className="text-title-m text-text-primary">기사님이 카메라를 바꿔 달라고 하세요</p>
+              <Button
+                size="xl"
+                block
+                onClick={() => flipCamera(false)}
+                icon={<FlipCameraIcon className="size-6" />}
+              >
+                카메라 바꾸기
+              </Button>
+              <Button variant="ghost" size="m" onClick={() => setFlipRequested(false)}>
+                닫기
+              </Button>
+            </div>
           )}
         </div>
 
-        {notice && (
-          <div
-            role="status"
-            className="relative mx-6 mt-6 animate-[sheet-up_0.2s_ease-out] rounded-3xl bg-black-80 px-5 py-5 text-center text-title-m text-gray-0 shadow-float"
-          >
-            {notice}
+        {/* 피그마 C03: 기다리는 동안 가운데 카드 — 카메라는 켜졌다는 것을 알린다 */}
+        {(!connected || unstable) && !notice && (
+          <div className="pointer-events-none absolute inset-x-6 top-1/2 flex -translate-y-1/2 justify-center">
+            <div className="flex max-w-xs flex-col items-center gap-3 rounded-2xl bg-black-80 px-6 py-5 text-center shadow-float">
+              <Spinner className="size-7 text-call-text" />
+              <p className="text-title-s text-call-text">
+                {unstable ? "다시 연결하는 중…" : callState === "connecting" ? "기사님과 연결하는 중…" : "기사님을 기다리는 중…"}
+              </p>
+              {!unstable && <p className="text-body-m text-call-text-secondary">{waitHint}</p>}
+            </div>
           </div>
         )}
 
-        {flipRequested && (
-          <div className="relative mx-5 mt-6 flex flex-col items-center gap-3 rounded-3xl bg-bg-page px-5 py-5 text-center shadow-float">
-            <p className="text-title-m text-text-primary">기사님이 카메라를 바꿔 달라고 하세요</p>
-            <Button
-              size="xl"
-              block
-              onClick={() => flipCamera(false)}
-              icon={<FlipCameraIcon className="size-7" />}
-            >
-              카메라 바꾸기
-            </Button>
-            <Button variant="ghost" size="m" onClick={() => setFlipRequested(false)}>
-              닫기
-            </Button>
-          </div>
-        )}
-
-        <div className="relative mt-auto grid grid-cols-2 gap-3 bg-gradient-to-t from-black-80 to-transparent px-4 pt-12 pb-[max(20px,env(safe-area-inset-bottom))]">
+        {/* 아래 (피그마 C07): 카메라 전환 + 통화 종료. 고객 쪽 버튼은 모두 크게 */}
+        <div className="relative mt-auto flex items-end gap-4 bg-gradient-to-t from-black-80 to-transparent px-4 pt-12 pb-[max(20px,env(safe-area-inset-bottom))]">
           <button
             type="button"
             onClick={() => flipCamera(false)}
-            className="flex min-h-[76px] flex-col items-center justify-center gap-1 rounded-2xl bg-call-control/90 text-label-l text-call-text active:bg-call-control-pressed"
+            className="group flex w-[76px] flex-none flex-col items-center gap-1.5"
           >
-            <FlipCameraIcon className="size-7" />
-            카메라 바꾸기
+            <span className="grid size-16 place-items-center rounded-full bg-call-control text-call-icon group-active:bg-call-control-pressed">
+              <FlipCameraIcon className="size-7" />
+            </span>
+            <span className="text-label-m text-call-text">카메라 바꾸기</span>
           </button>
-          <button
-            type="button"
+          <Button
+            variant="call-danger"
+            size="xl"
             onClick={askEnd}
-            className="flex min-h-[76px] flex-col items-center justify-center gap-1 rounded-2xl bg-danger text-label-l text-on-primary active:bg-danger-pressed"
+            className="mb-7 flex-1"
+            icon={<PhoneOffIcon className="size-6" />}
           >
-            <PhoneOffIcon className="size-7" />
-            끝내기
-          </button>
+            통화 종료
+          </Button>
         </div>
 
+        {/* 피그마 C18: 실수로 누르는 일을 막는 확인 한 번. 고객 쪽 버튼은 모두 XL */}
         <Sheet
           open={confirmEnd}
           onClose={() => setConfirmEnd(false)}
           title="상담을 끝낼까요?"
-          description="기사님과 연결이 끊어져요."
+          description="기사님과 연결이 끊겨요."
           testId="cust-end-sheet"
         >
           <Button variant="danger" size="xl" block onClick={hangup}>
-            네, 끝낼게요
+            끝내기
           </Button>
           <Button variant="secondary" size="xl" block onClick={() => setConfirmEnd(false)}>
-            아니요, 계속할게요
+            계속하기
           </Button>
         </Sheet>
       </main>
     );
   }
 
-  return <StartScreen starting={phase === "starting"} onStart={start} />;
+  return <StartScreen starting={phase === "starting"} onStart={start} engineerName={engineerName} />;
 }

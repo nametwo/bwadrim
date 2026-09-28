@@ -34,16 +34,17 @@ src/app/
   api/events                                     # 고객(비로그인) 쪽 지표 이벤트 수집
 src/lib/
   supabase/{client,server,admin}.ts              # admin = service role, 서버 전용
-  webrtc/                                        # peer 연결, ICE 설정, 시그널링, 포인터 좌표(pointer.ts), 화면 멈춤·그리기(draw.ts), 카메라 전환·손전등(camera.ts), DataChannel 래퍼(data-link.ts), 방향 지시 메시지(guide.ts)
+  webrtc/                                        # peer 연결, ICE 설정, 시그널링, 포인터 좌표(pointer.ts), 화면 멈춤·그리기(draw.ts), 카메라 전환·손전등(camera.ts), DataChannel 래퍼(data-link.ts), 방향 지시 메시지(guide.ts), 대시보드 탭에서 마이크 미리 받기(mic-ahead.ts, CALL-01)
   tracking/                                      # 평면 앵커 추적(AR 핀, CALL-14). 설계는 tracking/README.md, 벤치는 scripts/tracking-bench
   join-token.ts                                  # 고객 링크 토큰 형식 검사
+  engineer-name.ts                               # 엔지니어 표시 이름 (user_metadata.name, OPS-03). 고객 시작 화면 기사님 카드
   format.ts                                      # 화면 시각·시간 글자 ('오늘 오후 5:03', 한국 시간 고정)
   wake-lock.ts                                   # 통화 중 화면 꺼짐 방지
   in-app-browser.ts                              # 카톡 등 인앱 브라우저 감지·외부 브라우저로 열기
   events.ts                                      # 지표 이벤트 기록
   metrics.ts                                     # 핵심 지표 계산 (통계 화면)
-src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기). anchor/·anchor-overlay = AR 핀 층(CALL-14), guide-dpad·guide-overlay = 방향 지시(CALL-15)
-  ui/                                            # 디자인 시스템 부품(NFR-08): button(Button·ButtonLink·buttonClass), icons(선 아이콘), sheet(아래 확인 창), notice-screen(한 화면 한 안내), brand(로고)
+src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기). anchor/·anchor-overlay = AR 핀 층(CALL-14), guide-dpad·guide-overlay·guide-pill = 방향 지시(CALL-15)
+  ui/                                            # 디자인 시스템 부품(NFR-08, 피그마 컴포넌트와 같은 이름): button(Button·ButtonLink·buttonClass), icons(선 아이콘), sheet(아래 확인 창), notice-screen(한 화면 한 안내), brand(로고), status-chip, step-item, banner, call-control(통화 원형 버튼), stat-card, engineer-card, call-timer
 supabase/schema.sql
 docs/requirements.md                             # 기능 요구사항 (기준 문서)
 ```
@@ -64,12 +65,13 @@ AR 핀(CALL-14)은 전용 DataChannel `anchor`(고객이 offer에 포함). 기�
 
 색·모서리·크기·글자·그림자는 `src/app/globals.css`의 `@theme` 토큰을 쓸 것 (hex 직접 쓰지 말 것). 이름은 피그마 변수·스타일과 같음: https://www.figma.com/design/Hqnz1fYrJJAhO7nDGNKRwn (`a/b` → `--color-a-b`, `a/default` → `--color-a`, 텍스트 스타일 `Title/M` → `text-title-m`, 효과 `Shadow/Card` → `shadow-card`)
 - 버튼·확인 창·안내 화면·아이콘은 `src/components/ui`를 쓸 것. 새로 만들지 말고 variant를 늘릴 것. 버튼에 이모지 쓰지 말 것(폰마다 모양이 다름) — `ui/icons.tsx`
-- 파랑(`primary`)은 "지금 누를 것" 하나에만. 보조 동작·선택 상태는 중립색(`secondary`·`tonal`)
+- 파랑(`primary`)은 "지금 누를 것" 하나에만. 보조 동작·선택 상태는 흰 바탕·테두리(`secondary`)나 중립색. 통화 화면 버튼은 `call`·`call-danger`·`call-ghost`, 켜진 도구는 `CallControl state="active"`(흰 원)
 - 노랑(`guide-signal`)은 방향 지시에만. 통화 화면은 `call-*`, 빨강(`danger`)은 종료·오류에만. 종료는 확인 창(`ui/sheet`)을 한 번 거친다
 - 지표가 되는 답(출장 없이 해결?)은 같은 모양으로. 한쪽을 강조하면 원격 해결률이 기운다
 - 고객 화면: 본문 `text-body-l`(18px) 이상, 누를 버튼 `size="xl"`(64px), 누를 것은 화면 아래쪽. 엔지니어 통화 화면: 누르는 자리가 바뀌지 않게(안내가 사라져도 자리는 남긴다)
 - 가리키기(`pointer`)는 디자인 시스템상 브랜드 블루지만, 지금 CALL-08·09·14 구현은 빨강이다. 바꾸려면 요구사항부터 고칠 것
-- 지금 코드의 다른 예외(바꾸려면 요구사항부터): 카톡 공유 버튼 노랑(카카오 색), CALL-11 손전등 켜짐 노랑. AR(CALL-14)은 빨강 화살표·amber 정지 표시를 쓴다
+- 지금 코드의 다른 예외(바꾸려면 요구사항부터): 카톡 공유 버튼 노랑(카카오 색), 고객 '허용' 화살표 노랑(JOIN-02). AR(CALL-14)은 빨강 화살표·amber 정지 표시를 쓴다
+- 피그마 화면의 고객 이름·전화번호 입력, 방 코드, '엔지니어' 호칭은 따르지 않는다(NFR-07, ROOM-02 폐기). 고객 화면에서는 '기사님'
 
 ## 이벤트 이름 (events 테이블)
 

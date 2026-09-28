@@ -3,6 +3,7 @@
 // Realtime(WebSocket)은 여기서 하지 않는다 — 브라우저 쪽에서 Playwright routeWebSocket으로 가로챈다 (e2e/realtime-mock.ts).
 //
 //   GET  /auth/v1/user                 Bearer 토큰이 FIXTURE.accessToken이면 사용자, 아니면 401
+//   GET  /auth/v1/admin/users/:id      (서비스 키) 사용자 — 고객 화면의 기사님 이름
 //   GET  /rest/v1/rooms?code=eq.X      (id=eq.X, select=… 지원) Accept가 vnd.pgrst.object+json이면 객체 1개
 //   PATCH /rest/v1/rooms?id=eq.X…      상태 갱신 (status=eq.X 조건 지원)
 //   POST /rest/v1/events               기록 (본문 객체 또는 배열) · GET은 통계 화면용(필터 무시)
@@ -104,6 +105,14 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true });
     }
 
+    // 고객 화면이 기사님 이름을 찾을 때 (서비스 키)
+    const adminUser = /^\/auth\/v1\/admin\/users\/([^/]+)$/.exec(p);
+    if (adminUser && req.method === "GET") {
+      if ((req.headers.apikey ?? "") !== FIXTURE.serviceKey) return send(res, 401, { msg: "service key required" });
+      if (adminUser[1] !== FIXTURE.user.id) return send(res, 404, { msg: "User not found" });
+      return send(res, 200, FIXTURE.user);
+    }
+
     if (p === "/auth/v1/user" && req.method === "GET") {
       if (!authed(req)) return send(res, 401, { code: 401, error_code: "bad_jwt", msg: "invalid JWT" });
       return send(res, 200, FIXTURE.user);
@@ -138,12 +147,13 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // 통계 화면(/stats)용 읽기. 필터는 무시하고 자기 방 기록을 준다 (RLS 흉내)
+    // 통계 화면(/stats)·대기 화면 고객 진행 상황용 읽기. eq 필터만 적용하고 자기 방 기록을 준다 (RLS 흉내)
     if (p === "/rest/v1/events" && req.method === "GET") {
       if (!authed(req)) return send(res, 200, []);
       const mine = new Set(rooms.filter((r) => r.engineer_id === FIXTURE.user.id).map((r) => r.id));
       const select = url.searchParams.get("select");
-      return send(res, 200, events.filter((e) => mine.has(e.room_id)).map((e) => project(e, select)));
+      const rows = filterRows(events.filter((e) => mine.has(e.room_id)), url.searchParams);
+      return send(res, 200, rows.map((e, i) => project({ id: i + 1, ...e }, select)));
     }
 
     if (p === "/rest/v1/events" && req.method === "POST") {

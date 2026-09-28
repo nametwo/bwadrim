@@ -2,7 +2,7 @@
 
 import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { AlertIcon, EyeIcon, EyeOffIcon, Spinner } from "@/components/ui/icons";
+import { AlertIcon, EyeIcon, EyeOffIcon } from "@/components/ui/icons";
 import { login, type LoginState } from "./actions";
 
 const initialState: LoginState = { error: null };
@@ -67,14 +67,7 @@ export function LoginForm({ next }: { next: string }) {
         </p>
       )}
 
-      <Button
-        type="submit"
-        size="xl"
-        block
-        disabled={pending}
-        className="mt-1 disabled:opacity-100"
-        icon={pending ? <Spinner className="size-6" /> : undefined}
-      >
+      <Button type="submit" size="xl" block loading={pending} className="mt-1">
         {pending ? "로그인 중…" : "로그인"}
       </Button>
     </form>

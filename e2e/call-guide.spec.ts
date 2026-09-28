@@ -65,10 +65,10 @@ test("통화: 십자키를 누르는 동안만 고객 화면에 방향 · 굴리
   try {
     await ep.goto(`/room/${ROOM.id}`);
     await ep.getByRole("button", { name: /연결 준비/ }).click();
-    await expect(ep.getByTestId("eng-wait-title")).toHaveText("고객님을 기다리고 있어요");
+    await expect(ep.getByTestId("eng-waiting")).toBeVisible();
 
     await cp.goto(`/join/${ROOM.join_token}`);
-    await cp.getByRole("button", { name: /카메라 켜기/ }).click();
+    await cp.getByRole("button", { name: /카메라 켜고 시작하기/ }).click();
     await expect(cp.getByTestId("cust-status")).toHaveText("기사님이 보고 있어요", { timeout: 30_000 });
 
     const pad = ep.getByRole("group", { name: /방향 지시 십자키/ });
@@ -85,6 +85,8 @@ test("통화: 십자키를 누르는 동안만 고객 화면에 방향 · 굴리
     await expect(band).toHaveAttribute("data-cmd", "right", { timeout: 5_000 });
     await expect(band).toContainText("오른쪽으로");
     await expect(cp.getByTestId("cust-status")).toBeHidden();
+    // 엔지니어 화면의 '고객 화면' 알약도 노랗게 '오른쪽으로' (피그마 GuidePill)
+    await expect(ep.getByTestId("eng-guide-pill").filter({ visible: true })).toHaveAttribute("data-cmd", "right");
     // 0.4초마다 다시 보내므로 1.5초 넘게 눌러도 그대로 있다
     await ep.waitForTimeout(2000);
     await expect(band).toHaveAttribute("data-cmd", "right");
@@ -140,15 +142,22 @@ test("통화: 십자키를 누르는 동안만 고객 화면에 방향 · 굴리
     await expect(cp.getByTestId("cust-status")).toHaveText("빨간 동그라미를 봐주세요", { timeout: 10_000 });
     await expect.poll(() => redPixels(cp, null), { timeout: 10_000 }).toBeGreaterThan(50);
 
-    // 8) 화면을 멈추면 십자키는 비활성, 눌러도 고객 화면에 뜨지 않는다
-    await ep.getByRole("button", { name: /멈추고 그리기/ }).click();
-    await expect(pad).toHaveAttribute("aria-disabled", "true", { timeout: 5_000 });
+    // 8) 화면을 멈추면 십자키 자리에 파란 '라이브로'(피그마 E08) — 그 자리를 눌러도 고객 화면에 방향이 뜨지 않는다
     const box2 = (await pad.boundingBox())!;
+    await ep.getByRole("button", { name: /멈추고 그리기/ }).click();
+    await expect(pad).toHaveCount(0, { timeout: 5_000 });
+    const live = ep.getByRole("button", { name: "라이브로" });
+    await expect(live).toBeVisible();
     const f4 = await finger(ep);
-    await f4.down(box2.x + box2.width / 2 + 70, box2.y + box2.height / 2);
+    // 위쪽 팔 자리 (가운데 '라이브로' 버튼은 가로로 넓어서 좌우 팔 자리를 덮는다)
+    await f4.down(box2.x + box2.width / 2, box2.y + 8);
     await ep.waitForTimeout(1000);
     await expect(band).toHaveCount(0);
     await f4.up();
+    await expect(live).toBeVisible();
+    // 라이브로 돌아가면 십자키도 돌아온다
+    await live.click();
+    await expect(pad).toBeVisible({ timeout: 5_000 });
 
     expect(logs.filter((l) => l.includes("pageerror"))).toEqual([]);
   } finally {

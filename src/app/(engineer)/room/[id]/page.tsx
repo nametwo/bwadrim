@@ -43,7 +43,7 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
       : room.resolved_remotely === true
         ? { text: "출장 없이 원격 해결", cls: "text-text-success" }
         : room.resolved_remotely === false
-          ? { text: "출장 필요", cls: "text-text-warning" }
+          ? { text: "방문 필요", cls: "text-text-danger" }
           : { text: "고객님과 연결되지 않고 닫음", cls: "text-text-secondary" };
     const rows: [string, string][] = [["시작", formatKstDateTime(createdAt)]];
     if (ended && room.ended_at) {

@@ -13,7 +13,8 @@ import s from "./guide.module.css";
 
 // 고객 화면 방향 지시 (요구사항 CALL-15). 엔지니어가 누르고 있는 동안만 보인다.
 
-const GUIDE_TEXT: Record<GuideCmd, { main: string; sub: string }> = {
+// 엔지니어 화면의 '고객 화면' 알약(guide-pill.tsx)도 같은 문구(main)를 쓴다
+export const GUIDE_TEXT: Record<GuideCmd, { main: string; sub: string }> = {
   left: { main: "왼쪽으로", sub: "휴대폰을 천천히 옮겨 주세요" },
   right: { main: "오른쪽으로", sub: "휴대폰을 천천히 옮겨 주세요" },
   up: { main: "위쪽으로", sub: "화살표 쪽으로 천천히 옮겨 주세요" },

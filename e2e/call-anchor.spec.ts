@@ -56,10 +56,10 @@ test("통화: 짧게 탭 = 빨간 동그라미, 길게 누름 = 고객 화면에
   try {
     await ep.goto(`/room/${ROOM.id}`);
     await ep.getByRole("button", { name: /연결 준비/ }).click();
-    await expect(ep.getByTestId("eng-wait-title")).toHaveText("고객님을 기다리고 있어요");
+    await expect(ep.getByTestId("eng-waiting")).toBeVisible();
 
     await cp.goto(`/join/${ROOM.join_token}`);
-    await cp.getByRole("button", { name: /카메라 켜기/ }).click();
+    await cp.getByRole("button", { name: /카메라 켜고 시작하기/ }).click();
 
     const engVideo = ep.getByTestId("eng-video");
     await expect.poll(() => engVideo.evaluate((v: HTMLVideoElement) => v.videoWidth), { timeout: 30_000 }).toBeGreaterThan(0);

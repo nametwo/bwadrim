@@ -73,6 +73,44 @@ export async function markRoomActive(roomId: string) {
     .eq("status", "waiting");
 }
 
+// 고객이 어디까지 왔는지 (ROOM-13): 링크를 열었는지, 카메라를 허용·거부했는지.
+// 엔지니어 대기 화면이 몇 초마다 묻는다. 자기 방 기록만 읽힌다(RLS). 실패하면 null — 화면은 모르는 것으로 둔다
+export type JoinProgress = {
+  linkOpened: boolean;
+  // 가장 최근 카메라 결과. 거부했다가 다시 허용할 수 있어서 마지막 것만 본다
+  camera: "granted" | "denied" | null;
+  // 거부 원인(JOIN-05의 reason: NotAllowedError 등)
+  deniedReason: string | null;
+};
+
+export async function getJoinProgress(roomId: string): Promise<JoinProgress | null> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("events")
+    .select("id, name, props")
+    .eq("room_id", roomId)
+    .in("name", ["link_opened", "camera_granted", "camera_denied"])
+    .order("id", { ascending: true });
+  if (error || !data) return null;
+
+  let linkOpened = false;
+  let camera: JoinProgress["camera"] = null;
+  let deniedReason: string | null = null;
+  for (const e of data as { name: string; props: Record<string, unknown> | null }[]) {
+    if (e.name === "link_opened") linkOpened = true;
+    if (e.name === "camera_granted") {
+      camera = "granted";
+      deniedReason = null;
+    }
+    if (e.name === "camera_denied") {
+      camera = "denied";
+      deniedReason = typeof e.props?.reason === "string" ? e.props.reason : null;
+    }
+  }
+  // 카메라를 켰다면 링크는 연 것이다 (link_opened 기록이 실패했어도)
+  return { linkOpened: linkOpened || camera !== null, camera, deniedReason };
+}
+
 // 레이저 포인터·화면 멈춤·AR 핀·방향 지시 첫 사용 기록 (세션 화면을 열 때마다 1번씩). 자기 방인지는 RLS로 확인
 export async function logToolUsed(
   roomId: string,

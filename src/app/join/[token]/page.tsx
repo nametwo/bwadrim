@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { logEvent } from "@/lib/events";
 import { detectInApp } from "@/lib/in-app-browser";
 import { isJoinToken } from "@/lib/join-token";
+import { engineerNameOf } from "@/lib/engineer-name";
 import { NoticeScreen } from "@/components/ui/notice-screen";
 import { buttonClass } from "@/components/ui/button";
 import { ClockIcon, LinkIcon, RefreshIcon, WifiOffIcon } from "@/components/ui/icons";
@@ -25,7 +26,7 @@ export const metadata: Metadata = {
 export default async function JoinPage({ params }: PageProps<"/join/[token]">) {
   const { token } = await params;
 
-  let room: { id: string; status: string; expires_at: string } | null = null;
+  let room: { id: string; status: string; expires_at: string; engineer_id: string } | null = null;
   let lookupFailed = false;
 
   // 형식이 틀리면(예전 6자리 링크 포함) DB에 묻지 않고 '주소를 확인해 주세요'
@@ -33,7 +34,7 @@ export default async function JoinPage({ params }: PageProps<"/join/[token]">) {
     try {
       const { data, error } = await createAdminClient()
         .from("rooms")
-        .select("id, status, expires_at")
+        .select("id, status, expires_at, engineer_id")
         .eq("join_token", token)
         .maybeSingle();
       if (error) throw error;
@@ -73,15 +74,22 @@ export default async function JoinPage({ params }: PageProps<"/join/[token]">) {
     );
   }
 
-  const expired =
-    room.status === "ended" || new Date(room.expires_at) < new Date();
-
-  if (expired) {
+  // 피그마 C06: 누를 버튼 없이 할 일(새 링크 요청)만 안내
+  if (room.status === "ended") {
     return (
-      <NoticeScreen tone="neutral" icon={<ClockIcon className="size-10" />} title="이미 끝난 상담 링크예요">
+      <NoticeScreen tone="neutral" icon={<ClockIcon className="size-10" />} title="상담이 이미 끝났어요">
         다시 도움이 필요하면
         <br />
-        기사님께 새 링크를 보내 달라고 말씀해 주세요.
+        기사님께 새 링크를 요청해 주세요.
+      </NoticeScreen>
+    );
+  }
+  if (new Date(room.expires_at) < new Date()) {
+    return (
+      <NoticeScreen tone="neutral" icon={<ClockIcon className="size-10" />} title="링크가 만료됐어요">
+        링크는 24시간 동안만 쓸 수 있어요.
+        <br />
+        기사님께 새 링크를 요청해 주세요.
       </NoticeScreen>
     );
   }
@@ -90,8 +98,14 @@ export default async function JoinPage({ params }: PageProps<"/join/[token]">) {
   const inApp = detectInApp(ua);
   await logEvent(room.id, "customer", "link_opened", { ua, inapp: inApp });
 
+  // 누가 기다리는지 (JOIN-02 기사님 카드). 엔지니어 계정에 표시 이름이 없거나 조회에 실패하면 이름 없이
+  const engineerName = await createAdminClient()
+    .auth.admin.getUserById(room.engineer_id)
+    .then(({ data }) => engineerNameOf(data.user))
+    .catch(() => null);
+
   if (inApp) {
-    return <OpenInBrowser kind={inApp} roomId={room.id} token={token} />;
+    return <OpenInBrowser kind={inApp} roomId={room.id} token={token} engineerName={engineerName} />;
   }
-  return <CameraStart roomId={room.id} token={token} />;
+  return <CameraStart roomId={room.id} token={token} engineerName={engineerName} />;
 }

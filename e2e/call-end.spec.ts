@@ -2,9 +2,10 @@ import { expect, test, type BrowserContextOptions, type Page } from "@playwright
 import { CLIPS, FIXTURE, engineerCookie, fakeCamera, mockEvents, mockReset, mockRooms } from "./helpers";
 import { RealtimeHub, describeHub } from "./realtime-mock";
 
-// 통화 끝내기 흐름 (ROOM-10, JOIN-08·04):
-//  - 엔지니어 '종료' → 해결 여부 창. '계속 통화하기'면 통화가 이어지고, 답을 고르면 그때 끊고 저장
-//  - 고객 '끝내기' → 확인 창. '계속할게요'면 이어지고, 끝낸 뒤 '잘못 눌렀어요 · 다시 연결'로 탭 한 번에 되돌아온다
+// 통화 끝내기 흐름 (ROOM-10·13, JOIN-08·04, 피그마 E03·E04·E10·E11·C18·C19):
+//  - 고객이 링크를 열면 엔지니어 대기 화면의 '고객 진행 상황'이 바뀐다
+//  - 엔지니어 '종료' → '통화를 끝낼까요?'. '계속 통화하기'면 이어지고, '통화 끝내기'면 결과 기록 → 고른 뒤 '기록하고 끝내기'
+//  - 고객 '통화 종료' → 확인 창. '계속하기'면 이어지고, 끝낸 뒤 '잘못 눌렀어요 · 다시 연결'로 탭 한 번에 되돌아온다
 //  - 고객 마이크를 못 쓰면(전화 통화 중 등) 카메라만으로 연결하고 엔지니어 화면에 알린다
 // 진짜 Supabase 없이 — 다른 통화 테스트와 같은 가짜 서버·가짜 카메라·실제 WebRTC 루프백.
 
@@ -56,49 +57,62 @@ test("끝내기: 엔지니어 해결 여부 창·계속하기 · 고객 확인 �
   try {
     await ep.goto(`/room/${ROOM.id}`);
     await ep.getByRole("button", { name: /연결 준비/ }).click();
-    await expect(ep.getByTestId("eng-wait-title")).toHaveText("고객님을 기다리고 있어요");
+    // 아직 링크를 안 보냈으면 '문자로 링크 보내기' 화면(피그마 E03)
+    await expect(ep.getByTestId("eng-waiting")).toHaveAttribute("data-sent", "false");
+    // 고객이 링크를 열면 몇 초 안에 '고객 진행 상황'(E04)이 바뀐다 (ROOM-13)
     await cp.goto(`/join/${ROOM.join_token}`);
-    await cp.getByRole("button", { name: /카메라 켜기/ }).click();
+    await expect(ep.getByTestId("eng-waiting")).toHaveAttribute("data-sent", "true", { timeout: 10_000 });
+    await expect(ep.getByTestId("eng-progress")).toContainText("고객님이 링크를 열었어요");
+    await cp.getByRole("button", { name: /카메라 켜고 시작하기/ }).click();
     await connected();
     await expect(ep.getByTestId("eng-call-status")).toContainText("통화 중");
+    await expect(ep.getByTestId("eng-quality")).toHaveText("연결 좋음");
 
-    // 1) 엔지니어 '종료' → 해결 여부 창. 창이 떠 있는 동안에도 통화는 이어진다 → '계속 통화하기'
+    // 1) 엔지니어 '종료' → '통화를 끝낼까요?'(피그마 E10). 창이 떠 있는 동안에도 통화는 이어진다 → '계속 통화하기'
     await ep.getByRole("button", { name: "종료", exact: true }).click();
     const engSheet = ep.getByTestId("eng-end-sheet");
     await expect(engSheet).toBeVisible();
-    await expect(engSheet.getByRole("button", { name: /원격으로 해결/ })).toBeVisible();
-    await expect(engSheet.getByRole("button", { name: /출장이 필요/ })).toBeVisible();
+    await expect(engSheet.getByRole("button", { name: "통화 끝내기" })).toBeVisible();
     await connected();
     await ep.waitForTimeout(ARM_WAIT_MS);
     await engSheet.getByRole("button", { name: "계속 통화하기" }).click();
     await expect(engSheet).toHaveCount(0);
     await connected();
 
-    // 2) 고객 '끝내기' → 확인 창 → '계속할게요'면 그대로
-    await cp.getByRole("button", { name: "끝내기" }).click();
+    // 2) 고객 '통화 종료' → 확인 창(C18) → '계속하기'면 그대로
+    await cp.getByRole("button", { name: "통화 종료" }).click();
     const custSheet = cp.getByTestId("cust-end-sheet");
     await expect(custSheet).toBeVisible();
     await cp.waitForTimeout(ARM_WAIT_MS);
-    await custSheet.getByRole("button", { name: /계속할게요/ }).click();
+    await custSheet.getByRole("button", { name: "계속하기" }).click();
     await expect(custSheet).toHaveCount(0);
     await connected();
 
-    // 3) 고객이 끝내면 엔지니어는 해결 여부 화면. 고객이 '다시 연결'을 누르면 탭 한 번에 통화로 돌아온다
-    await cp.getByRole("button", { name: "끝내기" }).click();
+    // 3) 고객이 끝내면 엔지니어는 결과 기록 화면. 고객이 '다시 연결'을 누르면 탭 한 번에 통화로 돌아온다
+    await cp.getByRole("button", { name: "통화 종료" }).click();
     await cp.waitForTimeout(ARM_WAIT_MS);
-    await custSheet.getByRole("button", { name: /끝낼게요/ }).click();
+    await custSheet.getByRole("button", { name: "끝내기", exact: true }).click();
     await expect(cp.getByTestId("cust-ended")).toBeVisible();
-    await expect(ep.getByText("고객님이 통화를 끝냈어요")).toBeVisible({ timeout: 10_000 });
+    await expect(ep.getByTestId("eng-record")).toContainText("고객님이 통화를 끝냈어요", { timeout: 10_000 });
     await cp.getByRole("button", { name: /다시 연결/ }).click();
     await connected();
     await expect(ep.getByTestId("eng-call-status")).toContainText("통화 중", { timeout: 30_000 });
 
-    // 4) 엔지니어가 답을 고르면 그때 끊고 저장 → 대시보드. 고객 화면은 '끝났어요'(다시 연결 버튼 없음)
+    // 4) 엔지니어 '통화 끝내기' → 결과 기록(E11): 고르기 전에는 '기록하고 끝내기'가 잠겨 있고, 고른 답은 바꿀 수 있다
     await ep.getByRole("button", { name: "종료", exact: true }).click();
     await ep.waitForTimeout(ARM_WAIT_MS);
-    await ep.getByTestId("eng-end-sheet").getByRole("button", { name: /원격으로 해결/ }).click();
-    await expect(ep).toHaveURL(/\/dashboard$/, { timeout: 15_000 });
+    await ep.getByTestId("eng-end-sheet").getByRole("button", { name: "통화 끝내기" }).click();
     await expect(cp.getByTestId("cust-ended")).toBeVisible({ timeout: 10_000 });
+    const record = ep.getByTestId("eng-record");
+    await expect(record).toBeVisible();
+    await expect(record).toContainText("통화 시간");
+    const submit = record.getByRole("button", { name: "기록하고 끝내기" });
+    await expect(submit).toBeDisabled();
+    await record.getByRole("radio", { name: /방문이 필요/ }).click();
+    await record.getByRole("radio", { name: /원격으로 해결/ }).click();
+    await expect(record.getByRole("radio", { name: /원격으로 해결/ })).toHaveAttribute("aria-checked", "true");
+    await submit.click();
+    await expect(ep).toHaveURL(/\/dashboard$/, { timeout: 15_000 });
     await expect(cp.getByRole("button", { name: /다시 연결/ })).toHaveCount(0);
     const room = (await mockRooms()).find((r) => r.id === ROOM.id);
     expect(room?.status).toBe("ended");
@@ -140,7 +154,7 @@ test("고객 마이크를 못 쓰면 카메라만으로 연결 (camera_granted m
     await ep.goto(`/room/${ROOM.id}`);
     await ep.getByRole("button", { name: /연결 준비/ }).click();
     await cp.goto(`/join/${ROOM.join_token}`);
-    await cp.getByRole("button", { name: /카메라 켜기/ }).click();
+    await cp.getByRole("button", { name: /카메라 켜고 시작하기/ }).click();
     await expect(cp.getByTestId("cust-status")).toHaveText("기사님이 보고 있어요", { timeout: 30_000 });
     await expect(ep.getByText(/고객 마이크 없음/)).toBeVisible({ timeout: 10_000 });
     await expect
