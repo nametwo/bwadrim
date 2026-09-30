@@ -49,6 +49,7 @@ src/components/                                  # 엔지니어·고객 화면 �
   ui/                                            # 디자인 시스템 부품(NFR-08, 피그마 컴포넌트와 같은 이름): button(Button·ButtonLink·buttonClass), icons(선 아이콘), sheet(아래 확인 창), notice-screen(한 화면 한 안내), bottom-cta(아래에 붙는 버튼 자리), brand(로고), status-chip, step-item, banner, call-control(통화 원형 버튼), stat-card, engineer-card, call-timer
 supabase/schema.sql
 docs/requirements.md                             # 기능 요구사항 (기준 문서)
+할일.md                                          # 나중에 할 일 메모. 하기로 하면 requirements.md로 옮기고 지운다
 ```
 
 ## 시그널링
