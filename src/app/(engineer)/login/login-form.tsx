@@ -74,7 +74,9 @@ export function LoginForm({ next }: { next: string }) {
           {pending ? "로그인 중…" : "로그인"}
         </Button>
         <p className="pt-1 text-center text-body-s text-text-secondary">
-          계정은 관리자에게 받아 주세요. A/S 받으시는 사장님은 로그인할 필요가 없어요.
+          계정은 관리자에게 받아 주세요.
+          <br />
+          사장님은 문자 속 링크를 누르시면 돼요.
         </p>
       </BottomCta>
     </form>

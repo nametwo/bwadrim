@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { Brand } from "@/components/ui/brand";
 import { LoginForm } from "./login-form";
 
@@ -14,10 +13,9 @@ export default async function LoginPage({
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pt-[max(12px,env(safe-area-inset-top))]">
+      {/* 사이트 주소(/)가 곧 이 화면이라(AUTH-01) 로고는 누르는 곳이 아니다 */}
       <header className="flex h-12 items-center">
-        <Link href="/" aria-label="봐드림 첫 화면">
-          <Brand />
-        </Link>
+        <Brand />
       </header>
 
       <h1 className="pt-8 pb-8 text-title-l text-text-primary">

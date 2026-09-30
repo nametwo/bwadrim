@@ -50,7 +50,15 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (user && !isServerAction && pathname === "/login") {
+  // 사이트 주소(/)는 엔지니어 입구다 (AUTH-01). 고객은 문자 속 링크(/join)로만 들어온다
+  if (!user && !isServerAction && pathname === "/") {
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
+
+  if (user && !isServerAction && (pathname === "/login" || pathname === "/")) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     url.search = "";

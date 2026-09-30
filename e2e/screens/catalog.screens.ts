@@ -107,14 +107,9 @@ test("첫 화면·로그인·404", async ({ browser, baseURL }) => {
     const p = await rig.visitor();
     const pc = await rig.visitor(true);
 
-    await shot({ section: "home", ids: ["AUTH-01"], title: "첫 화면" }, async () => {
+    await shot({ section: "home", ids: ["AUTH-01", "AUTH-02", "AUTH-04"], title: "로그인", note: "사이트 주소(/)를 열어도, 로그인 안 하고 대시보드·세션·통계를 열어도 이 화면으로 온다" }, async () => {
       await open(p, "/");
-      await open(pc, "/");
-      return [{ label: "폰", page: p }, { label: "PC", page: pc }];
-    });
-
-    await shot({ section: "home", ids: ["AUTH-02", "AUTH-04"], title: "로그인", note: "로그인 안 하고 대시보드·세션·통계를 열어도 이 화면으로 온다" }, async () => {
-      await open(p, "/login");
+      await expect(p).toHaveURL(/\/login$/);
       await open(pc, "/dashboard");
       await expect(pc).toHaveURL(/\/login\?next=%2Fdashboard/);
       return [{ label: "폰", page: p }, { label: "PC", page: pc }];
@@ -151,8 +146,9 @@ test("대시보드·통계", async ({ browser, baseURL }) => {
     const epc = await rig.engineer({ pc: true });
 
     await mock("/__seed", { rooms: [], events: [] });
-    await shot({ section: "dashboard", ids: ["ROOM-04"], title: "대시보드 — 상담 없음 (E02)" }, async () => {
-      await open(ep, "/dashboard");
+    await shot({ section: "dashboard", ids: ["ROOM-04", "AUTH-01"], title: "대시보드 — 상담 없음 (E02)", note: "로그인한 채로 사이트 주소(/)를 열면 여기로 온다" }, async () => {
+      await open(ep, "/");
+      await expect(ep).toHaveURL(/\/dashboard$/);
       await expect(ep.getByText("아직 상담이 없어요")).toBeVisible({ timeout: 30_000 });
       return [eng(ep)];
     });
