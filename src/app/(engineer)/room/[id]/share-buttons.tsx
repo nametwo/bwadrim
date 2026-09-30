@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useSyncExternalStore } from "react";
+import { kakaoKey, sendKakaoLink } from "@/lib/kakao-share";
 
 const noSubscribe = () => () => {};
 
@@ -31,6 +32,14 @@ export function ShareButtons({ joinUrl }: { joinUrl: string }) {
     }
   }
 
+  async function sendKakao() {
+    try {
+      await sendKakaoLink(joinUrl);
+    } catch {
+      alert("카카오톡을 열지 못했어요. 아래 문자나 공유 버튼을 써 주세요.");
+    }
+  }
+
   async function copy() {
     try {
       await navigator.clipboard.writeText(joinUrl);
@@ -53,6 +62,16 @@ export function ShareButtons({ joinUrl }: { joinUrl: string }) {
       >
         문자로 보내기
       </a>
+
+      {kakaoKey && (
+        <button
+          type="button"
+          onClick={sendKakao}
+          className="h-14 rounded-xl bg-yellow-400 text-lg font-semibold text-gray-900 active:opacity-80"
+        >
+          카카오톡으로 보내기
+        </button>
+      )}
 
       {canShare && (
         <button
