@@ -3,6 +3,7 @@
 import { useState, useSyncExternalStore } from "react";
 import { Button } from "@/components/ui/button";
 import { ChatBubbleIcon, CheckIcon, CopyIcon, MessageIcon } from "@/components/ui/icons";
+import { kakaoKey, sendKakaoLink } from "@/lib/kakao-share";
 
 const noSubscribe = () => () => {};
 
@@ -33,6 +34,7 @@ export function ShareButtons({
     () => false,
   );
   const [copied, setCopied] = useState<"ok" | "fail" | null>(null);
+  const [kakaoFailed, setKakaoFailed] = useState(false);
 
   const message = inviteMessage(joinUrl);
 
@@ -51,6 +53,18 @@ export function ShareButtons({
     }
   }
 
+  // 카카오링크(ROOM-14): 카톡 친구 선택 창을 바로 연다. 실패하면 기기 공유 창(ROOM-07)으로 대신한다
+  async function sendKakao() {
+    try {
+      await sendKakaoLink(joinUrl);
+      setKakaoFailed(false);
+      onSent?.("share");
+    } catch {
+      setKakaoFailed(true);
+      if (canShare) await share();
+    }
+  }
+
   async function copy() {
     try {
       await navigator.clipboard.writeText(joinUrl);
@@ -63,7 +77,9 @@ export function ShareButtons({
     }
   }
 
-  const small = resend || !canShare;
+  const kakaoDirect = !!kakaoKey;
+  const hasKakao = kakaoDirect || canShare;
+  const small = resend || !hasKakao;
   const copyButton = (
     <Button
       variant={small ? "ghost" : "secondary"}
@@ -90,22 +106,29 @@ export function ShareButtons({
       >
         {resend ? "문자 다시 보내기" : "문자로 링크 보내기"}
       </Button>
-      {canShare ? (
+      {hasKakao ? (
         <div className="grid grid-cols-2 gap-2">
-          {/* 기기 공유 창(카카오톡·밴드 등)으로 같은 문구를 보낸다 (ROOM-07) */}
+          {/* 카카오 키가 있으면 카톡 친구 선택 창을 바로 연다 (ROOM-14). 없으면 기기 공유 창(카카오톡·밴드 등)으로 같은 문구를 보낸다 (ROOM-07) */}
           <Button
             variant={resend ? "ghost" : "kakao"}
             size={resend ? "m" : "l"}
             icon={<ChatBubbleIcon className="size-5" />}
-            onClick={share}
+            onClick={kakaoDirect ? sendKakao : share}
             className="whitespace-nowrap"
           >
-            카톡 공유
+            {kakaoDirect ? "카톡 보내기" : "카톡 공유"}
           </Button>
           {copyButton}
         </div>
       ) : (
         copyButton
+      )}
+      {kakaoFailed && (
+        <p role="status" className="text-center text-body-s text-text-danger">
+          {canShare
+            ? "카카오톡을 바로 열지 못해 공유 창으로 열었어요."
+            : "카카오톡을 열지 못했어요. 문자를 보내거나 링크를 복사해 주세요."}
+        </p>
       )}
       {copied === "fail" && (
         <div role="status" className="flex flex-col gap-1 text-center text-body-s">
