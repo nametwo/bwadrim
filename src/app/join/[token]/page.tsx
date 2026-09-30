@@ -2,14 +2,14 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logEvent } from "@/lib/events";
-import { detectInApp } from "@/lib/in-app-browser";
+import { detectInApp, IN_APP_LABEL } from "@/lib/in-app-browser";
 import { isJoinToken } from "@/lib/join-token";
 import { engineerNameOf } from "@/lib/engineer-name";
 import { NoticeScreen } from "@/components/ui/notice-screen";
+import { OpenInBrowser } from "@/components/open-in-browser";
 import { buttonClass } from "@/components/ui/button";
 import { ClockIcon, LinkIcon, RefreshIcon, WifiOffIcon } from "@/components/ui/icons";
 import { CameraStart } from "./camera-start";
-import { OpenInBrowser } from "./open-in-browser";
 
 // 문자·카톡 미리보기에 뜨는 제목과 설명 — 모르는 링크로 보이지 않게 무엇인지 밝힌다. 검색에는 안 나오게
 export const metadata: Metadata = {
@@ -104,8 +104,30 @@ export default async function JoinPage({ params }: PageProps<"/join/[token]">) {
     .then(({ data }) => engineerNameOf(data.user))
     .catch(() => null);
 
+  const start = <CameraStart roomId={room.id} token={token} engineerName={engineerName} />;
   if (inApp) {
-    return <OpenInBrowser kind={inApp} roomId={room.id} token={token} engineerName={engineerName} />;
+    return (
+      <OpenInBrowser
+        kind={inApp}
+        testId="join-in-app"
+        title={
+          <>
+            이 화면에서는
+            <br />
+            카메라가 안 켜져요
+          </>
+        }
+        body={
+          <>
+            {IN_APP_LABEL[inApp]} 안에서 열려서 그래요.
+            <br />
+            사파리나 크롬으로 열면 돼요.
+          </>
+        }
+      >
+        {start}
+      </OpenInBrowser>
+    );
   }
-  return <CameraStart roomId={room.id} token={token} engineerName={engineerName} />;
+  return start;
 }

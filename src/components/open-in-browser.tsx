@@ -1,34 +1,31 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import {
-  externalOpenUrl,
-  IN_APP_LABEL,
-  type InAppKind,
-} from "@/lib/in-app-browser";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { externalOpenUrl, type InAppKind } from "@/lib/in-app-browser";
 import { NoticeScreen } from "@/components/ui/notice-screen";
 import { Button } from "@/components/ui/button";
 import { CheckIcon, CloseIcon, CopyIcon, ExternalIcon, MoreIcon } from "@/components/ui/icons";
-import { CameraStart } from "./camera-start";
 
-// 인앱 브라우저로 열렸을 때 (JOIN-10, 피그마 C05). 카카오톡·라인은 자동으로 기본 브라우저로 넘기고,
+// 인앱 브라우저로 열렸을 때 (고객 JOIN-10 피그마 C05, 엔지니어 AUTH-09). 카카오톡·라인은 자동으로 기본 브라우저로 넘기고,
 // 나머지 앱은 직접 열도록 메뉴 그림으로 안내한다. 안드로이드 등에서 그 자리에서 되는 경우를 위해 '이대로 계속하기'를 둔다.
+// 제목·설명은 쓰는 쪽이 정하고, '이대로 계속하기'를 누르면 children(원래 화면)을 보여 준다.
 export function OpenInBrowser({
   kind,
-  roomId,
-  token,
-  engineerName = null,
+  title,
+  body,
+  testId,
+  children,
 }: {
   kind: InAppKind;
-  roomId: string;
-  token: string;
-  engineerName?: string | null;
+  title: ReactNode;
+  body: ReactNode;
+  testId?: string;
+  children: ReactNode;
 }) {
   const [stay, setStay] = useState(false);
   const [copied, setCopied] = useState(false);
   const triedRef = useRef(false);
   const canOpen = kind === "kakaotalk" || kind === "line";
-  const app = IN_APP_LABEL[kind];
 
   function openExternal() {
     const target = externalOpenUrl(kind, window.location.href);
@@ -53,7 +50,7 @@ export function OpenInBrowser({
     }
   }
 
-  if (stay) return <CameraStart roomId={roomId} token={token} engineerName={engineerName} />;
+  if (stay) return children;
 
   const copyButton = (primary: boolean) => (
     <Button
@@ -71,13 +68,8 @@ export function OpenInBrowser({
     <NoticeScreen
       tone="warning"
       icon={<ExternalIcon className="size-10" />}
-      title={
-        <>
-          이 화면에서는
-          <br />
-          카메라가 안 켜져요
-        </>
-      }
+      title={title}
+      testId={testId}
       actions={
         <>
           {canOpen ? (
@@ -101,11 +93,7 @@ export function OpenInBrowser({
       }
       footer={canOpen ? undefined : "복사한 링크를 사파리·크롬·삼성 인터넷 주소창에 붙여 넣어도 돼요."}
     >
-      <p>
-        {app} 안에서 열려서 그래요.
-        <br />
-        사파리나 크롬으로 열면 돼요.
-      </p>
+      <p>{body}</p>
       {!canOpen && <MenuPicture />}
     </NoticeScreen>
   );

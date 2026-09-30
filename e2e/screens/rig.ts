@@ -116,9 +116,9 @@ export class Rig {
     return ctx.newPage();
   }
 
-  /** 로그인 안 한 브라우저 */
-  async visitor(pc = false) {
-    const ctx = await this.browser.newContext(pc ? PC : PHONE);
+  /** 로그인 안 한 브라우저. userAgent: 카톡 등 앱 안 브라우저 흉내 (AUTH-09) */
+  async visitor(pc = false, userAgent?: string) {
+    const ctx = await this.browser.newContext({ ...(pc ? PC : PHONE), ...(userAgent && { userAgent }) });
     this.contexts.push(ctx);
     return ctx.newPage();
   }

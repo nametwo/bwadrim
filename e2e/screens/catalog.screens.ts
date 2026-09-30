@@ -130,6 +130,32 @@ test("첫 화면·로그인·404", async ({ browser, baseURL }) => {
       return [{ label: "폰", page: p }];
     });
 
+    const kb = await rig.visitor();
+    await shot(
+      { section: "home", ids: ["AUTH-02"], title: "로그인 — 키보드가 올라와 화면이 낮을 때", note: "안드로이드 카톡 같은 앱 안 브라우저는 키보드만큼 화면이 줄어든다. 글을 치는 동안은 '로그인'이 입력칸 아래로 내려가 가리지 않는다(BUG-21)" },
+      async () => {
+        await open(kb, "/login");
+        await kb.getByLabel("이메일").focus();
+        await kb.setViewportSize({ width: 390, height: 360 });
+        // 폰은 키보드가 올라오면 커서가 있는 입력칸이 보이게 스크롤한다
+        await kb.evaluate(() => (document.activeElement as HTMLElement).scrollIntoView({ block: "nearest" }));
+        return [{ label: "폰", page: kb, fullPage: false }];
+      },
+    );
+
+    const kakao = await rig.visitor(false, UA.kakao);
+    const naver = await rig.visitor(false, UA.naver);
+    await shot(
+      { section: "home", ids: ["AUTH-09"], title: "엔지니어 — 앱 안 브라우저 안내", note: "카카오톡·라인은 자동으로 인터넷 앱으로 넘긴다(여기선 넘어갈 앱이 없어 안내가 남음). 네이버·인스타그램 등은 메뉴에서 직접 열도록 그림으로 안내. 로그인·대시보드·상담·통계 모두 같다" },
+      async () => {
+        await open(kakao, "/").catch(() => {});
+        await expect(kakao.getByTestId("eng-in-app")).toBeVisible();
+        await open(naver, "/login");
+        await expect(naver.getByRole("button", { name: /링크 복사하기/ })).toBeVisible();
+        return [{ label: "카카오톡", page: kakao }, { label: "네이버 앱", page: naver }];
+      },
+    );
+
     const ep = await rig.engineer();
     await shot({ section: "home", ids: ["AUTH-08"], title: "없는 주소·남의 상담 (404)" }, async () => {
       await open(ep, "/room/e2e00000-0000-4000-8000-00000000ffff");
