@@ -46,3 +46,4 @@ next-env.d.ts
 /scripts/tracking-bench/out/
 /test-results/
 /playwright-report/
+/screens/

@@ -8,6 +8,9 @@
 //   PATCH /rest/v1/rooms?id=eq.X…      상태 갱신 (status=eq.X 조건 지원)
 //   POST /rest/v1/events               기록 (본문 객체 또는 배열) · GET은 통계 화면용(필터 무시)
 //   GET  /__events  ·  GET /__rooms  ·  POST /__reset[?room=ID]  ·  GET /__health   (테스트용)
+//   POST /__seed {rooms?, events?}     방·이벤트 목록 바꾸기 (화면 카탈로그: 대시보드·통계). ageMin = 몇 분 전
+//   POST /__patch-room {id, ...}       방 한 개 고치기 (링크를 연 뒤 세션이 닫힌 경우 등)
+//   POST /__faults {failJoinToken?, failRoomUpdate?}  일부러 실패시키기 (전체 reset하면 풀린다)
 //
 // 고정 데이터는 e2e/fixtures.json과 같다 (테스트도 같은 파일을 읽는다).
 import http from "node:http";
@@ -21,6 +24,7 @@ const PORT = Number(process.env.E2E_SUPABASE_PORT ?? FIXTURE.supabasePort);
 
 let rooms = [];
 let events = [];
+let faults = {};
 
 function freshRoom(r, now) {
   return {
@@ -46,8 +50,34 @@ function reset(roomId) {
   }
   rooms = FIXTURE.rooms.map((r) => freshRoom(r, now));
   events = [];
+  faults = {};
 }
 reset();
+
+/** 화면 카탈로그용 방: ageMin분 전에 만든 방. expired면 만든 지 24시간이 지난 방, tookMin이면 만든 뒤 그만큼 지나 끝난 방 */
+function seededRoom({ ageMin, expired, tookMin, ...r }, now) {
+  const created = now - (ageMin ?? (expired ? 25 * 60 : 1)) * 60_000;
+  return {
+    ...freshRoom(r, now),
+    created_at: new Date(created).toISOString(),
+    expires_at: new Date(expired ? now - 3600_000 : created + 24 * 3600_000).toISOString(),
+    ended_at: tookMin == null ? null : new Date(created + tookMin * 60_000).toISOString(),
+  };
+}
+
+function eventRow({ ageMin, ...e }, now = Date.now()) {
+  const at = now - (ageMin ?? 0) * 60_000;
+  return { props: {}, ...e, created_at: new Date(at).toISOString(), at };
+}
+
+/** PostgREST order (col.asc|col.desc 하나만) */
+function sortRows(rows, order) {
+  const m = /^(\w+)\.(asc|desc)/.exec(order ?? "");
+  if (!m) return rows;
+  const [, col, dir] = m;
+  const sign = dir === "desc" ? -1 : 1;
+  return [...rows].sort((a, b) => (a[col] < b[col] ? -sign : a[col] > b[col] ? sign : 0));
+}
 
 function send(res, status, body, headers = {}) {
   const text = body === undefined ? "" : JSON.stringify(body);
@@ -104,6 +134,24 @@ const server = http.createServer(async (req, res) => {
       reset(url.searchParams.get("room") ?? undefined);
       return send(res, 200, { ok: true });
     }
+    if (p === "/__seed" && req.method === "POST") {
+      const body = (await readBody(req)) ?? {};
+      const now = Date.now();
+      if (Array.isArray(body.rooms)) rooms = body.rooms.map((r) => seededRoom(r, now));
+      if (Array.isArray(body.events)) events = body.events.map((e) => eventRow(e, now));
+      return send(res, 200, { ok: true });
+    }
+    if (p === "/__patch-room" && req.method === "POST") {
+      const { id, ...patch } = (await readBody(req)) ?? {};
+      const room = rooms.find((r) => r.id === id);
+      if (!room) return send(res, 404, { message: `no room ${id}` });
+      Object.assign(room, patch);
+      return send(res, 200, room);
+    }
+    if (p === "/__faults" && req.method === "POST") {
+      faults = { ...faults, ...((await readBody(req)) ?? {}) };
+      return send(res, 200, faults);
+    }
 
     // 고객 화면이 기사님 이름을 찾을 때 (서비스 키)
     const adminUser = /^\/auth\/v1\/admin\/users\/([^/]+)$/.exec(p);
@@ -122,9 +170,15 @@ const server = http.createServer(async (req, res) => {
       // RLS 흉내: 사용자 토큰이면 자기 방만, 서비스 키면 전부
       const service = (req.headers.apikey ?? "") === FIXTURE.serviceKey;
       const visible = service ? rooms : authed(req) ? rooms.filter((r) => r.engineer_id === FIXTURE.user.id) : [];
-      const matched = filterRows(visible, url.searchParams);
+      const matched = sortRows(filterRows(visible, url.searchParams), url.searchParams.get("order"));
       const select = url.searchParams.get("select");
       const single = (req.headers.accept ?? "").includes("vnd.pgrst.object");
+      if (faults.failJoinToken && url.searchParams.get("join_token") === `eq.${faults.failJoinToken}`) {
+        return send(res, 500, { code: "XX000", message: "mock: 일부러 실패 (failJoinToken)" });
+      }
+      if (req.method === "PATCH" && faults.failRoomUpdate) {
+        return send(res, 500, { code: "XX000", message: "mock: 일부러 실패 (failRoomUpdate)" });
+      }
       if (req.method === "GET") {
         const rows = matched.map((r) => project(r, select));
         if (single) {
@@ -152,14 +206,14 @@ const server = http.createServer(async (req, res) => {
       if (!authed(req)) return send(res, 200, []);
       const mine = new Set(rooms.filter((r) => r.engineer_id === FIXTURE.user.id).map((r) => r.id));
       const select = url.searchParams.get("select");
-      const rows = filterRows(events.filter((e) => mine.has(e.room_id)), url.searchParams);
+      const rows = sortRows(filterRows(events.filter((e) => mine.has(e.room_id)), url.searchParams), url.searchParams.get("order"));
       return send(res, 200, rows.map((e, i) => project({ id: i + 1, ...e }, select)));
     }
 
     if (p === "/rest/v1/events" && req.method === "POST") {
       const body = await readBody(req);
       const list = Array.isArray(body) ? body : body ? [body] : [];
-      for (const e of list) events.push({ ...e, at: Date.now() });
+      for (const e of list) events.push(eventRow(e));
       return send(res, 201);
     }
 

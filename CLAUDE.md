@@ -63,6 +63,14 @@ AR 핀(CALL-14)은 전용 DataChannel `anchor`(고객이 offer에 포함). 기�
 방향 지시(CALL-15, `src/lib/webrtc/guide.ts`)는 전용 DataChannel `guide`(고객이 offer에 포함, `CallSession.guideLink`). 'draw'에 섞으면 정지 사진 조각 뒤에 막혀 1.5초가 지나 화살표가 저절로 사라진다(고객에겐 '멈춤'으로 보임). 엔지니어가 방향 링(`src/components/guide-dpad.tsx`, 상하좌우 네 조각 + 가운데 구멍 = 멈춤)이나 그 아래 '− 멀리 | 가까이 +' 알약을 누르는 동안 `hold`를 0.4초마다 재전송하고 떼면 `release`. 누른 자리 판정은 `src/components/guide-pad-geometry.ts`(단위 테스트 있음). 고객 쪽(`guide-overlay.tsx`)은 1.5초간 `hold`가 없으면 스스로 지운다. 고객 화면에 방향 지시가 떠 있는 동안은 AR 핀 층(`hidden`)과 상태 문구를 숨긴다. 실험실 `/lab/guide`는 통화 없이 흉내 낸다.
 사진 찍기(CALL-16, `src/lib/webrtc/photo.ts`)는 전용 DataChannel `photo`(고객이 offer에 포함, `CallSession.photoLink`). 엔지니어가 `photo-req`를 보내면 고객 폰이 자기 카메라로 찍어(ImageCapture → 잠깐 해상도 올리기 → 영상 프레임) JPEG base64 조각으로 돌려준다. 고객 화면에 '기사님이 사진을 찍었어요'. 사진은 서버에 올리지 않고 엔지니어 메모리에만 있다가 결과 기록 화면에서 저장할지 묻는다.
 
+## 화면 카탈로그
+
+`npm run screens` → 모든 화면·상태(통화 중 도구, 오류, 이어받기 등)를 폰·PC로 찍어 `screens/index.html` 한 장에 모은다. 요구사항 ID로 걸러 볼 수 있다. e2e와 같은 가짜 Supabase·가짜 카메라·실제 WebRTC 루프백을 쓰고, 앱 코드는 건드리지 않는다(브라우저 API는 `e2e/screens/browser-hooks.ts`로 흉내).
+- 화면이나 상태를 새로 만들면 `e2e/screens/catalog.screens.ts`에 `shot()`을 하나 더한다. 못 가는 상태는 `unreachable()`로 이유를 남긴다
+- 카탈로그는 버튼·상태를 `data-testid`와 역할(role)로 찾는다. 새 화면·상태에는 `data-testid`를 붙여 둘 것 — 문구·디자인만 바뀌면 카탈로그를 고칠 일이 없다
+- 찾던 버튼이 없어지는 등 한 장면이 막히면 그 장면만 '못 찍은 상태'(이유 포함)로 남고 나머지는 계속 찍힌다
+- `next dev`는 폴더당 하나만 뜬다. 개발 서버가 켜져 있으면 끄거나, 다른 폴더(git worktree)에서 돌릴 것
+
 ## 디자인 토큰
 
 색·모서리·크기·글자·그림자는 `src/app/globals.css`의 `@theme` 토큰을 쓸 것 (hex 직접 쓰지 말 것). 이름은 피그마 변수·스타일과 같음: https://www.figma.com/design/Hqnz1fYrJJAhO7nDGNKRwn (`a/b` → `--color-a-b`, `a/default` → `--color-a`, 텍스트 스타일 `Title/M` → `text-title-m`, 효과 `Shadow/Card` → `shadow-card`)

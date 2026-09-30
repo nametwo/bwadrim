@@ -32,6 +32,10 @@ export class RealtimeHub {
   private readonly presence = new Map<string, Map<Client, PresenceEntry>>();
   /** 전달한 broadcast (디버깅·검증용) */
   readonly broadcasts: { topic: string; event: string; from: number }[] = [];
+  /** 이 이벤트(offer·answer 등)의 broadcast는 버린다 — '연결 중' 상태에 머물게 할 때 (화면 카탈로그) */
+  readonly drop = new Set<string>();
+  /** true를 돌려주는 topic은 presence track을 거부한다 — 채널 권한 거부(CALL-12) 흉내 */
+  denyTrack: (topic: string) => boolean = () => false;
 
   async attach(context: BrowserContext): Promise<void> {
     await context.routeWebSocket(/\/realtime\/v1\/websocket/, (ws) => this.connect(ws));
@@ -64,9 +68,16 @@ export class RealtimeHub {
     }
   }
 
-  private reply(c: Client, joinRef: string | null, ref: string | null, topic: string, response: unknown = {}) {
+  private reply(
+    c: Client,
+    joinRef: string | null,
+    ref: string | null,
+    topic: string,
+    response: unknown = {},
+    status: "ok" | "error" = "ok",
+  ) {
     if (ref == null) return;
-    this.sendJson(c, [joinRef, ref, topic, "phx_reply", { status: "ok", response }]);
+    this.sendJson(c, [joinRef, ref, topic, "phx_reply", { status, response }]);
   }
 
   private members(topic: string): Client[] {
@@ -104,6 +115,10 @@ export class RealtimeHub {
         return;
       case "presence": {
         const j = c.topics.get(topic);
+        if (payload?.event === "track" && this.denyTrack(topic)) {
+          this.reply(c, joinRef, ref, topic, { reason: "Unauthorized" }, "error");
+          return;
+        }
         this.reply(c, joinRef, ref, topic);
         if (!j) return;
         if (payload?.event === "track") {
@@ -126,6 +141,7 @@ export class RealtimeHub {
       case "broadcast": {
         // JSON broadcast (바이너리가 아닌 경로) — 다른 구성원에게 그대로
         this.reply(c, joinRef, ref, topic);
+        if (this.drop.has(payload?.event)) return;
         for (const m of this.members(topic)) {
           if (m === c && !c.topics.get(topic)?.selfBroadcast) continue;
           this.sendJson(m, [null, null, topic, "broadcast", payload]);
@@ -178,8 +194,10 @@ export class RealtimeHub {
     const eventBytes = take(eventLen);
     const metaBytes = take(metaLen);
     const payload = b.subarray(o);
-    this.broadcasts.push({ topic, event: dec.decode(eventBytes), from: c.id });
+    const event = dec.decode(eventBytes);
+    this.broadcasts.push({ topic, event, from: c.id });
     if (ref) this.reply(c, joinRef || null, ref, topic);
+    if (this.drop.has(event)) return;
 
     const out = new Uint8Array(5 + topicLen + eventLen + metaLen + payload.length);
     out[0] = 4;
