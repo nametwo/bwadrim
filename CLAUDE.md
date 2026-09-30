@@ -29,7 +29,7 @@
 src/proxy.ts                                     # 세션 갱신 + 엔지니어 라우트 보호 (Next 16: middleware → proxy)
 src/app/
   (engineer)/login, /dashboard, /room/[id], /stats  # 로그인 필요. 방 생성·종료는 서버 액션. stats = 핵심 지표(DATA-06)
-  join/[token]                                   # 고객 진입, 공개. 32자리 링크 토큰(ROOM-12). start-screen(시작), camera-help(거부 원인별 안내), camera-start(통화)
+  join/[token]                                   # 고객 진입, 공개. 32자리 링크 토큰(ROOM-12). start-screen(시작), camera-help(거부 원인별 안내), camera-start(통화), open-in-browser(인앱 브라우저 안내, JOIN-10)
   api/turn                                       # 링크 토큰 검증 후 Cloudflare TURN 단기 자격증명 발급
   api/events                                     # 고객(비로그인) 쪽 지표 이벤트 수집
 src/lib/
@@ -46,6 +46,8 @@ src/lib/
   metrics.ts                                     # 핵심 지표 계산 (통계 화면)
 src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기). anchor/·anchor-overlay = AR 핀 층(CALL-14), guide-dpad(방향 링·가까이/멀리 알약)·guide-pad-geometry·guide-overlay(고객 노란 원 화살표·네 모서리)·guide-pill = 방향 지시(CALL-15)
   ui/                                            # 디자인 시스템 부품(NFR-08, 피그마 컴포넌트와 같은 이름): button(Button·ButtonLink·buttonClass), icons(선 아이콘), sheet(아래 확인 창), notice-screen(한 화면 한 안내), bottom-cta(아래에 붙는 버튼 자리), brand(로고), status-chip, step-item, banner, call-control(통화 원형 버튼), stat-card, engineer-card, call-timer
+src/app/lab/guide                                # 통화 없이 방향 지시를 흉내 내는 실험실(CALL-15), 로그인 불필요
+e2e/                                             # Playwright 통화 흐름 테스트(mock-supabase·realtime-mock 포함), scripts/tracking-bench = 추적 벤치
 supabase/schema.sql
 docs/requirements.md                             # 기능 요구사항 (기준 문서)
 ```
