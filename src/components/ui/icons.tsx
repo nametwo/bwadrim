@@ -3,7 +3,8 @@ import type { SVGProps } from "react";
 // 화면 공용 아이콘. 이모지는 폰 기종마다 모양·크기가 달라 버튼에 쓰지 않는다.
 // 피그마 디자인 시스템 Components → Icons(Icon/*)와 같은 그림이다: 24×24, 선 두께 2, 둥근 끝.
 // 색은 글자색(currentColor)을 따른다. 크기는 className(size-6 등)으로.
-// 피그마에 없는 것(손전등·마이크·지우개 등)은 같은 규칙으로 그렸다 — 피그마 Icons에도 같은 이름으로 있다.
+// 피그마에 없던 것(손전등·마이크·지우개 등)은 같은 규칙으로 그렸다 — 피그마 Icons에도 같은 이름으로 있다.
+// 아래 '피그마 Icons에 아직 없는 것'은 피그마에 더하기 전이다.
 
 type IconProps = SVGProps<SVGSVGElement>;
 
@@ -416,15 +417,6 @@ export function CarIcon(p: IconProps) {
   );
 }
 
-/** Icon/download — 사진 저장 */
-export function DownloadIcon(p: IconProps) {
-  return (
-    <Svg {...p}>
-      <path d="M12 4V15M7 10L12 15L17 10M5 20H19" />
-    </Svg>
-  );
-}
-
 /** Icon/check-circle — 끝났어요 */
 export function CheckCircleIcon(p: IconProps) {
   return (
@@ -435,7 +427,7 @@ export function CheckCircleIcon(p: IconProps) {
   );
 }
 
-/** Icon/chat — 카톡 공유 (말풍선, 채움) */
+/** Icon/chat — 카톡 보내기 (말풍선, 채움) */
 export function ChatBubbleIcon(p: IconProps) {
   return (
     <Svg strokeWidth={0} {...p}>
@@ -443,6 +435,30 @@ export function ChatBubbleIcon(p: IconProps) {
         d="M12 4C7.3 4 3.5 7 3.5 10.7C3.5 13.1 5.1 15.2 7.5 16.4L6.7 19.4C6.6 19.8 7 20.1 7.3 19.9L10.9 17.5C11.3 17.5 11.6 17.6 12 17.6C16.7 17.6 20.5 14.6 20.5 10.8C20.5 7 16.7 4 12 4Z"
         fill="currentColor"
       />
+    </Svg>
+  );
+}
+
+// ───────────── 피그마 Icons에 아직 없는 것 (같은 규칙으로 그림, 코드가 기준) ─────────────
+
+/** Icon/download — 사진 저장 (CALL-16) */
+export function DownloadIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 4V15M7 10L12 15L17 10M5 20H19" />
+    </Svg>
+  );
+}
+
+/** Icon/share — 공유하기 (기기 공유 창, ROOM-07). 점 셋을 잇는 모양 */
+export function ShareIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="18" cy="5" r="3" />
+      <circle cx="6" cy="12" r="3" />
+      <circle cx="18" cy="19" r="3" />
+      <path d="M8.59 13.51L15.42 17.49" />
+      <path d="M15.41 6.51L8.59 10.49" />
     </Svg>
   );
 }

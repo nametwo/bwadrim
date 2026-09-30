@@ -51,6 +51,8 @@ export default defineConfig({
               SUPABASE_SERVICE_ROLE_KEY: fixture.serviceKey,
               CLOUDFLARE_TURN_KEY_ID: "",
               CLOUDFLARE_TURN_API_TOKEN: "",
+              // 로컬 .env에 카카오 키가 있어도 e2e는 '카톡 보내기' 없이 (진짜 SDK를 받지 않게). 카탈로그는 가짜 키로 덮어쓴다
+              NEXT_PUBLIC_KAKAO_JS_KEY: "",
             },
           },
         ]),

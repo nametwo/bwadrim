@@ -21,7 +21,7 @@ import {
   zoomPill,
   type Touch,
 } from "./rig";
-import { shot, type ShotMeta } from "./shots";
+import { shot, unreachable, type ShotMeta } from "./shots";
 
 // 화면 카탈로그 (npm run screens): 모든 화면·상태를 찍어 screens/index.html 한 장으로 모은다.
 // e2e와 같은 가짜 Supabase·가짜 카메라·실제 WebRTC 루프백을 쓴다. 상태마다 요구사항 ID와 피그마 화면 번호를 붙인다.
@@ -232,18 +232,57 @@ test("세션 화면 — 고객 부르기", async ({ browser, baseURL }) => {
     await releaseGum(ep);
 
     await shot(
-      { section: "room", ids: ["ROOM-05", "ROOM-06", "ROOM-07", "ROOM-08"], title: "고객님께 링크를 보내 주세요 (E03)", note: "PC 브라우저는 공유 기능이 없어 '카톡 등으로 공유' 대신 복사가 커진다" },
+      {
+        section: "room",
+        ids: ["ROOM-05", "ROOM-06", "ROOM-07", "ROOM-08", "ROOM-14"],
+        title: "고객님께 링크를 보내 주세요 (E03)",
+        note: "폰: 파란 문자 + 카톡 보내기·공유하기·링크 복사 한 줄. PC는 문자 앱이 없어 문자를 숨기고, 이 PC 브라우저는 공유 기능도 없어 카톡 보내기·링크 복사만. 그래서 PC 카드는 '보낼 링크'",
+      },
       async () => {
         await expect(ep.getByTestId("eng-waiting")).toHaveAttribute("data-sent", "false", { timeout: 30_000 });
         // PC는 다른 상담으로 — 같은 상담이면 나중에 들어온 PC가 폰 통화를 이어받는다 (CALL-13)
         await engineerReady(epc, ROOM_C.id);
         await expect(epc.getByTestId("eng-waiting")).toHaveAttribute("data-sent", "false");
+        // 가짜 카카오 키 없이 뜬 서버를 다시 쓰면 다른 모양이 찍히므로 여기서 멈춘다 (playwright.screens.config.ts)
+        for (const id of ["share-sms", "share-kakao", "share-sheet", "share-copy"]) await expect(ep.getByTestId(id)).toBeVisible();
+        for (const id of ["share-kakao", "share-copy"]) await expect(epc.getByTestId(id)).toBeVisible();
+        for (const id of ["share-sms", "share-sheet"]) await expect(epc.getByTestId(id)).toHaveCount(0);
         return [eng(ep), engPc(epc)];
       },
     );
 
+    await shot(
+      { section: "room", ids: ["ROOM-14", "ROOM-13"], title: "카톡 보내기 → 고객 기다리는 중 (PC)", note: "카카오 SDK는 가짜라 친구 선택 창은 뜨지 않는다" },
+      async () => {
+        await epc.getByTestId("share-kakao").click();
+        await expect(epc.getByTestId("eng-waiting")).toHaveAttribute("data-sent", "true");
+        await expect(epc.getByTestId("eng-progress")).toContainText("카톡을 보냈어요");
+        return [engPc(epc)];
+      },
+    );
+
+    // 카카오 키는 빌드할 때 들어가서 한 번 띄운 서버로는 키가 없는 모양을 만들 수 없다 (playwright.screens.config.ts)
+    const noKey = "카탈로그는 가짜 카카오 키로 띄워 '카톡 보내기'가 늘 있다. 키를 뺀 서버로 따로 띄워야 한다";
+    await unreachable({ section: "room", ids: ["ROOM-05", "ROOM-07", "ROOM-08"], title: "카카오 키 없을 때 (폰: 문자 + 공유하기·링크 복사)" }, noKey);
+    await unreachable(
+      { section: "room", ids: ["ROOM-05", "ROOM-08"], title: "링크 복사만 있을 때 (공유 기능 없는 PC, 카카오 키 없음, 파란 큰 '링크 복사')" },
+      noKey,
+    );
+
+    const kakaoFail = await rig.engineer({ kakao: "fail" });
+    await shot(
+      { section: "room", ids: ["ROOM-14"], title: "카카오톡을 열지 못했어요", note: "카카오 SDK를 못 받았을 때. 문자·공유하기·링크 복사로 보내면 된다" },
+      async () => {
+        await engineerReady(kakaoFail, ROOM_D.id);
+        await kakaoFail.getByTestId("share-kakao").click();
+        await expect(kakaoFail.getByTestId("share-kakao-fail")).toBeVisible();
+        return [eng(kakaoFail)];
+      },
+    );
+    await kakaoFail.close();
+
     await shot({ section: "room", ids: ["ROOM-13", "ROOM-08"], title: "링크 복사 → 고객이 링크 열기를 기다리는 중 (E04)" }, async () => {
-      await ep.getByRole("button", { name: "링크 복사" }).click();
+      await ep.getByTestId("share-copy").click();
       await expect(ep.getByTestId("eng-waiting")).toHaveAttribute("data-sent", "true");
       await expect(ep.getByTestId("eng-progress")).toContainText("링크를 복사했어요");
       return [eng(ep)];

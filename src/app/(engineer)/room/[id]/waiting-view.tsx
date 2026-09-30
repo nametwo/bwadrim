@@ -3,19 +3,21 @@
 import type { ReactNode } from "react";
 import { BottomCta } from "@/components/ui/bottom-cta";
 import { StepItem, type StepState } from "@/components/ui/step-item";
-import { ChevronLeftIcon, MessageIcon, MicIcon, MicOffIcon } from "@/components/ui/icons";
+import { ChevronLeftIcon, LinkIcon, MessageIcon, MicIcon, MicOffIcon } from "@/components/ui/icons";
 import { AppBar, AppBarAction } from "./call-ui";
-import { inviteMessage, ShareButtons, type SentVia } from "./share-buttons";
+import { inviteMessage, ShareButtons, useSendWays, type SentVia } from "./share-buttons";
 import type { JoinProgress } from "./actions";
 
 // 고객 부르기 (피그마 E03 새 A/S 시작 → E04 고객 기다리는 중, ROOM-05·13).
-//  - 아직 안 보냈으면(E03): 큰 제목 '고객님께 링크를 보내 주세요' + 고객이 받을 문자 그림, 아래 파란 '문자로 링크 보내기'
+//  - 아직 안 보냈으면(E03): 큰 제목 '고객님께 링크를 보내 주세요' + 고객이 받을 글 그림, 아래 파란 '문자로 링크 보내기'(폰)와
+//    카톡 보내기·공유하기·링크 복사 한 줄 (이 기기에서 할 수 있는 것만, share-buttons.tsx)
 //  - 보냈거나 고객이 링크를 열었으면(E04): 큰 제목이 지금 기다리는 단계 그 자체다('고객님이 카메라를 켜기를 기다리고 있어요').
 //    아래 진행 상황 카드가 링크 열림 → 카메라 허용 → 연결을 실시간으로 보여 준다. 누를 것이 없으니 파란 버튼 없이 '문자 다시 보내기'
 // 이 화면에 있는 동안 통화 대기는 이미 켜져 있다 — 고객이 카메라를 켜면 바로 통화 화면으로 바뀐다
 
 const SENT_TITLE: Record<SentVia, string> = {
   sms: "문자를 보냈어요",
+  kakao: "카톡을 보냈어요",
   share: "링크를 공유했어요",
   copy: "링크를 복사했어요",
 };
@@ -66,6 +68,7 @@ export function WaitingView({
 }) {
   const linkOpened = !!progress?.linkOpened;
   const sent = !!sentVia || linkOpened || everConnected || failed;
+  const can = useSendWays();
 
   const appBar = (
     <AppBar
@@ -104,14 +107,14 @@ export function WaitingView({
           <p className="text-body-m text-text-secondary">고객님이 카메라를 켜면 바로 연결돼요</p>
         </section>
 
-        {/* 고객이 받을 문자 그대로 — 무엇을 보내는지 설명 대신 보여 준다 */}
-        <figure className="mt-8 flex flex-col gap-3 rounded-3xl bg-bg-subtle p-4">
+        {/* 고객이 받을 글 그대로 — 무엇을 보내는지 설명 대신 보여 준다. 그 글을 보내는 버튼(문자·공유하기)이 없는 PC는 링크만 */}
+        <figure className="mt-8 flex flex-col gap-3 rounded-3xl bg-bg-subtle p-4" data-testid="eng-invite">
           <figcaption className="flex items-center gap-1.5 px-1 text-label-m text-text-secondary">
-            <MessageIcon className="size-4" />
-            보낼 문자
+            {can.sms || can.share ? <MessageIcon className="size-4" /> : <LinkIcon className="size-4" />}
+            {can.sms ? "보낼 문자" : can.share ? "공유할 글" : "보낼 링크"}
           </figcaption>
           <p className="rounded-2xl rounded-tl-md bg-bg-page px-4 py-3 text-body-m whitespace-pre-line text-text-primary select-all">
-            {inviteMessage(joinUrl)}
+            {can.sms || can.share ? inviteMessage(joinUrl) : joinUrl}
           </p>
         </figure>
         <p className="mt-3 flex flex-wrap items-center gap-x-2 px-1 text-body-s text-text-secondary">
@@ -232,9 +235,17 @@ export function WaitingView({
           고객님께 이렇게 말씀해 주세요
           <ChevronLeftIcon className="size-5 -rotate-90 text-icon-secondary transition-transform group-open:rotate-90" />
         </summary>
+        {/* 어떻게 보냈는지 아는 때만 문자·카톡이라고 말한다. 카톡 카드는 링크 대신 '카메라 켜기' 버튼이다 (ROOM-14) */}
         <p className="pb-4 text-text-secondary">
-          &ldquo;문자로 링크 보내 드렸어요. 누르시면 파란 버튼{" "}
-          <b className="text-text-primary">카메라 켜고 시작하기</b>가 있는데, 그거 누르시고{" "}
+          &ldquo;
+          {sentVia === "kakao" ? (
+            <>
+              카톡으로 보내 드렸어요. 거기 <b className="text-text-primary">카메라 켜기</b> 누르시면
+            </>
+          ) : (
+            <>{sentVia === "sms" ? "문자로 링크 보내 드렸어요." : "링크 보내 드렸어요."} 누르시면</>
+          )}{" "}
+          파란 버튼 <b className="text-text-primary">카메라 켜고 시작하기</b>가 있는데, 그거 누르시고{" "}
           <b className="text-text-primary">허용</b> 누르시면 돼요. 그다음에 고장 난 데를 비춰 주세요.&rdquo;
         </p>
       </details>

@@ -9,20 +9,6 @@ import type { Frame } from "./shots";
 export const ROOM = FIXTURE.rooms[0];
 export const EXPIRED = FIXTURE.rooms[1];
 
-export const PHONE: BrowserContextOptions = {
-  viewport: { width: 390, height: 844 },
-  deviceScaleFactor: 2,
-  isMobile: true,
-  hasTouch: true,
-  permissions: ["camera", "microphone"],
-};
-export const PHONE_ENG: BrowserContextOptions = { ...PHONE, permissions: ["camera", "microphone", "clipboard-read", "clipboard-write"] };
-export const PC: BrowserContextOptions = {
-  viewport: { width: 1280, height: 800 },
-  deviceScaleFactor: 1,
-  permissions: ["camera", "microphone", "clipboard-read", "clipboard-write"],
-};
-
 export const UA = {
   android:
     "Mozilla/5.0 (Linux; Android 14; SM-S921N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36",
@@ -33,6 +19,36 @@ export const UA = {
   naver:
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 NAVER(inapp; search; 2000; 12.6.3)",
 };
+
+export const PHONE: BrowserContextOptions = {
+  viewport: { width: 390, height: 844 },
+  deviceScaleFactor: 2,
+  isMobile: true,
+  hasTouch: true,
+  permissions: ["camera", "microphone"],
+};
+/** 엔지니어 폰: 안드로이드 크롬으로 보여야 '문자로 링크 보내기'가 뜬다 (ROOM-06, 문자 앱이 있는 기기만) */
+export const PHONE_ENG: BrowserContextOptions = {
+  ...PHONE,
+  userAgent: UA.android,
+  permissions: ["camera", "microphone", "clipboard-read", "clipboard-write"],
+};
+export const PC: BrowserContextOptions = {
+  viewport: { width: 1280, height: 800 },
+  deviceScaleFactor: 1,
+  permissions: ["camera", "microphone", "clipboard-read", "clipboard-write"],
+};
+
+
+// 카카오 SDK 흉내 (ROOM-14, 카탈로그는 가짜 카카오 키로 띄운다): 진짜 SDK 대신 이것을 내려 준다.
+// 카톡 친구 선택 창은 띄우지 않고 보낸 카드를 window.__kakaoSent에 남긴다
+const KAKAO_SDK = "https://t1.kakaocdn.net/**";
+const KAKAO_STUB = `window.Kakao = {
+  _init: false,
+  isInitialized() { return this._init; },
+  init() { this._init = true; },
+  Share: { sendDefault(settings) { window.__kakaoSent = settings; } },
+};`;
 
 // ---------- 가짜 서버 조작 ----------
 
@@ -78,10 +94,12 @@ export class Rig {
     private readonly baseURL: string,
   ) {}
 
-  async engineer(opts: { pc?: boolean; turnWarning?: boolean } = {}) {
+  /** kakao: 'fail'이면 카카오 SDK를 못 받은 척 (ROOM-14) */
+  async engineer(opts: { pc?: boolean; turnWarning?: boolean; kakao?: "fail" } = {}) {
     const ctx = await this.browser.newContext(opts.pc ? PC : PHONE_ENG);
     await ctx.addCookies([engineerCookie(this.baseURL)]);
     await installHooks(ctx, { share: !opts.pc });
+    await ctx.route(KAKAO_SDK, (r) => (opts.kakao === "fail" ? r.abort() : r.fulfill({ contentType: "text/javascript", body: KAKAO_STUB })));
     if (!opts.turnWarning) await hideTurnWarning(ctx);
     await this.hub.attach(ctx);
     this.contexts.push(ctx);
