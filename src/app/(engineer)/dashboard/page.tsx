@@ -3,11 +3,12 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { formatDuration, formatKstDateTime, kstMonthStartIso } from "@/lib/format";
+import { endedConnected } from "@/lib/metrics";
 import { engineerNameOf } from "@/lib/engineer-name";
 import { BottomCta } from "@/components/ui/bottom-cta";
 import { Brand } from "@/components/ui/brand";
-import { ChartIcon, ChevronRightIcon, ClockIcon, LogoutIcon, MessageIcon, PencilIcon } from "@/components/ui/icons";
-import { StatusChip, type ChipTone } from "@/components/ui/status-chip";
+import { ChartIcon, ChevronRightIcon, ClockIcon, LogoutIcon, MessageIcon, RefreshIcon } from "@/components/ui/icons";
+import { StatusChip } from "@/components/ui/status-chip";
 import { logout } from "../login/actions";
 import { createRoom } from "./actions";
 import { NewRoomButton } from "./new-room-button";
@@ -20,6 +21,7 @@ export const metadata: Metadata = {
 type Room = {
   id: string;
   status: string;
+  // 예전 기록의 해결 여부. 이제 쓰지 않는 칸이지만 예전 상담이 연결됐었는지 가리는 데 쓴다
   resolved_remotely: boolean | null;
   created_at: string;
   expires_at: string;
@@ -31,19 +33,17 @@ function isOpen(room: { status: string; expires_at: string }, now: Date) {
   return room.status !== "ended" && new Date(room.expires_at) >= now;
 }
 
-// 끝난 상담의 결과 표시 (ROOM-04) — 피그마 StatusChip
-function resultOf(room: Room): { text: string; tone: ChipTone } {
-  if (room.status !== "ended") return { text: "만료", tone: "ended" };
-  if (room.resolved_remotely === true) return { text: "원격 해결", tone: "resolved" };
-  if (room.resolved_remotely === false) return { text: "방문 필요", tone: "visit" };
-  return { text: "연결 안 됨", tone: "ended" };
+// 끝난 상담의 상태 (ROOM-04) — 피그마 StatusChip. 결과를 매기지 않으므로 모두 중립색(회색)
+function statusOf(room: Room, connected: boolean) {
+  if (room.status !== "ended") return "만료";
+  return connected ? "끝남" : "연결 안 됨";
 }
 
 function durationSec(room: { created_at: string; ended_at: string | null }) {
   return room.ended_at ? (new Date(room.ended_at).getTime() - new Date(room.created_at).getTime()) / 1000 : null;
 }
 
-// 대시보드 (피그마 E02). 회색 바탕에 흰 카드 세 장 — 이번 달(원격 해결률이 가장 큰 숫자, 영업 자료가 되는 핵심 지표),
+// 대시보드 (피그마 E02). 회색 바탕에 흰 카드 세 장 — 이번 달(상담 수 한 숫자, 누르면 통계),
 // 진행 중(내가 이어서 할 일), 최근 상담. 파란 버튼은 '새 A/S 시작' 하나, 한 손으로 누르게 화면 아래에 붙인다.
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -54,17 +54,14 @@ export default async function DashboardPage() {
   // proxy가 1차로 막지만, 데이터 접근 지점에서 한 번 더 확인
   if (!user) redirect("/login");
 
-  const [{ data: rooms }, { data: month }] = await Promise.all([
+  const [{ data: rooms }, month] = await Promise.all([
     supabase
       .from("rooms")
       .select("id, status, resolved_remotely, created_at, expires_at, ended_at")
       .order("created_at", { ascending: false })
       .limit(20),
-    // 이번 달(한국 시간) 요약
-    supabase
-      .from("rooms")
-      .select("status, resolved_remotely, created_at, ended_at")
-      .gte("created_at", kstMonthStartIso()),
+    // 이번 달(한국 시간) 만든 상담 수. 줄은 받지 않고 개수만(HEAD)
+    supabase.from("rooms").select("id", { count: "exact", head: true }).gte("created_at", kstMonthStartIso()),
   ]);
 
   const now = new Date();
@@ -72,14 +69,27 @@ export default async function DashboardPage() {
   const list = (rooms ?? []) as Room[];
   const open = list.filter((r) => isOpen(r, now));
   const past = list.filter((r) => !isOpen(r, now));
+  const monthCount = month.count ?? 0;
 
-  // 원격 해결률 = 답한 상담 중 '네' 비율 (DATA-02와 같은 기준). 평균 시간도 답한 상담만
-  const monthRooms = (month ?? []) as Pick<Room, "status" | "resolved_remotely" | "created_at" | "ended_at">[];
-  const answered = monthRooms.filter((r) => r.status === "ended" && r.resolved_remotely !== null);
-  const resolved = answered.filter((r) => r.resolved_remotely === true).length;
-  const rate = answered.length ? Math.round((resolved / answered.length) * 100) : null;
-  const durations = answered.map(durationSec).filter((d): d is number => d !== null);
-  const avg = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null;
+  // 끝난 상담이 고객과 연결됐었는지 (metrics.endedConnected와 같은 판정).
+  // 예전 상담은 방에 남은 해결 여부로, 그 밖에는 'ended' 기록으로 가린다. 목록에 보이는 방 것만 한 번에 읽는다(RLS로 자기 방만)
+  const connectedIds = new Set(
+    past.filter((r) => r.status === "ended" && endedConnected(null, r.resolved_remotely)).map((r) => r.id),
+  );
+  const unknown = past.filter((r) => r.status === "ended" && !connectedIds.has(r.id)).map((r) => r.id);
+  // 기록을 못 읽었으면 연결 여부를 모른다 — '연결 안 됨'으로 단정하지 않고 '끝남'(걸린 시간 없이)으로 둔다
+  let endedReadFailed = false;
+  if (unknown.length > 0) {
+    const { data: ended, error } = await supabase
+      .from("events")
+      .select("room_id, props")
+      .eq("name", "ended")
+      .in("room_id", unknown);
+    endedReadFailed = !!error;
+    for (const e of (ended ?? []) as { room_id: string; props: Record<string, unknown> | null }[]) {
+      if (endedConnected(e.props)) connectedIds.add(e.room_id);
+    }
+  }
 
   return (
     <div className="flex min-h-dvh flex-col bg-bg-muted">
@@ -109,31 +119,18 @@ export default async function DashboardPage() {
         <h1 className="pt-3 pb-5 text-title-l">{name ? `${name}님, 안녕하세요` : "안녕하세요"}</h1>
 
         <div className="flex flex-col gap-3">
-          {/* 이번 달: 원격 해결률 한 숫자를 가장 크게, 나머지는 아래 한 줄. 누르면 통계 (DATA-06) */}
+          {/* 이번 달 상담 수 한 숫자. 누르면 통계 (DATA-06) */}
           <Link
             href="/stats"
-            aria-label="이번 달 통계 자세히 보기"
+            data-testid="month-card"
+            aria-label={`이번 달 상담 ${monthCount}건, 통계 보기`}
             className="flex flex-col rounded-3xl bg-bg-page p-5 transition-colors active:bg-bg-subtle"
           >
             <span className="flex items-center justify-between text-label-m text-text-secondary">
-              이번 달 원격 해결률
+              이번 달 상담
               <ChevronRightIcon className="size-5 text-icon-secondary" />
             </span>
-            <span className="mt-1 flex items-baseline gap-2">
-              <span className="text-display-l text-text-primary">{rate === null ? "—" : `${rate}%`}</span>
-              <span className={`text-label-m ${rate === null ? "text-text-secondary" : "text-text-success"}`}>
-                {rate === null ? "아직 기록이 없어요" : `출장 ${resolved}건 줄였어요`}
-              </span>
-            </span>
-            {rate !== null && (
-              <span aria-hidden="true" className="mt-3 h-2 overflow-hidden rounded-full bg-bg-muted">
-                <span className="block h-full rounded-full bg-success" style={{ width: `${rate}%` }} />
-              </span>
-            )}
-            <span className="mt-4 grid grid-cols-2 border-t border-border pt-4">
-              <MiniStat label="상담" value={`${monthRooms.length}건`} />
-              <MiniStat label="평균 시간" value={avg === null ? "—" : formatDuration(avg)} />
-            </span>
+            <span className="mt-1 text-display-l text-text-primary">{monthCount}건</span>
           </Link>
 
           {open.length > 0 && (
@@ -161,13 +158,13 @@ export default async function DashboardPage() {
                             waiting ? "bg-warning-tint text-text-warning" : "bg-primary-tint text-icon-brand"
                           }`}
                         >
-                          {waiting ? <ClockIcon className="size-[22px]" /> : <PencilIcon className="size-[22px]" />}
+                          {waiting ? <ClockIcon className="size-[22px]" /> : <RefreshIcon className="size-[22px]" />}
                         </span>
                         <span className="flex min-w-0 flex-1 flex-col">
-                          <span className="text-label-l">{waiting ? "고객님 기다리는 중" : "결과 기록 전"}</span>
+                          {/* 연결된 뒤 '통화 끝내기' 없이 나간 상담. 누르면 다시 연결하거나 끝낼 수 있다 */}
+                          <span className="text-label-l">{waiting ? "고객님 기다리는 중" : "끝내지 않은 상담"}</span>
                           <span className="truncate text-body-s text-text-secondary">
-                            {formatKstDateTime(new Date(room.created_at), now)}
-                            {waiting && ` · 링크 ${hoursLeft}시간 남음`}
+                            {formatKstDateTime(new Date(room.created_at), now)} · 링크 {hoursLeft}시간 남음
                           </span>
                         </span>
                         <ChevronRightIcon aria-label="이어하기" className="size-5 flex-none text-icon-secondary" />
@@ -194,8 +191,10 @@ export default async function DashboardPage() {
             ) : (
               <ul>
                 {past.map((room) => {
-                  const result = resultOf(room);
-                  const d = room.status === "ended" && room.resolved_remotely !== null ? durationSec(room) : null;
+                  // 걸린 시간은 고객과 연결됐다 끝난 상담만 (통계의 상담당 평균과 같은 기준)
+                  const connected = room.status === "ended" && connectedIds.has(room.id);
+                  const d = connected ? durationSec(room) : null;
+                  const chip = statusOf(room, connected || (endedReadFailed && room.status === "ended"));
                   return (
                     <li key={room.id}>
                       {/* 피그마 SessionRow: 고객 이름은 저장하지 않으므로(NFR-07) 시각으로 구분한다 */}
@@ -207,7 +206,7 @@ export default async function DashboardPage() {
                             {d !== null ? `${formatDuration(d)} 걸림` : "기록 없음"}
                           </span>
                         </span>
-                        <StatusChip tone={result.tone}>{result.text}</StatusChip>
+                        <StatusChip tone="ended">{chip}</StatusChip>
                       </Link>
                     </li>
                   );
@@ -224,14 +223,5 @@ export default async function DashboardPage() {
         </BottomCta>
       </main>
     </div>
-  );
-}
-
-function MiniStat({ label, value }: { label: string; value: string }) {
-  return (
-    <span className="flex flex-col gap-0.5">
-      <span className="text-body-s text-text-secondary">{label}</span>
-      <span className="text-title-s text-text-primary">{value}</span>
-    </span>
   );
 }

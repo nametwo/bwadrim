@@ -70,8 +70,6 @@ export function CameraStart({
   const [phase, setPhase] = useState<Phase>("ready");
   const [failure, setFailure] = useState<CameraFailure>("blocked");
   const [callState, setCallState] = useState<CallState>("waiting");
-  // 내가 '끝내기'를 눌러 끝났는지 — 잘못 눌렀으면 다시 연결할 수 있게 (JOIN-08)
-  const [endedByMe, setEndedByMe] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const confirmShownAtRef = useRef(0);
   // 전화 통화 중 등으로 마이크를 못 써 카메라만 연결했다 (JOIN-04)
@@ -264,7 +262,7 @@ export function CameraStart({
     setTalkSec(at === null ? null : (Date.now() - at) / 1000);
   }
 
-  // 끊긴 뒤·다른 곳에 넘어간 뒤·잘못 끝낸 뒤 다시 연결. 새로고침 없이 이 탭 안에서 카메라부터 다시 연다 (JOIN-08·09·11)
+  // 끊긴 뒤·다른 곳에 넘어간 뒤 다시 연결. 새로고침 없이 이 탭 안에서 카메라부터 다시 연다 (JOIN-09·11)
   function restart() {
     stopPhotosRef.current?.();
     stopPhotosRef.current = null;
@@ -280,7 +278,6 @@ export function CameraStart({
     facingRef.current = "environment";
     torchRef.current = false;
     setCallState("waiting");
-    setEndedByMe(false);
     setConfirmEnd(false);
     setFlipRequested(false);
     setNotice(null);
@@ -340,13 +337,14 @@ export function CameraStart({
     setConfirmEnd(true);
   }
 
+  // 끝내기 (JOIN-08): 기사님께 알린다(bye). 기사님과 연결된 적 있으면 기사님 화면이 상담도 닫아 같은 링크로는 다시 못 들어온다.
+  // 연결되기 전에 눌렀으면 상담은 그대로라 링크를 다시 열면 된다
   function hangup() {
     if (Date.now() - confirmShownAtRef.current < CONFIRM_ARM_MS) return;
     sessionRef.current?.hangup();
     streamRef.current?.getTracks().forEach((t) => t.stop());
     releaseWakeLock();
     setConfirmEnd(false);
-    setEndedByMe(true);
     endTalk();
     setCallState("ended");
   }
@@ -433,19 +431,6 @@ export function CameraStart({
           tone="success"
           icon={<CheckCircleIcon className="size-10" />}
           title="상담이 끝났어요"
-          actions={
-            endedByMe && (
-              <Button
-                variant="secondary"
-                size="l"
-                block
-                onClick={restart}
-                icon={<RefreshIcon className="size-5" />}
-              >
-                잘못 눌렀다면 다시 연결
-              </Button>
-            )
-          }
         >
           {talkSec !== null && talkSec >= 1 && (
             <>

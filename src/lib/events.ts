@@ -1,6 +1,7 @@
 import { createAdminClient } from "./supabase/admin";
 
-// CLAUDE.md의 이벤트 이름 목록과 동기화할 것
+// CLAUDE.md의 이벤트 이름 목록과 동기화할 것.
+// 예전 기록에는 'resolved_remotely'(출장 없이 해결)도 남아 있다 — 그 질문을 없애 더는 남기지 않는다
 export type EventName =
   | "room_created"
   | "link_opened"
@@ -13,8 +14,7 @@ export type EventName =
   | "anchor_used"
   | "guide_used"
   | "photo_taken"
-  | "ended"
-  | "resolved_remotely";
+  | "ended";
 
 export type EventActor = "engineer" | "customer" | "system";
 

@@ -1,12 +1,12 @@
 // E2E용 가짜 Supabase (REST·Auth만). 진짜 Supabase 없이 /join·/room·/api/*가 돌아가게 한다.
 // Next 서버(서버 컴포넌트·서버 액션·라우트 핸들러)가 NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:<포트>로 부른다.
-// Realtime(WebSocket)은 여기서 하지 않는다 — 브라우저 쪽에서 Playwright routeWebSocket으로 가로챈다 (e2e/realtime-mock.ts).
+// Realtime(WebSocket·REST 보내기)은 여기서 하지 않는다 — 브라우저 쪽에서 Playwright가 가로챈다 (e2e/realtime-mock.ts).
 //
 //   GET  /auth/v1/user                 Bearer 토큰이 FIXTURE.accessToken이면 사용자, 아니면 401
 //   GET  /auth/v1/admin/users/:id      (서비스 키) 사용자 — 고객 화면의 기사님 이름
-//   GET  /rest/v1/rooms?code=eq.X      (id=eq.X, select=… 지원) Accept가 vnd.pgrst.object+json이면 객체 1개
-//   PATCH /rest/v1/rooms?id=eq.X…      상태 갱신 (status=eq.X 조건 지원)
-//   POST /rest/v1/events               기록 (본문 객체 또는 배열) · GET은 통계 화면용(필터 무시)
+//   GET  /rest/v1/rooms?code=eq.X      (eq·neq·in·gte 필터, select=…, count=exact·HEAD 지원) Accept가 vnd.pgrst.object+json이면 객체 1개
+//   PATCH /rest/v1/rooms?id=eq.X…      상태 갱신 (status=eq.X·neq.X 조건 지원)
+//   POST /rest/v1/events               기록 (본문 객체 또는 배열) · GET은 통계·대시보드용(같은 필터)
 //   GET  /__events  ·  GET /__rooms  ·  POST /__reset[?room=ID]  ·  GET /__health   (테스트용)
 //   POST /__seed {rooms?, events?}     방·이벤트 목록 바꾸기 (화면 카탈로그: 대시보드·통계). ageMin = 몇 분 전
 //   POST /__patch-room {id, ...}       방 한 개 고치기 (링크를 연 뒤 세션이 닫힌 경우 등)
@@ -99,16 +99,31 @@ function readBody(req) {
   });
 }
 
-/** PostgREST 필터 (eq만) */
+/** PostgREST 필터: eq·neq·in·gte(시각)만. 나머지는 무시 */
 function filterRows(rows, params) {
   let out = rows;
   for (const [k, v] of params) {
     if (["select", "limit", "order", "offset"].includes(k)) continue;
-    const m = /^eq\.(.*)$/.exec(v);
+    const m = /^(eq|neq|in|gte)\.(.*)$/.exec(v);
     if (!m) continue;
-    out = out.filter((r) => String(r[k]) === m[1]);
+    const [, op, arg] = m;
+    if (op === "eq") out = out.filter((r) => String(r[k]) === arg);
+    else if (op === "neq") out = out.filter((r) => String(r[k]) !== arg);
+    else if (op === "in") {
+      const set = new Set(arg.replace(/^\((.*)\)$/, "$1").split(",").map((s) => s.replace(/^"(.*)"$/, "$1")));
+      out = out.filter((r) => set.has(String(r[k])));
+    } else {
+      // 시각 칸(created_at 등)만 쓴다 — 이번 달 상담 수, 통계 기간
+      const at = Date.parse(arg);
+      out = out.filter((r) => Date.parse(r[k]) >= at);
+    }
   }
   return out;
+}
+
+/** select(…, { count: "exact" })이면 PostgREST처럼 content-range로 개수를 알려 준다 */
+function countHeader(req, n) {
+  return /count=exact/.test(req.headers.prefer ?? "") ? { "content-range": n ? `0-${n - 1}/${n}` : "*/0" } : {};
 }
 
 function project(row, select) {
@@ -179,7 +194,8 @@ const server = http.createServer(async (req, res) => {
       if (req.method === "PATCH" && faults.failRoomUpdate) {
         return send(res, 500, { code: "XX000", message: "mock: 일부러 실패 (failRoomUpdate)" });
       }
-      if (req.method === "GET") {
+      // HEAD = select(…, { head: true }): 개수만 (본문은 node가 버린다)
+      if (req.method === "GET" || req.method === "HEAD") {
         const rows = matched.map((r) => project(r, select));
         if (single) {
           if (rows.length !== 1) {
@@ -187,7 +203,7 @@ const server = http.createServer(async (req, res) => {
           }
           return send(res, 200, rows[0]);
         }
-        return send(res, 200, rows);
+        return send(res, 200, rows, countHeader(req, rows.length));
       }
       if (req.method === "PATCH") {
         const patch = (await readBody(req)) ?? {};
@@ -201,7 +217,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // 통계 화면(/stats)·대기 화면 고객 진행 상황용 읽기. eq 필터만 적용하고 자기 방 기록을 준다 (RLS 흉내)
+    // 통계 화면(/stats)·대시보드·대기 화면 고객 진행 상황용 읽기. eq·neq·in·gte 필터만 적용하고 자기 방 기록을 준다 (RLS 흉내)
     if (p === "/rest/v1/events" && req.method === "GET") {
       if (!authed(req)) return send(res, 200, []);
       const mine = new Set(rooms.filter((r) => r.engineer_id === FIXTURE.user.id).map((r) => r.id));

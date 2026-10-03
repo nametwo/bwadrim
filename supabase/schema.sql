@@ -12,7 +12,7 @@ create table if not exists rooms (
   customer_phone text,                              -- 쓰지 않음(NFR-07)
   status      text not null default 'waiting'       -- waiting | active | ended
               check (status in ('waiting','active','ended')),
-  resolved_remotely boolean,                        -- 종료 시 엔지니어가 체크. 핵심 지표
+  resolved_remotely boolean,                        -- 2026-10-03부터 쓰지 않음(DATA-03). 예전 상담이 연결됐었는지 가리는 데만 읽는다
   created_at  timestamptz not null default now(),
   expires_at  timestamptz not null default now() + interval '24 hours',
   ended_at    timestamptz

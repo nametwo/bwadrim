@@ -79,9 +79,8 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
   ]);
 
   const m = computeMetrics(rooms, events);
-  const rate = m.resolvedRemotely.of ? Math.round((m.resolvedRemotely.hit / m.resolvedRemotely.of) * 100) : null;
 
-  // 원격 해결률 아래 네 칸 (숫자 + 'N건 중 M건')
+  // 2×2 네 칸 (숫자 + 'N건 중 M건')
   const cards: { title: string; value: string; detail: string }[] = [
     {
       title: "카메라 허용",
@@ -101,17 +100,16 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
     {
       title: "상담당 평균",
       value: m.avgDurationSec === null ? "—" : minutes(m.avgDurationSec),
-      detail: `답한 ${m.durationCount}건 기준`,
+      detail: `연결된 뒤 끝낸 ${m.durationCount}건 기준`,
     },
   ];
 
   // 숫자를 읽을 때 주의할 점 — 카드마다 붙이면 글이 많아져 맨 아래에 모아 접어 둔다
   const notes: [string, string][] = [
-    ["원격 해결률", "연결 없이 닫았거나 답을 안 남긴 상담은 빼고 셌어요."],
     ["카메라 허용", "링크를 연 상담 가운데 고객님이 카메라를 켠 비율이에요."],
     ["연결 실패율", "연결 준비를 안 눌렀거나 고객님이 기다리다 나간 경우까지 들어가서 실제보다 높게 나와요."],
     ["TURN 중계", "비용을 따질 때 보는 숫자예요. 5G끼리처럼 바로 연결이 안 되면 중계 서버를 거쳐요."],
-    ["상담당 평균", "통화 시간이 아니라 상담을 만든 때부터 쟀어요."],
+    ["상담당 평균", "고객님과 연결됐던 상담만 셌어요. 통화 시간이 아니라 상담을 만든 때부터 쟀어요."],
   ];
 
   return (
@@ -156,21 +154,7 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
           </p>
         ) : (
           <div className="flex flex-col gap-3">
-            {/* 원격 해결률: 영업 자료가 되는 숫자라 가장 크게, 초록 막대로 비율을 한눈에 */}
-            <section className="flex flex-col rounded-3xl bg-bg-page p-5">
-              <h2 className="text-label-m text-text-secondary">원격 해결률</h2>
-              <p className="mt-1 text-display-l text-text-success">{percent(m.resolvedRemotely)}</p>
-              {rate !== null && (
-                <span aria-hidden="true" className="mt-3 h-2 overflow-hidden rounded-full bg-bg-muted">
-                  <span className="block h-full rounded-full bg-success" style={{ width: `${rate}%` }} />
-                </span>
-              )}
-              <p className="mt-3 text-body-m text-text-secondary">
-                답한 {m.resolvedRemotely.of}건 중 <b className="text-text-primary">{m.resolvedRemotely.hit}건</b> 출장 없이 해결
-              </p>
-            </section>
-
-            <ul className="grid grid-cols-2 gap-3">
+            <ul data-testid="stats-cards" className="grid grid-cols-2 gap-3">
               {cards.map((c) => (
                 <li key={c.title} className="contents">
                   <StatCard label={c.title} value={c.value} sub={c.detail} />

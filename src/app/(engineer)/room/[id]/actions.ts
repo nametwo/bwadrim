@@ -6,20 +6,17 @@ import { logEvent } from "@/lib/events";
 
 export type EndRoomResult = { ok: true } | { ok: false; reason: "auth" | "db" };
 
-// 통화 종료 + 핵심 지표(원격 해결 여부) 기록.
-// resolvedRemotely가 null이면 고객과 한 번도 연결되지 않은 세션을 닫은 것 — 원격 해결률에서 뺀다.
+// 상담 끝내기 (ROOM-10). 고객 링크가 닫힌다(status ended).
+// connected: 고객과 연결된 적 있는 상담인지. 'ended' 이벤트에 남겨 통계가 연결 없이 닫은 상담을 평균 시간에서 뺀다.
 // redirect() 대신 결과를 돌려준다: 클라이언트에서 직접 부른 액션의 redirect는 promise를 reject해서
 // 성공했는데도 실패 안내가 뜬다. 이동은 호출측이 한다.
-export async function endRoom(
-  roomId: string,
-  resolvedRemotely: boolean | null,
-): Promise<EndRoomResult> {
+export async function endRoom(roomId: string, connected: boolean): Promise<EndRoomResult> {
   const supabase = await createClient();
   const {
     data: { user },
     error: authError,
   } = await supabase.auth.getUser();
-  // 인증 서버 일시 장애는 로그인 풀림이 아니다 — 다시 시도하게 해야 답이 사라지지 않는다
+  // 인증 서버 일시 장애는 로그인 풀림이 아니다 — 다시 시도하게 한다
   if (!user) {
     return {
       ok: false,
@@ -27,14 +24,11 @@ export async function endRoom(
     };
   }
 
-  // RLS로 자기 방만 갱신된다. 이미 종료된 방은 건드리지 않아 중복 기록을 막는다
+  // RLS로 자기 방만 갱신된다. 이미 종료된 방은 건드리지 않아 중복 기록을 막는다.
+  // rooms.resolved_remotely(예전 '출장 없이 해결?' 답)는 더 쓰지 않는다 — 예전 기록만 남아 있다
   const { data, error } = await supabase
     .from("rooms")
-    .update({
-      status: "ended",
-      ended_at: new Date().toISOString(),
-      resolved_remotely: resolvedRemotely,
-    })
+    .update({ status: "ended", ended_at: new Date().toISOString() })
     .eq("id", roomId)
     .neq("status", "ended")
     .select("id, created_at")
@@ -43,16 +37,8 @@ export async function endRoom(
   if (error) return { ok: false, reason: "db" };
 
   if (data) {
-    const durationSec = Math.round(
-      (Date.now() - new Date(data.created_at).getTime()) / 1000,
-    );
-    await logEvent(roomId, "engineer", "ended", {
-      duration_sec: durationSec,
-      resolved_remotely: resolvedRemotely,
-    });
-    if (resolvedRemotely) {
-      await logEvent(roomId, "engineer", "resolved_remotely");
-    }
+    const durationSec = Math.round((Date.now() - new Date(data.created_at).getTime()) / 1000);
+    await logEvent(roomId, "engineer", "ended", { duration_sec: durationSec, connected });
   }
 
   return { ok: true };

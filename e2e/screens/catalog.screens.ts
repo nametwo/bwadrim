@@ -33,7 +33,7 @@ test.use({ launchOptions: fakeCamera(CLIPS.jitter) });
 
 /** 확인 창이 뜬 직후(0.6초)의 탭은 일부러 무시하므로 조금 기다렸다 누른다 */
 const ARM_MS = 700;
-/** 종료 화면 변형에 쓰는 방 (ROOM-11) */
+/** 따로 쓰는 방: 끝난 상담 화면(ROOM-11)·PC 대기·카카오 실패·아이폰 고객 */
 const [ROOM_B, ROOM_C, ROOM_D] = FIXTURE.rooms.slice(2);
 
 // ---------- 대시보드·통계용 가짜 데이터 ----------
@@ -41,7 +41,11 @@ const [ROOM_B, ROOM_C, ROOM_D] = FIXTURE.rooms.slice(2);
 const catRoom = (n: number) => `e2e00000-0000-4000-8000-0000000c00${String(n).padStart(2, "0")}`;
 const catToken = (n: number) => `e2e0${"c".repeat(26)}${String(n).padStart(2, "0")}`;
 
-/** 대시보드·통계용 상담 목록: 상태마다 하나씩 */
+/**
+ * 대시보드·통계용 상담 목록: 상태마다 하나씩.
+ * 3·4·5는 지금 기록('ended' props.connected, rooms.resolved_remotely는 비어 있음),
+ * 7은 결과를 묻던 때의 예전 기록(rooms.resolved_remotely·'resolved_remotely' 이벤트)이다. 둘 다 '끝남'으로 보여야 한다
+ */
 async function seedDashboard() {
   const room = (n: number, r: Record<string, unknown>) => ({ id: catRoom(n), code: `CAT00${n}`, join_token: catToken(n), ...r });
   const ev = (n: number, name: string, props: Record<string, unknown> = {}) => ({ room_id: catRoom(n), actor: "customer", name, props });
@@ -49,22 +53,22 @@ async function seedDashboard() {
     rooms: [
       room(1, { status: "waiting", ageMin: 3 }),
       room(2, { status: "active", ageMin: 25 }),
-      room(3, { status: "ended", resolved_remotely: true, ageMin: 90, tookMin: 9 }),
-      room(4, { status: "ended", resolved_remotely: false, ageMin: 5 * 60, tookMin: 21 }),
-      room(5, { status: "ended", resolved_remotely: null, ageMin: 20 * 60, tookMin: 5 }),
+      room(3, { status: "ended", ageMin: 90, tookMin: 9 }),
+      room(4, { status: "ended", ageMin: 5 * 60, tookMin: 21 }),
+      room(5, { status: "ended", ageMin: 20 * 60, tookMin: 5 }),
       room(6, { status: "waiting", expired: true }),
       room(7, { status: "ended", resolved_remotely: true, ageMin: 3 * 24 * 60, tookMin: 7 }),
     ],
     events: [
       ev(1, "link_opened"),
       ...["link_opened", "camera_granted", "connected", "pointer_used"].map((e) => ev(2, e)),
-      ...["link_opened", "camera_granted", "connected", "relay_used", "pointer_used", "freeze_used", "resolved_remotely"].map((e) => ev(3, e)),
-      ev(3, "ended", { duration_sec: 540, resolved_remotely: true }),
+      ...["link_opened", "camera_granted", "connected", "relay_used", "pointer_used", "freeze_used"].map((e) => ev(3, e)),
+      ev(3, "ended", { duration_sec: 540, connected: true }),
       ...["link_opened", "camera_granted", "connected", "pointer_used", "guide_used"].map((e) => ev(4, e)),
-      ev(4, "ended", { duration_sec: 1260, resolved_remotely: false }),
+      ev(4, "ended", { duration_sec: 1260, connected: true }),
       ev(5, "link_opened"),
       ev(5, "camera_denied"),
-      ev(5, "ended", { duration_sec: 300, resolved_remotely: null }),
+      ev(5, "ended", { duration_sec: 300, connected: false }),
       ev(6, "link_opened"),
       ev(6, "camera_granted"),
       ...["link_opened", "camera_granted", "connected", "freeze_used", "anchor_used", "photo_taken", "resolved_remotely"].map((e) => ev(7, e)),
@@ -186,18 +190,29 @@ test("대시보드·통계", async ({ browser, baseURL }) => {
 
     await seedDashboard();
     await shot(
-      { section: "dashboard", ids: ["ROOM-04", "ROOM-03"], title: "대시보드 — 상태별 상담 (E02)", note: "진행 중(기다리는 중·결과 기록 전) · 원격 해결 · 방문 필요 · 연결 안 됨 · 만료" },
+      {
+        section: "dashboard",
+        ids: ["ROOM-04", "ROOM-03"],
+        title: "대시보드 — 상태별 상담 (E02)",
+        note: "맨 위는 이번 달 상담 수(누르면 통계). 진행 중(기다리는 중·끝내지 않은 상담) · 끝남 · 연결 안 됨 · 만료. 걸린 시간은 연결됐다 끝난 상담만",
+      },
       async () => {
         await open(ep, "/dashboard");
         await open(epc, "/dashboard");
-        await expect(ep.getByText("만료")).toBeVisible();
+        await expect(ep.getByTestId("month-card")).toBeVisible();
+        // 칩·걸린 시간: 3·4(지금 기록)·7(예전 기록)은 끝남, 5는 연결 안 됨, 6은 만료. 걸린 시간은 끝남만
+        await expect(ep.getByText("끝남", { exact: true })).toHaveCount(3);
+        await expect(ep.getByText("연결 안 됨", { exact: true })).toHaveCount(1);
+        await expect(ep.getByText("만료", { exact: true })).toHaveCount(1);
+        for (const t of ["9분 걸림", "21분 걸림", "7분 걸림"]) await expect(ep.getByText(t, { exact: true })).toBeVisible();
+        await expect(ep.getByText("기록 없음", { exact: true })).toHaveCount(2);
         return [eng(ep), engPc(epc)];
       },
     );
     await shot({ section: "dashboard", ids: ["DATA-06"], title: "통계 — 30일" }, async () => {
       await open(ep, "/stats");
       await open(epc, "/stats");
-      await expect(ep.getByText("원격 해결률").first()).toBeVisible({ timeout: 30_000 });
+      await expect(ep.getByTestId("stats-cards")).toBeVisible({ timeout: 30_000 });
       return [eng(ep), engPc(epc)];
     });
 
@@ -360,22 +375,25 @@ test("세션 화면 — 고객 부르기", async ({ browser, baseURL }) => {
       return [eng(ep)];
     });
 
-    // 끝난 상담 화면 (ROOM-11): 결과마다 제목이 다르다
+    // 끝난 상담 화면 (ROOM-11): 고객과 연결됐었는지는 'ended' 기록의 connected로 가린다
     const now = new Date().toISOString();
-    await mock("/__patch-room", { id: ROOM_B.id, status: "ended", resolved_remotely: true, ended_at: now });
-    await mock("/__patch-room", { id: ROOM_C.id, status: "ended", resolved_remotely: false, ended_at: now });
-    await mock("/__patch-room", { id: ROOM_D.id, status: "ended", resolved_remotely: null, ended_at: now });
-    const done = [await rig.engineer(), await rig.engineer(), await rig.engineer()];
-    await shot({ section: "room", ids: ["ROOM-11", "ROOM-03"], title: "끝난 상담 화면", note: "원격 해결 · 방문 필요 · 연결 없이 닫음 · 만료" }, async () => {
+    await mock("/__patch-room", { id: ROOM_B.id, status: "ended", ended_at: now });
+    await mock("/__patch-room", { id: ROOM_C.id, status: "ended", ended_at: now });
+    await mock("/rest/v1/events", [
+      { room_id: ROOM_B.id, actor: "engineer", name: "ended", props: { duration_sec: 600, connected: true } },
+      { room_id: ROOM_C.id, actor: "engineer", name: "ended", props: { duration_sec: 60, connected: false } },
+    ]);
+    const done = [await rig.engineer(), await rig.engineer()];
+    await shot({ section: "room", ids: ["ROOM-11", "ROOM-03"], title: "끝난 상담 화면", note: "끝남 · 연결 없이 닫음 · 만료" }, async () => {
       await open(done[0], `/room/${ROOM_B.id}`);
       await open(done[1], `/room/${ROOM_C.id}`);
-      await open(done[2], `/room/${ROOM_D.id}`);
       await open(ep, `/room/${EXPIRED.id}`);
-      await expect(ep.getByText("만료된 상담이에요")).toBeVisible();
+      await expect(done[0].getByTestId("room-closed")).toHaveAttribute("data-state", "ended");
+      await expect(done[1].getByTestId("room-closed")).toHaveAttribute("data-state", "not-connected");
+      await expect(ep.getByTestId("room-closed")).toHaveAttribute("data-state", "expired");
       return [
-        { label: "원격 해결", page: done[0] },
-        { label: "방문 필요", page: done[1] },
-        { label: "연결 없이 닫음", page: done[2] },
+        { label: "끝남", page: done[0] },
+        { label: "연결 없이 닫음", page: done[1] },
         { label: "만료", page: ep },
       ];
     });
@@ -394,7 +412,8 @@ test("고객 진입", async ({ browser, baseURL }) => {
       return [cust(cp)];
     });
 
-    await open(ios, `/join/${ROOM.join_token}`);
+    // 아이폰은 다른 상담 링크로: 같은 링크면 나중에 카메라를 켠 쪽이 이어받아 안드로이드 화면이 '다른 폰에서 연결됐어요'가 된다(JOIN-11)
+    await open(ios, `/join/${ROOM_D.join_token}`);
     await holdGum(cp);
     await holdGum(ios);
     await shot({ section: "join", ids: ["JOIN-04"], title: "카메라 켜는 중 — '허용'을 눌러 주세요 (C02)", note: "권한 창이 뜨는 쪽을 가리킨다: 안드로이드는 아래, 아이폰은 가운데" }, async () => {
@@ -698,53 +717,121 @@ test("통화 중 — 도구·카메라·사진·끝내기", async ({ browser, ba
     await cp.waitForTimeout(ARM_MS);
     await cp.getByTestId("cust-end-sheet").getByRole("button", { name: "계속하기" }).click().catch(() => {});
 
+    await shot({ section: "end", ids: ["ROOM-10", "CALL-16"], title: "상담 끝내기 실패", note: "가짜 서버가 상담 닫기를 거부하게 해서 띄움. 고객 화면은 이미 끝났다. 찍은 사진이 있으면 '사진 N장 먼저 저장하기'" }, async () => {
+      await mock("/__faults", { failRoomUpdate: true });
+      await ep.getByTestId("eng-end").click();
+      await ep.waitForTimeout(ARM_MS);
+      await ep.getByTestId("eng-end-sheet").getByRole("button", { name: "통화 끝내기" }).click();
+      await expect(ep.getByText("상담을 끝내지 못했어요")).toBeVisible({ timeout: 20_000 });
+      await expect(ep.getByTestId("eng-photo-save-first")).toBeVisible();
+      await expect(cp.getByTestId("cust-ended")).toBeVisible({ timeout: 10_000 });
+      return [eng(ep), cust(cp)];
+    });
+    await mock("/__faults", { failRoomUpdate: false });
+
     await shot(
-      { section: "end", ids: ["CALL-06", "ROOM-10", "CALL-16"], title: "엔지니어가 끝냄 → 결과 기록 (E11·C19)", note: "통화 중 찍은 사진과 요약. 고르기 전에는 '기록하고 끝내기'가 잠겨 있다" },
+      { section: "end", ids: ["CALL-06", "ROOM-10", "CALL-16"], title: "엔지니어가 끝냄 → 찍은 사진 저장 (C19)", note: "상담은 이미 닫혔다. 통화 중 찍은 사진이 있을 때만 뜨고, 없으면 바로 상담 목록" },
       async () => {
-        await ep.getByTestId("eng-end").click();
-        await ep.waitForTimeout(ARM_MS);
-        await ep.getByTestId("eng-end-sheet").getByRole("button", { name: "통화 끝내기" }).click();
-        await expect(ep.getByTestId("eng-record")).toBeVisible();
-        await expect(cp.getByTestId("cust-ended")).toBeVisible({ timeout: 10_000 });
+        await ep.getByRole("button", { name: "다시 끝내기" }).click();
+        await expect(ep.getByTestId("eng-photo-save")).toBeVisible({ timeout: 20_000 });
+        await expect(cp.getByTestId("cust-ended")).toBeVisible();
         return [eng(ep), cust(cp)];
       },
     );
-
-    await shot({ section: "end", ids: ["ROOM-10"], title: "결과를 고름" }, async () => {
-      await ep.getByRole("radio", { name: /원격으로 해결/ }).click();
-      await expect(ep.getByRole("button", { name: "기록하고 끝내기" })).toBeEnabled();
-      return [eng(ep)];
-    });
-
-    await shot({ section: "end", ids: ["CALL-16", "ROOM-10"], title: "찍은 사진을 저장할까요?", note: "사진을 저장하지 않고 끝내려 하면 한 번 더 묻는다" }, async () => {
-      await ep.getByRole("button", { name: "기록하고 끝내기" }).click();
-      await expect(ep.getByTestId("eng-photo-sheet")).toBeVisible();
-      await ep.waitForTimeout(300);
-      return [eng(ep)];
-    });
-
-    await shot({ section: "end", ids: ["ROOM-10"], title: "결과 저장 실패", note: "가짜 서버가 저장을 거부하게 해서 띄움" }, async () => {
-      await mock("/__faults", { failRoomUpdate: true });
-      await ep.waitForTimeout(ARM_MS);
-      await ep.getByTestId("eng-photo-sheet").getByRole("button", { name: "저장 안 하고 끝내기" }).click();
-      await expect(ep.getByText("저장에 실패했어요. 다시 눌러 주세요.")).toBeVisible({ timeout: 20_000 });
-      return [eng(ep)];
-    });
   });
 });
 
-test("고객이 먼저 끝냄·고객이 나감·상담 닫기 실패", async ({ browser, baseURL }) => {
-  test.setTimeout(240_000);
+test("고객이 먼저 끝냄·닫는 중·로그인 풀림·고객이 나감·상담 닫기 실패", async ({ browser, baseURL }) => {
+  test.setTimeout(360_000);
   await useRig(browser, baseURL, async (rig) => {
     const { ep, cp } = await connect(rig);
+    // 상담 닫기 요청을 붙잡아 '닫는 중' 화면을 찍는다
+    const release = await holdPosts(ep, `/room/${ROOM.id}`);
     await shot(
-      { section: "end", ids: ["JOIN-08", "ROOM-10"], title: "고객이 끝냄 (E11·C19)", note: "고객이 잘못 눌렀으면 '다시 연결' 한 번으로 돌아온다" },
+      { section: "end", ids: ["JOIN-08", "ROOM-10"], title: "고객이 끝냄 — 상담을 끝내는 중", note: "상담 닫기 요청을 붙잡아 두고 찍음. 보통은 잠깐 스친다" },
       async () => {
         await cp.getByRole("button", { name: "통화 종료" }).click();
         await cp.waitForTimeout(ARM_MS);
         await cp.getByTestId("cust-end-sheet").getByRole("button", { name: "끝내기", exact: true }).click();
         await expect(cp.getByTestId("cust-ended")).toBeVisible();
-        await expect(ep.getByTestId("eng-record")).toContainText("고객님이 통화를 끝냈어요", { timeout: 10_000 });
+        await expect(ep.getByTestId("eng-closing")).toContainText("상담을 끝내는 중이에요", { timeout: 10_000 });
+        return [eng(ep), cust(cp)];
+      },
+    );
+    release();
+    await shot(
+      { section: "end", ids: ["JOIN-08", "ROOM-10"], title: "고객이 끝냄 (C19)", note: "상담도 같이 닫힌다. 고객 화면엔 다시 연결 버튼이 없다" },
+      async () => {
+        await expect(cp.getByTestId("cust-ended")).toBeVisible();
+        await expect(ep.getByTestId("eng-customer-ended")).toBeVisible({ timeout: 10_000 });
+        return [eng(ep), cust(cp)];
+      },
+    );
+  });
+
+  await mockReset();
+  await useRig(browser, baseURL, async (rig) => {
+    const { ep, cp } = await connect(rig);
+    await shot(
+      { section: "end", ids: ["JOIN-08", "ROOM-10", "CALL-16"], title: "고객이 끝냄 → 찍은 사진 저장", note: "통화 중 사진을 찍었으면 위에 '고객님이 통화를 끝냈어요' 띠" },
+      async () => {
+        await ep.getByTestId("eng-photo").click();
+        await expect(ep.getByTestId("eng-photo-count")).toHaveText("1", { timeout: 15_000 });
+        await cp.getByRole("button", { name: "통화 종료" }).click();
+        await cp.waitForTimeout(ARM_MS);
+        await cp.getByTestId("cust-end-sheet").getByRole("button", { name: "끝내기", exact: true }).click();
+        await expect(ep.getByTestId("eng-photo-save")).toContainText("고객님이 통화를 끝냈어요", { timeout: 10_000 });
+        return [eng(ep), cust(cp)];
+      },
+    );
+  });
+
+  await mockReset();
+  await useRig(browser, baseURL, async (rig) => {
+    const { ep, cp } = await connect(rig);
+    await ep.getByTestId("eng-photo").click();
+    await expect(ep.getByTestId("eng-photo-count")).toHaveText("1", { timeout: 15_000 });
+    await expect(ep.getByTestId("eng-photo")).toBeEnabled();
+    await mock("/__faults", { failRoomUpdate: true });
+    const release = await holdPosts(ep, `/room/${ROOM.id}`);
+    await shot(
+      { section: "end", ids: ["CALL-06", "ROOM-10"], title: "엔지니어가 끝냄 — 상담을 끝내는 중", note: "상담 닫기 요청을 붙잡아 두고 찍음. 고객 화면은 이미 끝났다" },
+      async () => {
+        await ep.getByTestId("eng-end").click();
+        await ep.waitForTimeout(ARM_MS);
+        await ep.getByTestId("eng-end-sheet").getByRole("button", { name: "통화 끝내기" }).click();
+        await expect(ep.getByTestId("eng-closing")).toContainText("상담을 끝내는 중이에요", { timeout: 10_000 });
+        await expect(cp.getByTestId("cust-ended")).toBeVisible({ timeout: 10_000 });
+        return [eng(ep), cust(cp)];
+      },
+    );
+    release();
+    await shot(
+      { section: "end", ids: ["ROOM-10", "CALL-16"], title: "상담 끝내기 실패 → 사진 먼저 저장", note: "인터넷이 끊겨 상담을 못 닫아도 사진은 저장된다. 그 뒤 '다시 끝내기'가 되면 사진 저장 화면 없이 상담 목록" },
+      async () => {
+        await expect(ep.getByText("상담을 끝내지 못했어요")).toBeVisible({ timeout: 20_000 });
+        await ep.getByTestId("eng-photo-save-first").click();
+        await expect(ep.getByTestId("eng-photo-save-first")).toHaveText("사진 1장을 저장했어요", { timeout: 10_000 });
+        return [eng(ep)];
+      },
+    );
+    await mock("/__faults", { failRoomUpdate: false });
+  });
+
+  await mockReset();
+  await useRig(browser, baseURL, async (rig) => {
+    const { ep, cp } = await connect(rig);
+    await shot(
+      { section: "end", ids: ["ROOM-10", "CALL-16"], title: "로그인이 풀려 상담을 끝내지 못함 → 사진부터 저장", note: "통화 중에 엔지니어 로그인 쿠키를 지우고 '통화 끝내기'. 저장하거나 '저장 안 하고 나가기'를 누르면 로그인 화면" },
+      async () => {
+        await ep.getByTestId("eng-photo").click();
+        await expect(ep.getByTestId("eng-photo-count")).toHaveText("1", { timeout: 15_000 });
+        await ep.context().clearCookies();
+        await ep.getByTestId("eng-end").click();
+        await ep.waitForTimeout(ARM_MS);
+        await ep.getByTestId("eng-end-sheet").getByRole("button", { name: "통화 끝내기" }).click();
+        await expect(ep.getByTestId("eng-photo-save").getByRole("alert")).toContainText("로그인이 풀려서 상담을 끝내지 못했어요", { timeout: 20_000 });
+        await expect(cp.getByTestId("cust-ended")).toBeVisible({ timeout: 10_000 });
         return [eng(ep), cust(cp)];
       },
     );

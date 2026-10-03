@@ -49,19 +49,31 @@ import {
   Spinner,
   UndoIcon,
 } from "@/components/ui/icons";
-import { endRoom, getJoinProgress, logToolUsed, markRoomActive, type JoinProgress } from "./actions";
+import {
+  endRoom,
+  getJoinProgress,
+  logToolUsed,
+  markRoomActive,
+  type EndRoomResult,
+  type JoinProgress,
+} from "./actions";
 import type { SentVia } from "./share-buttons";
 import { AppBar, AppBarAction, CallTimer, QualityPill, ShortcutsBox } from "./call-ui";
 import { WaitingView } from "./waiting-view";
-import { RecordView, type CallSummary } from "./record-view";
+import { PhotoSaveView, SavePhotosFirst } from "./photo-save-view";
+
+// 누가 통화를 끝냈는지. null = 고객과 연결된 적 없이 닫음
+type Closer = "engineer" | "customer" | null;
 
 type PanelState =
   | { phase: "idle" }
   | { phase: "call"; call: CallState; peerPresent: boolean }
-  // 결과 기록(E11). by: 누가 통화를 끝냈는지
-  | { phase: "record"; by: "engineer" | "customer" }
-  // 연결된 적 없는 상담을 닫는 중(저장)
-  | { phase: "closing" };
+  // 상담을 닫는 중(endRoom). 실패하면 이 화면에서 다시 시도한다. 통화로는 돌아가지 않는다
+  | { phase: "closing"; by: Closer }
+  // 상담을 닫은 뒤 통화 중 찍은 사진을 저장할지 묻는다(CALL-16). relogin: 로그인이 풀려 닫지 못했다
+  | { phase: "photos"; by: Closer; relogin: boolean }
+  // 고객이 끝내서 상담을 닫았다(찍은 사진 없음)
+  | { phase: "ended" };
 
 // 끝내기 확인 창: end = 통화를 끝낼까요?(E10, 연결된 적 있음), close = 연결 없이 닫기
 type EndSheetKind = "end" | "close" | null;
@@ -77,7 +89,14 @@ const PRESS_SLOP_PX = 12;
 // 고객 진행 상황(ROOM-13)을 묻는 간격
 const PROGRESS_POLL_MS = 3000;
 
-const NO_SUMMARY: CallSummary = { talkSec: null, pointer: 0, guide: 0, draw: 0 };
+// 세션 없이 보내는 종료 알림(REST)을 상담을 닫기 전에 기다리는 최대 시간
+const BYE_WAIT_MS = 3000;
+
+// 닫는 중 화면. 연결된 적 있는 상담은 '끝내기', 연결 없이 닫는 상담은 '닫기' (확인 창 버튼과 같은 말)
+const CLOSING_TEXT = {
+  end: { busy: "상담을 끝내는 중이에요", failed: "상담을 끝내지 못했어요", retry: "다시 끝내기" },
+  close: { busy: "상담을 닫는 중이에요", failed: "상담을 닫지 못했어요", retry: "다시 닫기" },
+} as const;
 
 // 방향키 등 텍스트 입력 중인지 (F 단축키가 입력을 가로채지 않게)
 function isTyping(target: EventTarget | null) {
@@ -85,8 +104,9 @@ function isTyping(target: EventTarget | null) {
   return target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
 }
 
-// 엔지니어 세션 화면 (피그마 E03~E11·P01, ROOM-05·10·13, CALL-01·04).
-//   고객 부르기(링크 보내기 → 고객 진행 상황) → 통화(어두운 전체 화면, 영상 + 방향 링·도구) → 통화를 끝낼까요? → 결과 기록
+// 엔지니어 세션 화면 (피그마 E03~E10·P01, ROOM-05·10·13, CALL-01·04).
+//   고객 부르기(링크 보내기 → 고객 진행 상황) → 통화(어두운 전체 화면, 영상 + 방향 링·도구) → 통화를 끝낼까요? → 상담 닫힘
+//   → 찍은 사진이 있으면 저장할지 묻고, 없으면 상담 목록으로
 // 대시보드의 '새 A/S 시작'·'이어하기' 탭에서 마이크를 미리 받아 두면(mic-ahead) 화면이 뜨자마자 통화 대기를 시작한다.
 // 폰 한 손 조작 기준: 누를 것은 아래쪽에, 크게.
 export function CallPanel({
@@ -103,7 +123,7 @@ export function CallPanel({
   joinUrl: string;
   // '오늘 오후 5:00' — 이 상담을 만든 시각
   createdLabel: string;
-  // 이미 '연결됨'인 세션인지. 한 번도 연결 안 된 세션은 원격 해결 여부를 묻지 않는다
+  // 이미 '연결됨'인 상담인지. 한 번도 연결 안 된 상담은 '상담 닫기'(연결 없이 닫음)
   everConnected: boolean;
 }) {
   const router = useRouter();
@@ -114,7 +134,6 @@ export function CallPanel({
   // 대시보드에서 마이크를 미리 받아 와 스스로 시작하는 중 (버튼 없이 링크 보내기 화면을 먼저 보여 준다)
   const [autoStarting, setAutoStarting] = useState(false);
   const [sheet, setSheet] = useState<EndSheetKind>(null);
-  const [ending, setEnding] = useState(false);
   const [saveError, setSaveError] = useState(false);
   const [turnError, setTurnError] = useState<string | null>(null);
   const [turnOpen, setTurnOpen] = useState(false);
@@ -133,8 +152,6 @@ export function CallPanel({
   // 링크를 어떻게 보냈는지(E03 → E04), 고객이 어디까지 왔는지 (ROOM-13)
   const [sentVia, setSentVia] = useState<SentVia | null>(null);
   const [progress, setProgress] = useState<JoinProgress | null>(null);
-  // 결과 기록 화면에 보여 줄 통화 요약
-  const [summary, setSummary] = useState<CallSummary>(NO_SUMMARY);
   // 고객 쪽 기기가 바뀐 직후 잠깐 알린다 (BUG-04: 링크가 새서 다른 사람이 들어온 경우를 알아채게)
   const [peerChanged, setPeerChanged] = useState(false);
   const peerChangedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -144,15 +161,15 @@ export function CallPanel({
   const remoteStreamRef = useRef<MediaStream | null>(null);
   // 화면을 떠난 뒤 늦게 끝난 start()·finish()가 세션을 만들거나 화면을 옮기지 않게 한다
   const unmountedRef = useRef(false);
-  // 저장 중에는 고객이 다시 들어와도 기록 화면에 머문다
+  // 상담을 닫기 시작했다(되돌릴 수 없다) / 닫는 요청(endRoom)이 가는 중
+  const closingRef = useRef(false);
   const endingRef = useRef(false);
+  // 통화 콜백은 시작 시점 값을 기억하므로 지금 값은 ref로 읽는다
+  const everConnectedRef = useRef(initialEverConnected);
   const lastCallRef = useRef<CallState>("waiting");
   const confirmShownAtRef = useRef(0);
   const releaseWakeLockRef = useRef<(() => void) | null>(null);
   const toolsLoggedRef = useRef(new Set<"pointer_used" | "freeze_used" | "anchor_used" | "guide_used" | "photo_taken">());
-  // 통화 요약용 횟수 (가리키기·핀, 방향 지시 누름, 그린 선)
-  const usageRef = useRef({ pointer: 0, guide: 0, draw: 0 });
-  const lastGuideRef = useRef<GuideCmd | null>(null);
   const connectedAtRef = useRef<number | null>(null);
   // 화면 멈춤 + 그리기 (CALL-09)
   const [frozen, setFrozen] = useState<string | null>(null);
@@ -182,6 +199,9 @@ export function CallPanel({
   const photoReqRef = useRef<PhotoRequester | null>(null);
   const [photos, setPhotos] = useState<TakenPhoto[]>([]);
   const photosRef = useRef<TakenPhoto[]>([]);
+  // 상담을 닫지 못한 화면에서 사진을 먼저 저장했다 (닫힌 뒤 사진 저장 화면을 건너뛴다)
+  const [photosSaved, setPhotosSaved] = useState(false);
+  const photosSavedRef = useRef(false);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoNote, setPhotoNote] = useState<"taken" | "failed" | null>(null);
   const [photoFlash, setPhotoFlash] = useState(0);
@@ -196,7 +216,9 @@ export function CallPanel({
       clearTimeout(photoNoteTimerRef.current);
       if (pressRef.current) clearTimeout(pressRef.current.timer);
       photoReqRef.current?.dispose();
-      photosRef.current.forEach((p) => URL.revokeObjectURL(p.url));
+      // 저장(다운로드)을 누르자마자 떠나도 내려받기가 끊기지 않게 사진 주소는 조금 뒤에 버린다
+      const urls = photosRef.current.map((p) => p.url);
+      setTimeout(() => urls.forEach((u) => URL.revokeObjectURL(u)), 30_000);
       sessionRef.current?.destroy();
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
       releaseWakeLockRef.current?.();
@@ -265,7 +287,8 @@ export function CallPanel({
       }
     }
     const ice = await fetchIceServers(joinToken);
-    if (unmountedRef.current) {
+    // 기다리는 동안 화면을 떠났거나 상담을 닫기 시작했다
+    if (unmountedRef.current || closingRef.current) {
       mic?.getTracks().forEach((t) => t.stop());
       releaseWakeLockRef.current?.();
       return;
@@ -279,7 +302,11 @@ export function CallPanel({
       iceServers: ice.iceServers,
       clockOffsetMs: ice.clockOffsetMs,
       localStream: mic,
-      onState: (call) => {
+      onState: (state) => {
+        // 연결된 적 없는데 고객이 '통화 종료'를 눌렀다(기다리다 잘못 누름 등). 아직 통화한 것이 없으니 상담은 닫지 않고
+        // 다시 기다린다. 고객이 같은 링크를 다시 열면 이어진다. 엔지니어가 들어오기 전에 누른 경우(종료 알림이 아무에게도
+        // 안 감)와도 결과가 같다. 그만두려는 것이었다면 엔지니어가 '상담 닫기'로 닫는다
+        const call: CallState = state === "ended" && !everConnectedRef.current ? "waiting" : state;
         lastCallRef.current = call;
         // 연결이 바뀌면 고객 쪽 정지 화면도 사라지므로 이쪽도 풀어 둔다
         if (call !== "connected") {
@@ -291,21 +318,20 @@ export function CallPanel({
           setGuideCmd(null);
         }
         if (call === "connected") {
+          everConnectedRef.current = true;
           setEverConnected(true);
           if (connectedAtRef.current === null) connectedAtRef.current = Date.now();
           setConnectedAt(connectedAtRef.current);
-          // 연결된 적 없는 세션의 '닫을까요?'는 더 맞지 않다 (해결 여부를 물어야 한다)
+          // 연결된 적 없는 상담의 '닫을까요?'는 더 맞지 않다 ('통화를 끝낼까요?'로 물어야 한다)
           setSheet((s) => (s === "close" ? null : s));
           markRoomActive(roomId);
         }
         if (call === "ended") {
-          // 고객이 끊으면 열려 있던 확인 창은 결과 기록 화면으로 대체된다
-          confirmShownAtRef.current = Date.now();
-          setSaveError(false);
-          setSheet(null);
-          setSummary(snapshotSummary());
+          // 고객이 통화를 끝냈다 = 상담도 끝 (ROOM-10). 열린 확인 창은 닫고, 채널에서 나가 상담을 닫는다.
+          // 고객이 링크를 다시 열어도 통화로 돌아오지 않는다(닫힌 상담이라 고객 화면엔 '상담이 이미 끝났어요')
+          closeRoom("customer");
+          return;
         }
-        if (call === "connecting") setSaveError(false);
         if (call === "denied" || call === "replaced") {
           // 채널 권한이 없거나 다른 기기가 이어받았다 — 세션은 스스로 닫혔다.
           // 마이크·화면 켜짐도 풀고, '여기서 다시 받기'로 새 세션을 열 수 있게 비운다
@@ -316,27 +342,12 @@ export function CallPanel({
           releaseWakeLockRef.current = null;
           setSheet(null);
         }
-        setState((prev) => {
-          if (prev.phase === "record") {
-            // 답하기 전에 다른 기기가 이어받았으면 여기서는 답하지 않는다 (이어받은 기기가 계속한다)
-            if (call === "replaced" && !endingRef.current) {
-              return { phase: "call", call, peerPresent: false };
-            }
-            // 고객이 종료한 뒤 링크를 다시 열고 들어오면 통화로 돌아간다
-            return prev.by === "customer" &&
-              !endingRef.current &&
-              (call === "connecting" || call === "connected")
-              ? { phase: "call", call, peerPresent: true }
-              : prev;
-          }
-          if (prev.phase === "closing") return prev;
-          if (call === "ended") return { phase: "record", by: "customer" };
-          return {
-            phase: "call",
-            call,
-            peerPresent: prev.phase === "call" ? prev.peerPresent : false,
-          };
-        });
+        // 상담을 닫기 시작한 뒤에는 통화 화면으로 돌아가지 않는다 (세션도 이미 닫혔다)
+        setState((prev) =>
+          prev.phase === "idle" || prev.phase === "call"
+            ? { phase: "call", call, peerPresent: prev.phase === "call" ? prev.peerPresent : false }
+            : prev,
+        );
       },
       onQuality: setQuality,
       onCameraState: (cs) => {
@@ -387,12 +398,6 @@ export function CallPanel({
     releaseWakeLockRef.current = null;
   }
 
-  function snapshotSummary(): CallSummary {
-    const u = usageRef.current;
-    const at = connectedAtRef.current;
-    return { talkSec: at === null ? null : (Date.now() - at) / 1000, pointer: u.pointer, guide: u.guide, draw: u.draw };
-  }
-
   // 영상을 탭한 곳을 고객 화면에 표시한다. 영상 밖 검은 여백은 무시
   function pointAt(clientX: number, clientY: number) {
     const video = videoRef.current;
@@ -403,7 +408,6 @@ export function CallPanel({
     if (!pos) return;
     session.sendPointer(pos);
     showMarker(video, pos);
-    usageRef.current.pointer++;
     setGestureLearned(true);
     logToolOnce("pointer_used");
   }
@@ -428,7 +432,6 @@ export function CallPanel({
       setPress(null);
       if (anchorApiRef.current?.pinAt(x, y)) {
         navigator.vibrate?.(15);
-        usageRef.current.pointer++;
         setGestureLearned(true);
         logToolOnce("anchor_used");
       }
@@ -466,16 +469,12 @@ export function CallPanel({
   // 방향 지시(CALL-15): 누르는 동안 방향 링·알약이 0.4초마다 hold를 보낸다. 닫혀 있으면 send가 false(버림)
   function sendGuide(msg: GuideMsg) {
     if (msg.kind === "release") {
-      lastGuideRef.current = null;
       setGuideCmd(null);
       if (guideLink && lastCallRef.current === "connected") guideLink.send(JSON.stringify(msg));
       return;
     }
     if (!guideLink || lastCallRef.current !== "connected") return;
     if (guideLink.send(JSON.stringify(msg))) {
-      // 0.4초마다 다시 오는 hold는 세지 않고, 새로 누르거나 방향을 바꿀 때만 센다
-      if (lastGuideRef.current !== msg.cmd) usageRef.current.guide++;
-      lastGuideRef.current = msg.cmd;
       setGuideCmd(msg.cmd);
       logToolOnce("guide_used");
     }
@@ -586,7 +585,6 @@ export function CallPanel({
     end: () => {
       flushStroke();
       strokeRef.current = null;
-      usageRef.current.draw++;
     },
   };
 
@@ -607,12 +605,18 @@ export function CallPanel({
     return () => window.removeEventListener("keydown", onKey);
   }, [connectedNow, sheet]);
 
-  // 고객에게 종료를 알리고 이쪽 연결·마이크를 정리한다.
-  // 세션이 없어도(연결 준비 전, 새로고침 후) 기다리던 고객 화면이 '상담이 끝났어요'로 바뀌어야 한다
-  function hangupAndStop() {
-    if (sessionRef.current) sessionRef.current.hangup();
-    else sendBye(roomId, "engineer").catch(() => {});
+  // 고객 화면에 종료를 알리고(bye) 이쪽 연결·마이크·화면 켜짐을 정리한다.
+  // 세션이 없어도(연결 준비 전, 새로고침 후) 기다리던 고객 화면이 '상담이 끝났어요'로 바뀌어야 한다 — REST로 보내고 잠깐 기다린다
+  async function hangupAndStop() {
+    const session = sessionRef.current;
+    session?.hangup();
     stopSession();
+    if (!session) {
+      await Promise.race([
+        sendBye(roomId, "engineer").catch(() => {}),
+        new Promise((r) => setTimeout(r, BYE_WAIT_MS)),
+      ]);
+    }
   }
 
   function justShown() {
@@ -622,7 +626,6 @@ export function CallPanel({
   // 끝내기: 연결된 적 있으면 '통화를 끝낼까요?'(E10), 없으면 '상담을 닫을까요?' (ROOM-10)
   function requestEnd() {
     confirmShownAtRef.current = Date.now();
-    setSaveError(false);
     setSheet(everConnected ? "end" : "close");
   }
 
@@ -631,63 +634,65 @@ export function CallPanel({
     setSheet(null);
   }
 
-  // E10 '통화 끝내기': 고객 화면도 끝나고 결과 기록(E11)으로
+  // E10 '통화 끝내기'·'끝내기': 고객 화면도 끝나고 상담이 닫힌다
   function endCall() {
     if (justShown()) return;
-    setSummary(snapshotSummary());
-    hangupAndStop();
-    setSheet(null);
-    confirmShownAtRef.current = 0;
-    setState({ phase: "record", by: "engineer" });
+    closeRoom("engineer");
   }
 
-  // 연결된 적 없는 상담 닫기. 고객에게 알리고 해결 여부 없이 저장
+  // 연결된 적 없는 상담 닫기
   function closeSession() {
-    if (justShown() || endingRef.current) return;
-    hangupAndStop();
-    setSheet(null);
-    setState({ phase: "closing" });
-    confirmShownAtRef.current = 0; // 방금 확인한 결정이므로 대기 없이 저장
-    finish(null);
+    if (justShown()) return;
+    closeRoom(null);
   }
 
-  // 연결은 저장이 성공해 화면을 떠날 때 정리된다(언마운트). 그래야 저장에 실패해도
-  // 고객이 먼저 끊은 경우 계속 기다렸다가 이어받을 수 있다
-  async function finish(resolvedRemotely: boolean | null) {
-    if (justShown() || endingRef.current) return;
-    endingRef.current = true;
-    setEnding(true);
+  // 상담 끝내기 (ROOM-10). 고객 화면에 종료를 먼저 알리고(bye) 이쪽 세션을 정리한 뒤 상담을 닫는다(endRoom).
+  // bye가 먼저다 — 상담이 닫히면 채널 정책이 bye를 막는다. 고객이 끝낸 경우엔 고객이 이미 나갔으니 정리만 한다.
+  // 통화 콜백(onState)에서도 부르므로 state가 아니라 ref만 읽는다
+  async function closeRoom(by: Closer) {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    confirmShownAtRef.current = 0;
+    setSheet(null);
     setSaveError(false);
-    let result: Awaited<ReturnType<typeof endRoom>> | null = null;
+    setState({ phase: "closing", by });
+    if (by === "customer") stopSession();
+    else await hangupAndStop();
+    // 종료 알림을 기다리는 동안 화면을 떠났어도 상담은 닫는다(이미 끝내기로 정했다). 화면 이동은 finish가 막는다
+    finish(by);
+  }
+
+  // 상담을 닫는다. 실패하면 닫는 중 화면에서 다시 누른다(세션은 이미 닫혀 통화로 돌아가지 않는다).
+  // resendBye: '다시 끝내기' — 실패 화면이 떠 있는 동안 고객이 링크를 다시 열었을 수 있어(상담이 아직 열려 있다) 종료 알림부터 다시 보낸다
+  async function finish(by: Closer, resendBye = false) {
+    if (endingRef.current) return;
+    endingRef.current = true;
+    setSaveError(false);
+    if (resendBye) await hangupAndStop();
+    let result: EndRoomResult | null = null;
     try {
-      result = await endRoom(roomId, resolvedRemotely);
+      result = await endRoom(roomId, by !== null);
     } catch {
       // 네트워크 오류 — 아래에서 안내
     }
     if (unmountedRef.current) return;
+    endingRef.current = false;
+    // 닫기 실패 화면에서 이미 저장한 사진은 다시 묻지 않는다
+    const hasPhotos = photosRef.current.length > 0 && !photosSavedRef.current;
     if (result?.ok) {
-      // 기록 화면에 있는 동안 고객이 다시 들어왔을 수 있다 — 세션이 없어도 떠나기 전에 종료를 알린다
-      hangupAndStop();
-      router.replace("/dashboard");
+      // 찍은 사진이 있으면 지워지기 전에 저장할지 묻는다. 없으면 고객이 끝낸 경우만 알리고, 내가 끝냈으면 바로 목록으로
+      if (hasPhotos) setState({ phase: "photos", by, relogin: false });
+      else if (by === "customer") setState({ phase: "ended" });
+      else router.replace("/dashboard");
       return;
     }
     if (result?.reason === "auth") {
-      // 다시 로그인하면 답하지 못한 이 세션으로 돌아온다
-      router.replace(`/login?next=/room/${roomId}`);
+      // 다시 로그인하면 끝내지 못한 이 상담으로 돌아온다. 사진은 로그인 화면으로 가면 지워지니 먼저 묻는다
+      if (hasPhotos) setState({ phase: "photos", by, relogin: true });
+      else router.replace(`/login?next=/room/${roomId}`);
       return;
     }
-    endingRef.current = false;
-    setEnding(false);
     setSaveError(true);
-    // 저장 중 고객이 다시 들어와 연결됐으면 통화 화면으로 돌아간다
-    const last = lastCallRef.current;
-    if (sessionRef.current && (last === "connecting" || last === "connected")) {
-      setState((prev) =>
-        prev.phase === "record" && prev.by === "customer"
-          ? { phase: "call", call: last, peerPresent: true }
-          : prev,
-      );
-    }
   }
 
   const endLabel = everConnected ? "통화 종료" : "상담 닫기";
@@ -699,7 +704,7 @@ export function CallPanel({
         open={sheet === "end"}
         onClose={() => setSheet(null)}
         title={inCall ? "통화를 끝낼까요?" : "상담을 끝낼까요?"}
-        description={inCall ? "고객님 화면도 같이 끊겨요. 끝나면 결과를 남겨 주세요." : "끝나면 결과를 남겨 주세요."}
+        description={inCall ? "고객님 화면도 같이 끊겨요." : "고객님께 보낸 링크도 더는 안 열려요."}
         testId="eng-end-sheet"
       >
         <Button variant="danger" size="xl" block onClick={endCall}>
@@ -716,7 +721,7 @@ export function CallPanel({
         description="고객님께 보낸 링크도 더는 안 열려요."
         testId="eng-close-sheet"
       >
-        <Button variant="danger" size="xl" block disabled={ending} onClick={closeSession}>
+        <Button variant="danger" size="xl" block onClick={closeSession}>
           닫기
         </Button>
         <Button variant="secondary" size="xl" block onClick={cancelEnd}>
@@ -744,35 +749,70 @@ export function CallPanel({
     </Banner>
   );
 
-  if (state.phase === "record") {
+  if (state.phase === "photos") {
     return (
-      <RecordView
-        createdLabel={createdLabel}
-        byCustomer={state.by === "customer"}
-        summary={summary}
-        saving={ending}
-        saveError={saveError}
-        onSubmit={finish}
+      <PhotoSaveView
         photos={photos}
+        byCustomer={state.by === "customer"}
+        relogin={state.relogin}
+        onLeave={() => router.replace(state.relogin ? `/login?next=/room/${roomId}` : "/dashboard")}
       />
     );
   }
 
-  if (state.phase === "closing") {
+  if (state.phase === "ended") {
     return (
       <NoticeScreen
+        testId="eng-customer-ended"
         tone="neutral"
-        icon={ending ? <Spinner className="size-10" /> : <AlertIcon className="size-10" />}
-        title={ending ? "상담을 닫는 중이에요" : "상담을 닫지 못했어요"}
+        icon={<PhoneOffIcon className="size-10" />}
+        title="고객님이 통화를 끝냈어요"
         actions={
-          !ending && (
-            <Button size="xl" block variant="danger" onClick={() => finish(null)}>
-              다시 닫기
-            </Button>
+          <Button size="xl" block onClick={() => router.replace("/dashboard")}>
+            상담 목록으로
+          </Button>
+        }
+      >
+        상담도 같이 끝났어요.
+      </NoticeScreen>
+    );
+  }
+
+  if (state.phase === "closing") {
+    const { by } = state;
+    const text = CLOSING_TEXT[by === null ? "close" : "end"];
+    return (
+      <NoticeScreen
+        testId="eng-closing"
+        tone="neutral"
+        icon={saveError ? <AlertIcon className="size-10" /> : <Spinner className="size-10" />}
+        title={saveError ? text.failed : by === "customer" ? "고객님이 통화를 끝냈어요" : text.busy}
+        actions={
+          saveError && (
+            <>
+              <Button size="xl" block variant="danger" onClick={() => finish(by, true)}>
+                {text.retry}
+              </Button>
+              {/* 사진은 이 기기 메모리에만 있다. 상담이 안 닫혀도(인터넷이 끊겨도) 저장은 되니 먼저 챙길 수 있게 (CALL-16) */}
+              {photos.length > 0 && (
+                <SavePhotosFirst
+                  photos={photos}
+                  saved={photosSaved}
+                  onSaved={() => {
+                    photosSavedRef.current = true;
+                    setPhotosSaved(true);
+                  }}
+                />
+              )}
+            </>
           )
         }
       >
-        {saveError ? "저장에 실패했어요. 다시 눌러 주세요." : "잠시만 기다려 주세요."}
+        {saveError
+          ? `인터넷 연결을 확인하고 '${text.retry}'를 눌러 주세요.`
+          : by === "customer"
+            ? `${text.busy}.`
+            : "잠시만 기다려 주세요."}
       </NoticeScreen>
     );
   }

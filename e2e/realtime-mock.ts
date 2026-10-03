@@ -1,7 +1,8 @@
-import type { BrowserContext, WebSocketRoute } from "@playwright/test";
+import type { BrowserContext, Route, WebSocketRoute } from "@playwright/test";
 
 // Supabase Realtime 가짜 (브라우저 WebSocket을 Playwright가 가로챔 — 서버 없음).
-// 통화 시그널링(src/lib/webrtc/call.ts)이 쓰는 만큼만: phx_join · heartbeat · presence(track) · broadcast(offer/answer/ice/bye).
+// 통화 시그널링(src/lib/webrtc/call.ts)이 쓰는 만큼만: phx_join · heartbeat · presence(track) · broadcast(offer/answer/ice/bye),
+// 그리고 소켓 없이 REST로 보내는 broadcast(세션 없이 보내는 종료 알림 sendBye: /realtime/v1/api/broadcast).
 // 프로토콜: Phoenix vsn 2.0.0 — 텍스트는 JSON 배열 [join_ref, ref, topic, event, payload],
 // 사용자 broadcast는 바이너리 (보냄: kind 3 userBroadcastPush / 받음: kind 4 userBroadcast, realtime-js serializer.js).
 // 여러 페이지(엔지니어·고객, 다른 컨텍스트여도 됨)의 소켓을 이 허브 하나가 이어 준다.
@@ -30,7 +31,7 @@ export class RealtimeHub {
   private readonly clients = new Set<Client>();
   /** topic → client → presence */
   private readonly presence = new Map<string, Map<Client, PresenceEntry>>();
-  /** 전달한 broadcast (디버깅·검증용) */
+  /** 전달한 broadcast (디버깅·검증용). from 0 = 소켓 없이 REST로 보낸 것 */
   readonly broadcasts: { topic: string; event: string; from: number }[] = [];
   /** 이 이벤트(offer·answer 등)의 broadcast는 버린다 — '연결 중' 상태에 머물게 할 때 (화면 카탈로그) */
   readonly drop = new Set<string>();
@@ -39,6 +40,40 @@ export class RealtimeHub {
 
   async attach(context: BrowserContext): Promise<void> {
     await context.routeWebSocket(/\/realtime\/v1\/websocket/, (ws) => this.connect(ws));
+    await context.route(/\/realtime\/v1\/api\/broadcast/, (route) => this.onRest(route));
+  }
+
+  /**
+   * REST broadcast: httpSend는 POST …/api/broadcast/{토픽}/events/{이벤트} (본문 = payload),
+   * 예전 send() 대체 경로는 POST …/api/broadcast {messages:[{topic, event, payload}]}. 채널의 구성원에게 JSON broadcast로 전한다
+   */
+  private async onRest(route: Route) {
+    const req = route.request();
+    const cors = {
+      "access-control-allow-origin": req.headers()["origin"] ?? "*",
+      "access-control-allow-headers": "*",
+      "access-control-allow-methods": "POST, OPTIONS",
+    };
+    if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
+    let body: unknown = null;
+    try {
+      body = req.postDataJSON();
+    } catch {
+      // 본문 없음
+    }
+    const m = /\/api\/broadcast\/([^/]+)\/events\/([^/?]+)/.exec(new URL(req.url()).pathname);
+    const messages: { topic: string; event: string; payload: unknown }[] = m
+      ? [{ topic: decodeURIComponent(m[1]), event: decodeURIComponent(m[2]), payload: body }]
+      : (((body as { messages?: unknown[] } | null)?.messages ?? []) as { topic: string; event: string; payload: unknown }[]);
+    for (const msg of messages) {
+      const topic = `realtime:${msg.topic}`;
+      this.broadcasts.push({ topic, event: msg.event, from: 0 });
+      if (this.drop.has(msg.event)) continue;
+      for (const c of this.members(topic)) {
+        this.sendJson(c, [null, null, topic, "broadcast", { type: "broadcast", event: msg.event, payload: msg.payload }]);
+      }
+    }
+    return route.fulfill({ status: 202, headers: cors, body: "" });
   }
 
   private connect(ws: WebSocketRoute) {

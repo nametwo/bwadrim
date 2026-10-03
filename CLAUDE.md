@@ -44,7 +44,7 @@ src/lib/
   in-app-browser.ts                              # 카톡 등 인앱 브라우저 감지·외부 브라우저로 열기
   kakao-share.ts                                 # 카톡 보내기(카카오링크, ROOM-14). 카카오 키가 있을 때만. SDK는 링크 보내기 화면에서 미리 받는다
   events.ts                                      # 지표 이벤트 기록
-  metrics.ts                                     # 핵심 지표 계산 (통계 화면)
+  metrics.ts                                     # 핵심 지표 계산 (통계 화면). endedConnected = 끝난 상담이 고객과 연결됐었는지 (대시보드 칩·끝난 상담 화면도 같이 씀)
 src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기). anchor/·anchor-overlay = AR 핀 층(CALL-14), guide-dpad(방향 링·가까이/멀리 알약)·guide-pad-geometry·guide-overlay(고객 노란 원 화살표·네 모서리)·guide-pill = 방향 지시(CALL-15), open-in-browser = 앱 안 브라우저 안내(고객 JOIN-10·엔지니어 AUTH-09)
   ui/                                            # 디자인 시스템 부품(NFR-08, 피그마 컴포넌트와 같은 이름): button(Button·ButtonLink·buttonClass), icons(선 아이콘), sheet(아래 확인 창), notice-screen(한 화면 한 안내), bottom-cta(아래에 붙는 버튼 자리), brand(로고), status-chip, step-item, banner, call-control(통화 원형 버튼), stat-card, engineer-card, call-timer
 supabase/schema.sql
@@ -63,7 +63,7 @@ Supabase Realtime **비공개** broadcast 채널, 역할별 일방통행 두 개
 AR 핀(CALL-14)은 전용 DataChannel `anchor`(고객이 offer에 포함). 기준 사진 조각이 'draw'의 포인터·그리기를 막지 않게 따로 연다. 엔지니어 영상 제스처: 짧게 탭 = 레이저 포인터(CALL-08), 0.5초 길게 누름 = AR 핀.
 포인터·드로잉은 연결 후 DataChannel로 옮길 것 (지연 최소화). 좌표는 0~1 정규화.
 방향 지시(CALL-15, `src/lib/webrtc/guide.ts`)는 전용 DataChannel `guide`(고객이 offer에 포함, `CallSession.guideLink`). 'draw'에 섞으면 정지 사진 조각 뒤에 막혀 1.5초가 지나 화살표가 저절로 사라진다(고객에겐 '멈춤'으로 보임). 엔지니어가 방향 링(`src/components/guide-dpad.tsx`, 상하좌우 네 조각 + 가운데 구멍 = 멈춤)이나 그 아래 '− 멀리 | 가까이 +' 알약을 누르는 동안 `hold`를 0.4초마다 재전송하고 떼면 `release`. 누른 자리 판정은 `src/components/guide-pad-geometry.ts`(단위 테스트 있음). 고객 쪽(`guide-overlay.tsx`)은 1.5초간 `hold`가 없으면 스스로 지운다. 고객 화면에 방향 지시가 떠 있는 동안은 AR 핀 층(`hidden`)과 상태 문구를 숨긴다. 실험실 `/lab/guide`는 통화 없이 흉내 낸다.
-사진 찍기(CALL-16, `src/lib/webrtc/photo.ts`)는 전용 DataChannel `photo`(고객이 offer에 포함, `CallSession.photoLink`). 엔지니어가 `photo-req`를 보내면 고객 폰이 자기 카메라로 찍어(ImageCapture → 잠깐 해상도 올리기 → 영상 프레임) JPEG base64 조각으로 돌려준다. 고객 화면에 '기사님이 사진을 찍었어요'. 사진은 서버에 올리지 않고 엔지니어 메모리에만 있다가 결과 기록 화면에서 저장할지 묻는다.
+사진 찍기(CALL-16, `src/lib/webrtc/photo.ts`)는 전용 DataChannel `photo`(고객이 offer에 포함, `CallSession.photoLink`). 엔지니어가 `photo-req`를 보내면 고객 폰이 자기 카메라로 찍어(ImageCapture → 잠깐 해상도 올리기 → 영상 프레임) JPEG base64 조각으로 돌려준다. 고객 화면에 '기사님이 사진을 찍었어요'. 사진은 서버에 올리지 않고 엔지니어 메모리에만 있다가, 상담을 닫은 뒤 사진이 있을 때만 사진 저장 화면(`room/[id]/photo-save-view.tsx`)에서 저장할지 묻는다. 저장 안 하고 나가면 사라진다.
 
 ## 화면 카탈로그
 
@@ -80,7 +80,6 @@ AR 핀(CALL-14)은 전용 DataChannel `anchor`(고객이 offer에 포함). 기�
 - 화면 짜임(토스식, NFR-08): 본문 맨 위 큰 제목 하나(할 일·지금 상태) + 회색 한두 줄, 누를 것은 `ui/bottom-cta`(아래에 붙음). 위쪽 바엔 제목 없이 뒤로·닫기만. 묶음은 테두리 대신 면(흰 화면엔 `bg-bg-subtle` 카드, 대시보드·통계는 `bg-bg-muted` 바탕에 흰 카드, 모서리 `rounded-3xl`). 설명 글을 늘리기 전에 배치·제목으로 풀 것
 - 파랑(`primary`)은 "지금 누를 것" 하나에만. 보조 동작은 회색 바탕(`secondary`)이나 글자 버튼(`ghost`), 선택 상태는 흰 바탕 + 진한 테두리 등 중립색. 통화 화면 버튼은 `call`·`call-danger`·`call-ghost`, 켜진 도구는 `CallControl state="active"`(흰 원)
 - 노랑(`guide-signal`)은 방향 지시에만. 통화 화면은 `call-*`, 빨강(`danger`)은 종료·오류에만. 종료는 확인 창(`ui/sheet`)을 한 번 거친다
-- 지표가 되는 답(출장 없이 해결?)은 같은 모양으로. 한쪽을 강조하면 원격 해결률이 기운다
 - 고객 화면: 본문 `text-body-l`(18px) 이상, 누를 버튼 `size="xl"`(64px), 누를 것은 화면 아래쪽. 엔지니어 통화 화면: 누르는 자리가 바뀌지 않게(안내가 사라져도 자리는 남긴다)
 - 가리키기(`pointer`)는 디자인 시스템상 브랜드 블루지만, 지금 CALL-08·09·14 구현은 빨강이다. 바꾸려면 요구사항부터 고칠 것
 - 지금 코드의 다른 예외(바꾸려면 요구사항부터): 카톡 보내기 버튼 노랑(카카오 색), 고객 '허용' 화살표 노랑(JOIN-02). AR(CALL-14)은 빨강 화살표·amber 정지 표시를 쓴다
@@ -99,7 +98,9 @@ AR 핀(CALL-14)은 전용 DataChannel `anchor`(고객이 offer에 포함). 기�
 
 ## 이벤트 이름 (events 테이블)
 
-`room_created`, `link_opened`, `camera_granted`, `camera_denied`, `connected`, `relay_used`, `pointer_used`, `freeze_used`, `anchor_used`, `guide_used`, `photo_taken`, `ended`, `resolved_remotely`
+`room_created`, `link_opened`, `camera_granted`, `camera_denied`, `connected`, `relay_used`, `pointer_used`, `freeze_used`, `anchor_used`, `guide_used`, `photo_taken`, `ended`
+
+`resolved_remotely`('출장 없이 해결?')는 2026-10-03부터 남기지 않는다(예전 기록만 있음, DATA-01). `rooms.resolved_remotely` 칸도 지우지 않고 두되 새로 쓰지 않는다.
 
 ## 환경 변수
 

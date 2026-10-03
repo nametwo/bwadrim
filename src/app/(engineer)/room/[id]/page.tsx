@@ -4,9 +4,10 @@ import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { formatDuration, formatKstDateTime } from "@/lib/format";
+import { endedConnected } from "@/lib/metrics";
 import { BottomCta } from "@/components/ui/bottom-cta";
 import { buttonClass } from "@/components/ui/button";
-import { CarIcon, CheckIcon, ChevronLeftIcon, ClockIcon } from "@/components/ui/icons";
+import { CheckIcon, ChevronLeftIcon, ClockIcon } from "@/components/ui/icons";
 import { NewRoomButton } from "../../dashboard/new-room-button";
 import { createRoom } from "../../dashboard/actions";
 import { CallPanel } from "./call-panel";
@@ -37,16 +38,27 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
   const createdAt = new Date(room.created_at);
 
   // 종료됐거나, 종료 처리 없이 24시간이 지나 고객 링크가 막힌 세션 (ROOM-11).
-  // 제목이 곧 결과다('출장 없이 해결했어요'). 시각·걸린 시간은 아래 카드에
+  // 제목은 지금 상태 하나('상담이 끝났어요'). 시각·걸린 시간은 아래 카드에
   if (room.status === "ended" || expired) {
     const ended = room.status === "ended";
+    // 고객과 연결됐었는지 (metrics.endedConnected). 예전 상담은 방에 남은 해결 여부로, 그 밖에는 'ended' 기록으로.
+    // 기록을 못 읽었으면(null) 모르는 것이라 '연결 없이 닫은 상담'으로 단정하지 않고 '상담이 끝났어요'로 둔다
+    let connected: boolean | null = ended && endedConnected(null, room.resolved_remotely);
+    if (ended && !connected) {
+      const { data: endedEvents, error } = await supabase
+        .from("events")
+        .select("props")
+        .eq("room_id", room.id)
+        .eq("name", "ended");
+      connected = error
+        ? null
+        : ((endedEvents ?? []) as { props: Record<string, unknown> | null }[]).some((e) => endedConnected(e.props));
+    }
     const result = !ended
-      ? { title: "만료된 상담이에요", icon: <ClockIcon />, tint: "bg-bg-muted text-icon-secondary" }
-      : room.resolved_remotely === true
-        ? { title: "출장 없이 해결했어요", icon: <CheckIcon />, tint: "bg-success-tint text-text-success" }
-        : room.resolved_remotely === false
-          ? { title: "방문이 필요했어요", icon: <CarIcon />, tint: "bg-danger-tint text-text-danger" }
-          : { title: "연결 없이 닫은 상담이에요", icon: <ClockIcon />, tint: "bg-bg-muted text-icon-secondary" };
+      ? { key: "expired", title: "만료된 상담이에요", icon: <ClockIcon />, tint: "bg-bg-muted text-icon-secondary" }
+      : connected === false
+        ? { key: "not-connected", title: "연결 없이 닫은 상담이에요", icon: <ClockIcon />, tint: "bg-bg-muted text-icon-secondary" }
+        : { key: "ended", title: "상담이 끝났어요", icon: <CheckIcon />, tint: "bg-success-tint text-text-success" };
     const rows: [string, string][] = [["시작", formatKstDateTime(createdAt)]];
     if (ended && room.ended_at) {
       rows.push(["끝", formatKstDateTime(new Date(room.ended_at))]);
@@ -68,7 +80,7 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
           </Link>
         </header>
 
-        <section className="flex flex-col gap-2 pt-3">
+        <section data-testid="room-closed" data-state={result.key} className="flex flex-col gap-2 pt-3">
           <div className={`mb-5 grid size-14 place-items-center rounded-full [&>svg]:size-7 ${result.tint}`}>{result.icon}</div>
           <h1 className="text-title-l">{result.title}</h1>
           <p className="text-body-m text-text-secondary">
