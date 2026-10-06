@@ -6,6 +6,7 @@ import type { BrowserContext, Page } from "@playwright/test";
 //  - 손전등: 가짜 카메라에 torch 기능이 있는 척 (CALL-11)
 //  - 연결 상태: 열린 RTCPeerConnection을 'disconnected'(잠깐 끊김)·'failed'(실패)로 바꾼 척 (CALL-07, JOIN-09)
 //  - 공유 기능(navigator.share): 폰처럼 있는 척 (ROOM-07 버튼)
+//  - 홈 화면 앱 설치 신호(beforeinstallprompt): 안드로이드 크롬처럼 보낸 척 (NFR-09). 설치 창은 띄우지 않고 고른 답을 돌려준다
 
 export interface HookOptions {
   /** navigator.share가 있는 척 (폰 브라우저) */
@@ -107,6 +108,31 @@ function install(opts: HookOptions) {
 
 export async function installHooks(context: BrowserContext, opts: HookOptions = {}) {
   await context.addInitScript(install, opts);
+}
+
+/** 안드로이드 크롬이 '설치할 수 있어요'(beforeinstallprompt)를 보낸 척 (NFR-09). outcome = 설치 창에서 고를 답 */
+export function fireInstallPrompt(page: Page, outcome: "accepted" | "dismissed" = "accepted") {
+  return page.evaluate((o) => {
+    const e = new Event("beforeinstallprompt", { cancelable: true }) as Event & {
+      prompt(): Promise<void>;
+      userChoice: Promise<{ outcome: string; platform: string }>;
+    };
+    e.prompt = async () => {
+      (window as unknown as { __installPrompted?: number }).__installPrompted =
+        ((window as unknown as { __installPrompted?: number }).__installPrompted ?? 0) + 1;
+    };
+    e.userChoice = Promise.resolve({ outcome: o, platform: "web" });
+    window.dispatchEvent(e);
+  }, outcome);
+}
+
+/** 이 창에서는 홈 화면 앱 설치 안내를 이미 넘긴 척 — 다른 대시보드 장면을 가리지 않게 (NFR-09) */
+export async function skipInstallPrompt(context: BrowserContext) {
+  await context.addInitScript(() => {
+    try {
+      sessionStorage.setItem("bwadrim:install-later", "1");
+    } catch {}
+  });
 }
 
 /** 카메라·마이크 요청을 이 오류로 실패시킨다 (null이면 되돌림) */

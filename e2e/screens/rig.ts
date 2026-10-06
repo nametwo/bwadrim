@@ -1,7 +1,7 @@
 import { expect, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "@playwright/test";
 import { FIXTURE, SUPABASE_URL, engineerCookie } from "../helpers";
 import { RealtimeHub } from "../realtime-mock";
-import { installHooks } from "./browser-hooks";
+import { installHooks, skipInstallPrompt } from "./browser-hooks";
 import type { Frame } from "./shots";
 
 // 화면 카탈로그 공용: 엔지니어·고객 브라우저 준비, 통화 연결, 손가락 조작.
@@ -14,6 +14,8 @@ export const UA = {
     "Mozilla/5.0 (Linux; Android 14; SM-S921N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36",
   iphone:
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+  iphone26:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1",
   kakao:
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 KAKAOTALK 10.8.0",
   naver:
@@ -94,11 +96,12 @@ export class Rig {
     private readonly baseURL: string,
   ) {}
 
-  /** kakao: 'fail'이면 카카오 SDK를 못 받은 척 (ROOM-14) */
-  async engineer(opts: { pc?: boolean; turnWarning?: boolean; kakao?: "fail" } = {}) {
-    const ctx = await this.browser.newContext(opts.pc ? PC : PHONE_ENG);
+  /** kakao: 'fail'이면 카카오 SDK를 못 받은 척 (ROOM-14). install: 홈 화면 앱 설치 안내를 보여 줌(NFR-09, 기본은 이미 넘긴 척). userAgent: 다른 폰 */
+  async engineer(opts: { pc?: boolean; turnWarning?: boolean; kakao?: "fail"; install?: boolean; userAgent?: string } = {}) {
+    const ctx = await this.browser.newContext({ ...(opts.pc ? PC : PHONE_ENG), ...(opts.userAgent && { userAgent: opts.userAgent }) });
     await ctx.addCookies([engineerCookie(this.baseURL)]);
     await installHooks(ctx, { share: !opts.pc });
+    if (!opts.install) await skipInstallPrompt(ctx);
     await ctx.route(KAKAO_SDK, (r) => (opts.kakao === "fail" ? r.abort() : r.fulfill({ contentType: "text/javascript", body: KAKAO_STUB })));
     if (!opts.turnWarning) await hideTurnWarning(ctx);
     await this.hub.attach(ctx);

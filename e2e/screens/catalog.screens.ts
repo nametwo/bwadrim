@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { CLIPS, FIXTURE, fakeCamera, mockReset, postKakaoWebhook } from "../helpers";
-import { failGum, holdGum, releaseGum, removeCamera, setFlip, setPeerState } from "./browser-hooks";
+import { failGum, fireInstallPrompt, holdGum, releaseGum, removeCamera, setFlip, setPeerState } from "./browser-hooks";
 import {
   EXPIRED,
   ROOM,
@@ -1127,6 +1127,70 @@ test("엔지니어 PC 통화", async ({ browser, baseURL }) => {
       await cp.waitForTimeout(800);
       return [engPc(ep), cust(cp)];
     });
+  });
+});
+
+// ---------- 엔지니어 홈 화면 앱 설치 (NFR-09) ----------
+
+test("홈 화면 앱 설치", async ({ browser, baseURL }) => {
+  test.setTimeout(180_000);
+  await useRig(browser, baseURL, async (rig) => {
+    const android = await rig.engineer({ install: true });
+    await shot(
+      {
+        section: "dashboard",
+        ids: ["NFR-09", "ROOM-04"],
+        title: "홈 화면 앱 설치 안내 — 안드로이드, 설치 창 준비 전",
+        note: "폰 브라우저로 상담 목록을 열면 먼저 뜬다. 크롬이 아직 설치 창을 띄울 수 없으면(보통 처음 30초쯤) 메뉴로 설치하는 세 단계",
+      },
+      async () => {
+        await open(android, "/dashboard");
+        await expect(android.getByTestId("install-prompt")).toHaveAttribute("data-mode", "steps", { timeout: 15_000 });
+        return [eng(android)];
+      },
+    );
+    await shot(
+      {
+        section: "dashboard",
+        ids: ["NFR-09"],
+        title: "홈 화면 앱 설치 안내 — 안드로이드, 설치 버튼",
+        note: "크롬이 설치 창을 띄울 수 있게 되면 버튼 하나로 바뀐다. 누르면 크롬의 '앱을 설치할까요?' 창",
+      },
+      async () => {
+        await fireInstallPrompt(android, "accepted");
+        await expect(android.getByTestId("install-prompt")).toHaveAttribute("data-mode", "button");
+        return [eng(android)];
+      },
+    );
+    await shot(
+      { section: "dashboard", ids: ["NFR-09"], title: "홈 화면 앱 설치 — 설치했어요", note: "설치 창에서 '설치'를 고른 뒤" },
+      async () => {
+        await android.getByTestId("install-button").click();
+        await expect(android.getByTestId("install-prompt")).toHaveAttribute("data-mode", "done");
+        return [eng(android)];
+      },
+    );
+
+    const iphone = await rig.engineer({ install: true, userAgent: UA.iphone26 });
+    const iphone17 = await rig.engineer({ install: true, userAgent: UA.iphone });
+    await shot(
+      {
+        section: "dashboard",
+        ids: ["NFR-09"],
+        title: "홈 화면 앱 설치 안내 — 아이폰",
+        note: "웹이 설치 창을 띄울 수 없어 세 단계를 글로. 사파리 26부터는 공유 버튼이 ⋯ 메뉴 안에 있다. 아이폰은 홈 화면 앱에서 한 번 더 로그인",
+      },
+      async () => {
+        await open(iphone, "/dashboard");
+        await open(iphone17, "/dashboard");
+        await expect(iphone.getByTestId("install-steps")).toBeVisible({ timeout: 15_000 });
+        await expect(iphone17.getByTestId("install-steps")).toBeVisible({ timeout: 15_000 });
+        return [
+          { label: "아이폰 사파리 26", page: iphone },
+          { label: "아이폰 사파리 17", page: iphone17 },
+        ];
+      },
+    );
   });
 });
 

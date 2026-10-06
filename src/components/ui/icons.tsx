@@ -463,6 +463,44 @@ export function ShareIcon(p: IconProps) {
   );
 }
 
+/** 세로 점 셋 — 크롬 메뉴 버튼 (홈 화면 앱 설치 안내, NFR-09) */
+export function MoreVerticalIcon(p: IconProps) {
+  return (
+    <Svg strokeWidth={3.2} {...p}>
+      <path d="M12 5H12.01M12 12H12.01M12 19H12.01" />
+    </Svg>
+  );
+}
+
+/** 아이폰 공유 — 네모에서 위로 나가는 화살표 (사파리 공유 버튼, NFR-09) */
+export function IosShareIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 3V15M8 7L12 3L16 7" />
+      <path d="M8 10H6C5.45 10 5 10.45 5 11V20C5 20.55 5.45 21 6 21H18C18.55 21 19 20.55 19 20V11C19 10.45 18.55 10 18 10H16" />
+    </Svg>
+  );
+}
+
+/** 홈 화면에 추가 — 둥근 네모 안의 더하기 (NFR-09) */
+export function AddHomeIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <rect x="4" y="4" width="16" height="16" rx="4" />
+      <path d="M12 8V16M8 12H16" />
+    </Svg>
+  );
+}
+
+/** 가로줄 셋 — 삼성 인터넷 메뉴 버튼 (NFR-09) */
+export function MenuIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M4 7H20M4 12H20M4 17H20" />
+    </Svg>
+  );
+}
+
 /** 불러오는 중 — 피그마 Spinner(Tone=Light·Dark)와 같은 도는 고리 */
 export function Spinner({ className = "size-5" }: { className?: string }) {
   return (

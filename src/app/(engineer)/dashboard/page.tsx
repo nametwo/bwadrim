@@ -13,6 +13,7 @@ import { logout } from "../login/actions";
 import { createRoom } from "./actions";
 import { NewRoomButton } from "./new-room-button";
 import { MicAheadLink } from "./mic-ahead-link";
+import { InstallPrompt } from "@/components/install-prompt";
 
 export const metadata: Metadata = {
   title: "상담 목록 | 봐드림",
@@ -229,6 +230,8 @@ export default async function DashboardPage() {
           </form>
         </BottomCta>
       </main>
+      {/* 폰 브라우저로 열었으면 홈 화면 앱 설치부터 권한다 (NFR-09) */}
+      <InstallPrompt />
     </div>
   );
 }
