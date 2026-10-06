@@ -53,6 +53,9 @@ export default defineConfig({
               CLOUDFLARE_TURN_API_TOKEN: "",
               // 로컬 .env에 카카오 키가 있어도 e2e는 '카톡 보내기' 없이 (진짜 SDK를 받지 않게). 카탈로그는 가짜 키로 덮어쓴다
               NEXT_PUBLIC_KAKAO_JS_KEY: "",
+              // 카톡 공유 웹훅(/api/kakao/share-webhook, ROOM-15·16)이 실제로 돌게 하는 가짜 대표 어드민 키.
+              // 테스트가 카카오인 척 'KakaoAK {이 키}'로 웹훅을 보내고, 같은 키로 상담 서명(sig)을 만든다 (e2e/recipient.spec.ts)
+              KAKAO_ADMIN_KEY: fixture.kakaoAdminKey,
             },
           },
         ]),

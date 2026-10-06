@@ -1,8 +1,9 @@
 {
-  "$comment": "E2E 가짜 Supabase 고정 데이터 (e2e/mock-supabase.mjs와 테스트가 함께 읽는다). 진짜 키가 아니다.",
+  "$comment": "E2E 가짜 Supabase 고정 데이터 (e2e/mock-supabase.mjs와 테스트가 함께 읽는다). 진짜 키가 아니다. 방 6~8번(a006~a008)은 받는 분 이름표 e2e/recipient.spec.ts 전용.",
   "supabasePort": 54329,
   "anonKey": "e2e-anon-key",
   "serviceKey": "e2e-service-key",
+  "kakaoAdminKey": "e2e-kakao-admin-key",
   "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJlMmUwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwicm9sZSI6ImF1dGhlbnRpY2F0ZWQiLCJlbWFpbCI6ImVuZ2luZWVyQGUyZS50ZXN0IiwiZXhwIjo0MTAyNDQ0ODAwLCJpYXQiOjE3NjcyMjU2MDAsInNlc3Npb25faWQiOiJlMmUtc2Vzc2lvbiJ9.ZTJlLXNpZ25hdHVyZQ",
   "refreshToken": "e2e-refresh-token",
   "user": {
@@ -49,6 +50,24 @@
       "code": "E2EEEE",
       "status": "waiting",
       "join_token": "e2e0eeeeeeeeeeeeeeeeeeeeeeeeeee5"
+    },
+    {
+      "id": "e2e00000-0000-4000-8000-00000000a006",
+      "code": "E2EFFF",
+      "status": "waiting",
+      "join_token": "e2e0fffffffffffffffffffffffffff6"
+    },
+    {
+      "id": "e2e00000-0000-4000-8000-00000000a007",
+      "code": "E2EGGG",
+      "status": "waiting",
+      "join_token": "e2e01111111111111111111111111117"
+    },
+    {
+      "id": "e2e00000-0000-4000-8000-00000000a008",
+      "code": "E2EHHH",
+      "status": "waiting",
+      "join_token": "e2e02222222222222222222222222228"
     }
   ]
 }

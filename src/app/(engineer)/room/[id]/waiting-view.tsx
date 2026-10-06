@@ -6,6 +6,8 @@ import { StepItem, type StepState } from "@/components/ui/step-item";
 import { ChevronLeftIcon, LinkIcon, MessageIcon, MicIcon, MicOffIcon } from "@/components/ui/icons";
 import { AppBar, AppBarAction } from "./call-ui";
 import { inviteMessage, ShareButtons, useSendWays, type SentVia } from "./share-buttons";
+import { RecipientCard } from "./recipient-card";
+import type { KakaoShareArgs } from "@/lib/kakao-webhook";
 import type { JoinProgress } from "./actions";
 
 // 고객 부르기 (피그마 E03 새 A/S 시작 → E04 고객 기다리는 중, ROOM-05·13).
@@ -37,6 +39,7 @@ type Tone = "wait" | "ok" | "error";
 export function WaitingView({
   joinUrl,
   roomId,
+  kakaoArgs,
   createdLabel,
   micOn,
   sentVia,
@@ -53,6 +56,7 @@ export function WaitingView({
 }: {
   joinUrl: string;
   roomId: string;
+  kakaoArgs: KakaoShareArgs | null;
   createdLabel: string;
   /** null = 아직 모름(마이크 권한 묻는 중) */
   micOn: boolean | null;
@@ -69,7 +73,9 @@ export function WaitingView({
   sheets: ReactNode;
 }) {
   const linkOpened = !!progress?.linkOpened;
-  const sent = !!sentVia || linkOpened || everConnected || failed;
+  // 카톡 1:1 방으로 간 게 확인됐으면(ROOM-16) 이 화면에서 누르지 않았어도 보낸 것이다 (새로고침·다른 기기에서 열었을 때)
+  const via: SentVia | null = sentVia ?? (progress?.recipient ? "kakao" : null);
+  const sent = !!via || linkOpened || everConnected || failed;
   const can = useSendWays();
 
   const appBar = (
@@ -126,7 +132,7 @@ export function WaitingView({
         </p>
 
         <BottomCta>
-          <ShareButtons joinUrl={joinUrl} roomId={roomId} onSent={onSent} />
+          <ShareButtons joinUrl={joinUrl} kakaoArgs={kakaoArgs} onSent={onSent} />
         </BottomCta>
         {sheets}
       </main>
@@ -183,7 +189,7 @@ export function WaitingView({
             };
 
   const steps: { state: StepState; label: string }[] = [
-    { state: "done", label: sentVia ? SENT_TITLE[sentVia] : "링크를 보냈어요" },
+    { state: "done", label: via ? SENT_TITLE[via] : "링크를 보냈어요" },
     linkOpened
       ? { state: "done", label: "고객님이 링크를 열었어요" }
       : { state: "current", label: "고객님이 링크를 열기를 기다리는 중" },
@@ -232,6 +238,13 @@ export function WaitingView({
         </ol>
       </section>
 
+      {/* 카톡 1:1 방으로 간 게 확인되면(웹훅, ROOM-15) 받는 분 이름표 — 처음 보내는 분이면 이름을 묻는다 (ROOM-16) */}
+      {progress?.recipient && (
+        <div className="mt-3">
+          <RecipientCard key={progress.recipient.key} roomId={roomId} label={progress.recipient.label} />
+        </div>
+      )}
+
       <details className="group mt-3 rounded-3xl bg-bg-subtle px-5 text-body-m">
         <summary className="flex min-h-button-l cursor-pointer list-none items-center justify-between text-label-l">
           고객님께 이렇게 말씀해 주세요
@@ -240,12 +253,12 @@ export function WaitingView({
         {/* 어떻게 보냈는지 아는 때만 문자·카톡이라고 말한다. 카톡 카드는 링크 대신 '카메라 켜기' 버튼이다 (ROOM-14) */}
         <p className="pb-4 text-text-secondary">
           &ldquo;
-          {sentVia === "kakao" ? (
+          {via === "kakao" ? (
             <>
               카톡으로 보내 드렸어요. 거기 <b className="text-text-primary">카메라 켜기</b> 누르시면
             </>
           ) : (
-            <>{sentVia === "sms" ? "문자로 링크 보내 드렸어요." : "링크 보내 드렸어요."} 누르시면</>
+            <>{via === "sms" ? "문자로 링크 보내 드렸어요." : "링크 보내 드렸어요."} 누르시면</>
           )}{" "}
           파란 버튼 <b className="text-text-primary">카메라 켜고 시작하기</b>가 있는데, 그거 누르시고{" "}
           <b className="text-text-primary">허용</b> 누르시면 돼요. 그다음에 고장 난 데를 비춰 주세요.&rdquo;
@@ -253,7 +266,7 @@ export function WaitingView({
       </details>
 
       <BottomCta>
-        <ShareButtons joinUrl={joinUrl} roomId={roomId} resend onSent={onSent} />
+        <ShareButtons joinUrl={joinUrl} kakaoArgs={kakaoArgs} resend onSent={onSent} />
       </BottomCta>
       {sheets}
     </main>

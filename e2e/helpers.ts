@@ -11,6 +11,8 @@ export interface Fixture {
   supabasePort: number;
   anonKey: string;
   serviceKey: string;
+  /** 가짜 카카오 대표 어드민 키 — e2e 서버의 KAKAO_ADMIN_KEY (playwright.config.ts) */
+  kakaoAdminKey: string;
   accessToken: string;
   refreshToken: string;
   user: { id: string; email: string } & Record<string, unknown>;
@@ -126,4 +128,64 @@ export function engineerCookie(baseURL: string) {
   const name = `sb-${new URL(SUPABASE_URL).hostname.split(".")[0]}-auth-token`;
   expect(value.length).toBeLessThan(3180); // 쪼개기(chunk) 한도 안
   return { name, value, url: baseURL, sameSite: "Lax" as const };
+}
+
+// ---------- 받는 분 이름표 (ROOM-15·16): 카카오 공유 웹훅 흉내 ----------
+
+export interface MockRoom {
+  id: string;
+  status: string;
+  created_at: string;
+  kakao_hash: string | null;
+  recipient_id: string | null;
+}
+
+export interface MockRecipient {
+  id: string;
+  engineer_id: string;
+  label: string;
+  kakao_hash: string | null;
+  last_sent_at: string;
+  created_at: string;
+}
+
+export async function mockRoom(id: string): Promise<MockRoom | undefined> {
+  const r = await fetch(`${SUPABASE_URL}/__rooms`);
+  return ((await r.json()) as MockRoom[]).find((x) => x.id === id);
+}
+
+export async function mockRecipients(): Promise<MockRecipient[]> {
+  const r = await fetch(`${SUPABASE_URL}/__recipients`);
+  return (await r.json()) as MockRecipient[];
+}
+
+/** 받는 분 이름표 목록 바꾸기. 빠진 칸(id·engineer_id·시각)은 가짜 서버가 채운다 */
+export async function seedRecipients(rows: Partial<MockRecipient>[]): Promise<void> {
+  const r = await fetch(`${SUPABASE_URL}/__seed`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ recipients: rows }),
+  });
+  if (!r.ok) throw new Error(`seed recipients ${r.status}`);
+}
+
+/**
+ * 카카오인 척 카톡 공유 웹훅을 보낸다 (POST, 본문 JSON). 돌려주는 값은 응답 상태.
+ * adminKey: 기본은 e2e 서버의 가짜 대표 어드민 키, null이면 Authorization 없이
+ */
+export async function postKakaoWebhook(
+  baseURL: string,
+  body: Record<string, unknown>,
+  { adminKey = FIXTURE.kakaoAdminKey }: { adminKey?: string | null } = {},
+): Promise<number> {
+  const r = await fetch(new URL("/api/kakao/share-webhook", baseURL), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-kakao-resource-id": "e2e-resource",
+      ...(adminKey ? { authorization: `KakaoAK ${adminKey}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  return r.status;
 }

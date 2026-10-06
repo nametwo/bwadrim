@@ -1,8 +1,9 @@
 import { after, NextResponse } from "next/server";
 import { logEvent } from "@/lib/events";
 import { isFromKakao, parseShareWebhook } from "@/lib/kakao-webhook";
+import { linkKakaoRecipient } from "@/lib/recipients";
 
-// 카카오톡 공유 웹훅 받기 (ROOM-15). 카카오 개발자 콘솔 > 앱 > 웹훅 > 카카오톡 공유 웹훅에
+// 카카오톡 공유 웹훅 받기 (ROOM-15·16). 카카오 개발자 콘솔 > 앱 > 웹훅 > 카카오톡 공유 웹훅에
 // 이 주소(https://서비스 주소/api/kakao/share-webhook)를 등록한다. 서버 전용 KAKAO_ADMIN_KEY 필요.
 // 카카오는 3초 안에 2XX를 받아야 하고, 오류가 잦으면 웹훅을 꺼 버린다 → 기록은 응답 뒤로 미루고,
 // 카카오가 보낸 요청이면 형식이 틀려도 2XX를 준다(다시 받아도 결과가 같다).
@@ -10,25 +11,27 @@ import { isFromKakao, parseShareWebhook } from "@/lib/kakao-webhook";
 async function handle(request: Request, params: Record<string, unknown>) {
   const adminKey = process.env.KAKAO_ADMIN_KEY;
   if (!adminKey) console.error("[kakao-webhook] KAKAO_ADMIN_KEY 미설정");
-  if (!isFromKakao(request.headers.get("authorization"), adminKey)) {
+  if (!adminKey || !isFromKakao(request.headers.get("authorization"), adminKey)) {
     if (adminKey) console.warn("[kakao-webhook] 어드민 키 불일치");
     return new NextResponse(null, { status: 401 });
   }
 
-  const hook = parseShareWebhook(params);
+  // 서명이 맞지 않는 상담 id도 여기서 걸러진다 (보낸 화면이 서버에서 받은 값이 아님)
+  const hook = parseShareWebhook(params, adminKey);
   if (!hook) {
-    console.warn("[kakao-webhook] 형식이 다른 요청:", Object.keys(params).join(","));
+    console.warn("[kakao-webhook] 형식이 다르거나 서명이 맞지 않는 요청:", Object.keys(params).join(","));
     return new NextResponse(null, { status: 200 });
   }
 
   const resourceId = request.headers.get("x-kakao-resource-id");
-  after(() =>
-    logEvent(hook.roomId, "system", "kakao_sent", {
+  after(async () => {
+    await logEvent(hook.roomId, "system", "kakao_sent", {
       chat_type: hook.chatType,
       hash_chat_id: hook.hashChatId,
       resource_id: resourceId,
-    }),
-  );
+    });
+    await linkKakaoRecipient(hook.roomId, hook.chatType, hook.hashChatId);
+  });
   return new NextResponse(null, { status: 200 });
 }
 

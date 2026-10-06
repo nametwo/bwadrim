@@ -10,7 +10,9 @@ import { buttonClass } from "@/components/ui/button";
 import { CheckIcon, ChevronLeftIcon, ClockIcon } from "@/components/ui/icons";
 import { NewRoomButton } from "../../dashboard/new-room-button";
 import { createRoom } from "../../dashboard/actions";
+import { kakaoShareArgs } from "@/lib/kakao-webhook";
 import { CallPanel } from "./call-panel";
+import { RecipientCard } from "./recipient-card";
 
 export const metadata: Metadata = {
   title: "원격 A/S | 봐드림",
@@ -59,6 +61,17 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
       : connected === false
         ? { key: "not-connected", title: "연결 없이 닫은 상담이에요", icon: <ClockIcon />, tint: "bg-bg-muted text-icon-secondary" }
         : { key: "ended", title: "상담이 끝났어요", icon: <CheckIcon />, tint: "bg-success-tint text-text-success" };
+    // 카톡 1:1 방으로 보낸 상담이면 받는 분 이름표 (ROOM-16). 칸이 없거나(DB 준비 전) 못 읽으면 안 보인다
+    let recipient: { label: string | null } | null = null;
+    const { data: sentTo } = await supabase.from("rooms").select("kakao_hash, recipient_id").eq("id", room.id).maybeSingle();
+    if (sentTo?.kakao_hash) {
+      recipient = { label: null };
+      if (sentTo.recipient_id) {
+        const { data: r, error: labelError } = await supabase.from("recipients").select("label").eq("id", sentTo.recipient_id).maybeSingle();
+        recipient = labelError ? null : { label: r?.label ?? null };
+      }
+    }
+
     const rows: [string, string][] = [["시작", formatKstDateTime(createdAt)]];
     if (ended && room.ended_at) {
       rows.push(["끝", formatKstDateTime(new Date(room.ended_at))]);
@@ -88,7 +101,13 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
           </p>
         </section>
 
-        <dl className="mt-8 flex flex-col gap-3 rounded-3xl bg-bg-subtle px-5 py-4">
+        {recipient && (
+          <div className="mt-8">
+            <RecipientCard roomId={room.id} label={recipient.label} />
+          </div>
+        )}
+
+        <dl className={`${recipient ? "mt-3" : "mt-8"} flex flex-col gap-3 rounded-3xl bg-bg-subtle px-5 py-4`}>
           {rows.map(([k, v]) => (
             <div key={k} className="flex items-center justify-between gap-4">
               <dt className="text-body-m text-text-secondary">{k}</dt>
@@ -121,6 +140,7 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
       joinUrl={joinUrl}
       createdLabel={formatKstDateTime(createdAt)}
       everConnected={room.status === "active"}
+      kakaoArgs={kakaoShareArgs(room.id, process.env.KAKAO_ADMIN_KEY)}
     />
   );
 }

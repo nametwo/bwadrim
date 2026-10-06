@@ -4,6 +4,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { Button } from "@/components/ui/button";
 import { ChatBubbleIcon, CheckIcon, CopyIcon, MessageIcon, ShareIcon } from "@/components/ui/icons";
 import { kakaoKey, loadKakao, sendKakaoLink } from "@/lib/kakao-share";
+import type { KakaoShareArgs } from "@/lib/kakao-webhook";
 
 const noSubscribe = () => () => {};
 
@@ -49,12 +50,13 @@ type Way = "kakao" | "share" | "copy";
 // 나머지는 글자 버튼으로 낮춰 화면 아래가 버튼 더미로 무거워지지 않게 한다
 export function ShareButtons({
   joinUrl,
-  roomId,
+  kakaoArgs,
   resend = false,
   onSent,
 }: {
   joinUrl: string;
-  roomId: string;
+  /** 카톡 전송 웹훅용 서명된 상담 id (ROOM-15·16). 서버에 카카오 어드민 키가 없으면 null */
+  kakaoArgs: KakaoShareArgs | null;
   resend?: boolean;
   onSent?: (via: SentVia) => void;
 }) {
@@ -97,7 +99,7 @@ export function ShareButtons({
     // 미리 받기에 실패했으면 다시 받는 동안 도는 표시
     if (!window.Kakao) setKakaoLoading(true);
     try {
-      await sendKakaoLink(joinUrl, roomId);
+      await sendKakaoLink(joinUrl, kakaoArgs);
       sent("kakao");
     } catch {
       setKakaoFailed(true);

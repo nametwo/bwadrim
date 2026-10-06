@@ -91,6 +91,8 @@ export default async function DashboardPage() {
     }
   }
 
+  const labels = await recipientLabels(supabase, list.map((r) => r.id));
+
   return (
     <div className="flex min-h-dvh flex-col bg-bg-muted">
       <main className="mx-auto flex w-full max-w-md flex-1 flex-col px-5 pt-[max(8px,env(safe-area-inset-top))]">
@@ -163,7 +165,8 @@ export default async function DashboardPage() {
                         <span className="flex min-w-0 flex-1 flex-col">
                           {/* 연결된 뒤 '통화 끝내기' 없이 나간 상담. 누르면 다시 연결하거나 끝낼 수 있다 */}
                           <span className="text-label-l">{waiting ? "고객님 기다리는 중" : "끝내지 않은 상담"}</span>
-                          <span className="truncate text-body-s text-text-secondary">
+                          <span className={`text-body-s text-text-secondary ${labels.has(room.id) ? "break-keep" : "truncate"}`}>
+                            {labels.has(room.id) && `${labels.get(room.id)} · `}
                             {formatKstDateTime(new Date(room.created_at), now)} · 링크 {hoursLeft}시간 남음
                           </span>
                         </span>
@@ -195,16 +198,19 @@ export default async function DashboardPage() {
                   const connected = room.status === "ended" && connectedIds.has(room.id);
                   const d = connected ? durationSec(room) : null;
                   const chip = statusOf(room, connected || (endedReadFailed && room.status === "ended"));
+                  const label = labels.get(room.id);
+                  const when = formatKstDateTime(new Date(room.created_at), now);
+                  const took = d !== null ? `${formatDuration(d)} 걸림` : "기록 없음";
                   return (
                     <li key={room.id}>
-                      {/* 피그마 SessionRow: 고객 이름은 저장하지 않으므로(NFR-07) 시각으로 구분한다 */}
+                      {/* 피그마 SessionRow: 받는 분 이름표가 있으면 그 이름(ROOM-16), 없으면 시각으로 구분한다 */}
                       <Link href={`/room/${room.id}`} className="flex items-center gap-3 px-5 py-3 active:bg-bg-subtle">
                         <span className="flex min-w-0 flex-1 flex-col">
                           {/* 서버(Vercel)는 UTC라서 한국 시간으로 고정해 보여 준다 (BUG-06) */}
-                          <span className="truncate text-label-l">{formatKstDateTime(new Date(room.created_at), now)}</span>
-                          <span className="text-body-s text-text-secondary">
-                            {d !== null ? `${formatDuration(d)} 걸림` : "기록 없음"}
+                          <span className="truncate text-label-l" data-testid={label ? "room-label" : undefined}>
+                            {label ?? when}
                           </span>
+                          <span className="truncate text-body-s text-text-secondary">{label ? `${when} · ${took}` : took}</span>
                         </span>
                         <StatusChip tone="ended">{chip}</StatusChip>
                       </Link>
@@ -224,4 +230,22 @@ export default async function DashboardPage() {
       </main>
     </div>
   );
+}
+
+// 목록에 보이는 상담의 받는 분 이름표 (ROOM-16): 상담 id → 이름. 자기 것만 읽힌다(RLS).
+// 칸이 아직 없거나(DB 준비 전) 읽지 못하면 빈 채로 — 목록은 예전처럼 시각으로 보인다
+async function recipientLabels(supabase: Awaited<ReturnType<typeof createClient>>, roomIds: string[]) {
+  const out = new Map<string, string>();
+  if (roomIds.length === 0) return out;
+  const { data: links, error } = await supabase.from("rooms").select("id, recipient_id").in("id", roomIds);
+  const pairs = ((error ? [] : links) ?? []) as { id: string; recipient_id: string | null }[];
+  const ids = [...new Set(pairs.map((p) => p.recipient_id).filter((x): x is string => !!x))];
+  if (ids.length === 0) return out;
+  const { data: rs } = await supabase.from("recipients").select("id, label").in("id", ids);
+  const byId = new Map(((rs ?? []) as { id: string; label: string }[]).map((r) => [r.id, r.label]));
+  for (const p of pairs) {
+    const label = p.recipient_id && byId.get(p.recipient_id);
+    if (label) out.set(p.id, label);
+  }
+  return out;
 }

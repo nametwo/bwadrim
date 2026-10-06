@@ -2,6 +2,8 @@
 // SDK는 링크 보내기 화면이 뜰 때 미리 불러 둔다(loadKakao). 누르는 순간 받기 시작하면 받는 동안 '사용자가 누름' 효력이
 // 끝나 안드로이드 크롬은 카톡 열기를, PC는 팝업을 막을 수 있다. 고객 화면에는 쓰지 않는다.
 
+import type { KakaoShareArgs } from "./kakao-webhook";
+
 const SDK_URL = "https://t1.kakaocdn.net/kakao_js_sdk/2.7.4/kakao.min.js";
 /** 이만큼 지나도 못 받으면 실패로 본다 — 멈춘 채 버튼이 아무 반응 없는 일이 없게 */
 const LOAD_TIMEOUT_MS = 8000;
@@ -55,9 +57,9 @@ export function loadKakao(): Promise<KakaoSdk> {
 
 // 카톡 친구 선택 화면을 띄운다. SDK 로딩·초기화에 실패하면 throw.
 // 미리 불러 뒀으면 기다리지 않고 바로 연다(누른 그 순간 안에서)
-// roomId는 전송 성공 웹훅(api/kakao/share-webhook, ROOM-15)이 어느 상담인지 알게 실어 보낸다.
+// args는 전송 성공 웹훅(api/kakao/share-webhook, ROOM-15·16)이 어느 상담인지 알게 실어 보낸다(서버가 서명한 상담 id).
 // 이 값이 없으면 카카오가 웹훅을 보내지 않는다
-export async function sendKakaoLink(joinUrl: string, roomId: string) {
+export async function sendKakaoLink(joinUrl: string, args: KakaoShareArgs | null) {
   const kakao = window.Kakao ?? (await loadKakao());
   if (!kakao.isInitialized()) kakao.init(kakaoKey);
   const link = { mobileWebUrl: joinUrl, webUrl: joinUrl };
@@ -72,6 +74,6 @@ export async function sendKakaoLink(joinUrl: string, roomId: string) {
       link,
     },
     buttons: [{ title: "카메라 켜기", link }],
-    serverCallbackArgs: { room: roomId },
+    ...(args ? { serverCallbackArgs: args } : {}),
   });
 }

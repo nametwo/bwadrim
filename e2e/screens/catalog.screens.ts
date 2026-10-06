@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { CLIPS, FIXTURE, fakeCamera, mockReset } from "../helpers";
+import { CLIPS, FIXTURE, fakeCamera, mockReset, postKakaoWebhook } from "../helpers";
 import { failGum, holdGum, releaseGum, removeCamera, setFlip, setPeerState } from "./browser-hooks";
 import {
   EXPIRED,
@@ -397,6 +397,146 @@ test("세션 화면 — 고객 부르기", async ({ browser, baseURL }) => {
         { label: "만료", page: ep },
       ];
     });
+  });
+});
+
+// ---------- 받는 분 이름표 (ROOM-16) ----------
+
+/**
+ * '카톡 보내기'를 누르고(가짜 SDK), 그 카드에 실린 서명(serverCallbackArgs)을 그대로 실어 카카오인 척 웹훅을 보낸다 (ROOM-15).
+ * 서버가 상담 화면에 실어 준 값이 웹훅까지 통하는지 함께 본다
+ */
+async function kakaoSentTo(ep: Page, baseURL: string, hash: string) {
+  await ep.getByTestId("share-kakao").click();
+  await expect(ep.getByTestId("eng-waiting")).toHaveAttribute("data-sent", "true");
+  const args = await ep.evaluate(
+    () => (window as unknown as { __kakaoSent?: { serverCallbackArgs?: Record<string, string> } }).__kakaoSent?.serverCallbackArgs,
+  );
+  // 서버에 KAKAO_ADMIN_KEY가 없으면 서명을 싣지 않는다 — 그 키 없이 뜬 개발 서버를 다시 쓴 경우 (playwright.screens.config.ts)
+  if (!args?.sig) throw new Error("카톡 카드에 서명(serverCallbackArgs)이 없어요. KAKAO_ADMIN_KEY 없이 뜬 서버를 다시 쓴 것 같아요");
+  expect(await postKakaoWebhook(baseURL, { CHAT_TYPE: "DirectChat", HASH_CHAT_ID: hash, ...args })).toBe(200);
+}
+
+/** 받는 분 이름을 적고 '저장'을 누른다 (입력 중에 눌러도 커서가 입력칸에 남아 아래 버튼 자리가 덮지 않는다, ROOM-16) */
+async function saveRecipientName(page: Page, name: string) {
+  await page.getByTestId("recipient-input").fill(name);
+  await page.getByTestId("recipient-save").click();
+  await expect(page.getByTestId("recipient")).toHaveAttribute("data-state", "known");
+}
+
+test("받는 분 이름표", async ({ browser, baseURL }) => {
+  test.setTimeout(240_000);
+  await useRig(browser, baseURL, async (rig) => {
+    const ep = await rig.engineer();
+    await shot(
+      {
+        section: "room",
+        ids: ["ROOM-16", "ROOM-15", "ROOM-13"],
+        title: "카톡 보낸 분 이름 묻기 (E04)",
+        note: "카톡 1:1 방으로 간 게 카카오 웹훅으로 오면(보통 몇 초 안) 처음 보내는 분이라 '누구에게 보냈나요?'. 안 적어도 된다",
+      },
+      async () => {
+        await engineerReady(ep, ROOM.id);
+        await kakaoSentTo(ep, baseURL!, "h-hyung");
+        await expect(ep.getByTestId("recipient")).toHaveAttribute("data-state", "ask", { timeout: 15_000 });
+        return [eng(ep)];
+      },
+    );
+
+    const again = await rig.engineer();
+    await shot(
+      {
+        section: "room",
+        ids: ["ROOM-16"],
+        title: "같은 분께 다시 보내면 이름표가 바로 (E04)",
+        note: "왼쪽: 첫 상담에서 '역삼점'으로 저장한 뒤. 오른쪽: 같은 분께 보낸 다른 상담 — 묻지 않고 처음부터 '받는 분 역삼점'",
+      },
+      async () => {
+        await saveRecipientName(ep, "역삼점");
+        await engineerReady(again, ROOM_B.id);
+        await kakaoSentTo(again, baseURL!, "h-hyung");
+        await expect(again.getByTestId("recipient")).toHaveAttribute("data-state", "known", { timeout: 15_000 });
+        await expect(again.getByTestId("recipient-label")).toHaveText("역삼점");
+        return [
+          { label: "저장한 뒤", page: ep },
+          { label: "같은 분께 다른 상담", page: again },
+        ];
+      },
+    );
+
+    await shot(
+      { section: "room", ids: ["ROOM-16"], title: "받는 분 이름 고치기", note: "'고치기'를 누르면. 저장하면 그분께 보낸 상담의 이름이 모두 바뀐다" },
+      async () => {
+        await again.getByTestId("recipient-edit").click();
+        await expect(again.getByTestId("recipient")).toHaveAttribute("data-state", "edit");
+        return [eng(again)];
+      },
+    );
+    await again.getByTestId("recipient").getByRole("button", { name: "취소" }).click().catch(() => {});
+
+    // 끝난 상담 화면 (ROOM-11): 이름표가 있는 상담, 이름 없이 끝난 상담(여기서 붙인다)
+    const now = new Date().toISOString();
+    await mock("/__patch-room", { id: ROOM.id, status: "ended", ended_at: now });
+    await mock("/__patch-room", { id: ROOM_C.id, status: "ended", ended_at: now, kakao_hash: "h-sister", recipient_id: null });
+    await mock("/rest/v1/events", [
+      { room_id: ROOM.id, actor: "engineer", name: "ended", props: { duration_sec: 480, connected: true } },
+      { room_id: ROOM_C.id, actor: "engineer", name: "ended", props: { duration_sec: 300, connected: true } },
+    ]);
+    const done = [await rig.engineer(), await rig.engineer()];
+    await shot(
+      {
+        section: "room",
+        ids: ["ROOM-16", "ROOM-11"],
+        title: "끝난 상담 화면 — 받는 분",
+        note: "왼쪽: 이름표가 있는 상담. 오른쪽: 기다리는 화면에서 이름을 못 붙이고 끝난 상담 — 여기서 붙인다",
+      },
+      async () => {
+        await open(done[0], `/room/${ROOM.id}`);
+        await open(done[1], `/room/${ROOM_C.id}`);
+        await expect(done[0].getByTestId("room-closed")).toBeVisible();
+        await expect(done[0].getByTestId("recipient")).toHaveAttribute("data-state", "known");
+        await expect(done[0].getByTestId("recipient-label")).toHaveText("역삼점");
+        await expect(done[1].getByTestId("recipient")).toHaveAttribute("data-state", "ask");
+        return [
+          { label: "이름표 있음", page: done[0] },
+          { label: "이름 없이 끝남", page: done[1] },
+        ];
+      },
+    );
+
+    // 상담 목록 (ROOM-04): 대시보드 가짜 목록에 이름표 두 개를 붙인다
+    const epc = await rig.engineer({ pc: true });
+    await shot(
+      {
+        section: "dashboard",
+        ids: ["ROOM-16", "ROOM-04"],
+        title: "대시보드 — 받는 분 이름 (E02)",
+        note: "이름표가 있는 끝난 상담은 첫 줄이 이름, 둘째 줄이 시각·걸린 시간. 진행 중인 상담은 둘째 줄 앞에 이름. 이름이 없으면 예전처럼 시각",
+      },
+      async () => {
+        await seedDashboard();
+        const shop = "e2e00000-0000-4000-8000-0000000e0001";
+        const boss = "e2e00000-0000-4000-8000-0000000e0002";
+        await mock("/__seed", {
+          recipients: [
+            { id: shop, label: "역삼점", kakao_hash: "h-shop", lastSentMin: 90 },
+            { id: boss, label: "김 사장님", kakao_hash: "h-boss", lastSentMin: 3 },
+          ],
+        });
+        for (const [n, id, hash] of [
+          [1, boss, "h-boss"],
+          [3, shop, "h-shop"],
+          [4, boss, "h-boss"],
+        ] as const) {
+          await mock("/__patch-room", { id: catRoom(n), kakao_hash: hash, recipient_id: id });
+        }
+        await open(ep, "/dashboard");
+        await open(epc, "/dashboard");
+        await expect(ep.getByTestId("room-label")).toHaveText(["역삼점", "김 사장님"]);
+        await expect(ep.getByText(/^김 사장님 · /)).toBeVisible();
+        return [eng(ep), engPc(epc)];
+      },
+    );
   });
 });
 

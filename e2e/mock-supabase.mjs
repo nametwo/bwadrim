@@ -4,15 +4,20 @@
 //
 //   GET  /auth/v1/user                 Bearer 토큰이 FIXTURE.accessToken이면 사용자, 아니면 401
 //   GET  /auth/v1/admin/users/:id      (서비스 키) 사용자 — 고객 화면의 기사님 이름
-//   GET  /rest/v1/rooms?code=eq.X      (eq·neq·in·gte 필터, select=…, count=exact·HEAD 지원) Accept가 vnd.pgrst.object+json이면 객체 1개
-//   PATCH /rest/v1/rooms?id=eq.X…      상태 갱신 (status=eq.X·neq.X 조건 지원)
+//   GET  /rest/v1/rooms?code=eq.X      (eq·neq·in·gte·is 필터, select=…, count=exact·HEAD 지원) Accept가 vnd.pgrst.object+json이면 객체 1개
+//   PATCH /rest/v1/rooms?id=eq.X…      상태 갱신 (status=eq.X·neq.X, recipient_id=is.null 조건 지원). recipient_id는 있는 이름표만(FK, 없으면 409 23503)
 //   POST /rest/v1/events               기록 (본문 객체 또는 배열) · GET은 통계·대시보드용(같은 필터)
-//   GET  /__events  ·  GET /__rooms  ·  POST /__reset[?room=ID]  ·  GET /__health   (테스트용)
-//   POST /__seed {rooms?, events?}     방·이벤트 목록 바꾸기 (화면 카탈로그: 대시보드·통계). ageMin = 몇 분 전
+//   GET·POST·PATCH /rest/v1/recipients  받는 분 이름표 (ROOM-16). 사용자 토큰이면 자기 것만(RLS), 서비스 키면 전부.
+//                                      eq·in·is 필터. POST는 본문 객체/배열, Prefer return=representation이면 넣은 줄을 돌려준다
+//                                      (insert().select().single() = POST + return=representation + Accept 객체).
+//                                      unique(engineer_id, kakao_hash) 겹치면 409 23505, label 1~30자 아니면 400 23514
+//   GET  /__events  ·  GET /__rooms  ·  GET /__recipients  ·  POST /__reset[?room=ID]  ·  GET /__health   (테스트용)
+//   POST /__seed {rooms?, events?, recipients?}  목록 바꾸기 (화면 카탈로그: 대시보드·통계, 받는 분 이름표). ageMin = 몇 분 전
 //   POST /__patch-room {id, ...}       방 한 개 고치기 (링크를 연 뒤 세션이 닫힌 경우 등)
 //   POST /__faults {failJoinToken?, failRoomUpdate?}  일부러 실패시키기 (전체 reset하면 풀린다)
 //
 // 고정 데이터는 e2e/fixtures.json과 같다 (테스트도 같은 파일을 읽는다).
+import crypto from "node:crypto";
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -24,6 +29,7 @@ const PORT = Number(process.env.E2E_SUPABASE_PORT ?? FIXTURE.supabasePort);
 
 let rooms = [];
 let events = [];
+let recipients = [];
 let faults = {};
 
 function freshRoom(r, now) {
@@ -33,13 +39,17 @@ function freshRoom(r, now) {
     customer_phone: null,
     resolved_remotely: null,
     ended_at: null,
+    // 카톡 1:1 방 해시와 받는 분 이름표 (ROOM-15·16). 카카오 웹훅이 채운다
+    kakao_hash: null,
+    recipient_id: null,
     ...r,
     created_at: new Date(now - 60_000).toISOString(),
     expires_at: new Date(now + (r.expired ? -1 : 1) * 24 * 3600_000).toISOString(),
   };
 }
 
-// roomId를 주면 그 방과 그 방의 기록만 되돌린다 — 동시에 도는 다른 테스트의 방을 건드리지 않게
+// roomId를 주면 그 방과 그 방의 기록만 되돌린다 — 동시에 도는 다른 테스트의 방을 건드리지 않게.
+// 받는 분 이름표는 방이 아니라 엔지니어 것이라 전체 reset 때만 비운다 (한 테스트만 지우려면 /__seed {recipients: []})
 function reset(roomId) {
   const now = Date.now();
   if (roomId) {
@@ -50,6 +60,7 @@ function reset(roomId) {
   }
   rooms = FIXTURE.rooms.map((r) => freshRoom(r, now));
   events = [];
+  recipients = [];
   faults = {};
 }
 reset();
@@ -63,6 +74,45 @@ function seededRoom({ ageMin, expired, tookMin, ...r }, now) {
     expires_at: new Date(expired ? now - 3600_000 : created + 24 * 3600_000).toISOString(),
     ended_at: tookMin == null ? null : new Date(created + tookMin * 60_000).toISOString(),
   };
+}
+
+/** 받는 분 이름표 한 줄 (supabase/schema.sql recipients). id·시각은 DB 기본값처럼 채운다. lastSentMin = 몇 분 전에 마지막으로 보냄 */
+function recipientRow({ lastSentMin, ...r }, now = Date.now()) {
+  const at = new Date(now).toISOString();
+  return {
+    id: crypto.randomUUID(),
+    engineer_id: FIXTURE.user.id,
+    kakao_hash: null,
+    last_sent_at: lastSentMin == null ? at : new Date(now - lastSentMin * 60_000).toISOString(),
+    created_at: at,
+    ...r,
+  };
+}
+
+/**
+ * recipients 제약 흉내: label not null·1~30자(check), unique(engineer_id, kakao_hash).
+ * Postgres처럼 kakao_hash가 null인 줄끼리는 겹쳐도 된다. 어기면 PostgREST 오류 응답 [status, body], 괜찮으면 null
+ */
+function recipientViolation(row, others) {
+  if (typeof row.label !== "string") {
+    return [400, { code: "23502", details: null, hint: null, message: 'null value in column "label" of relation "recipients" violates not-null constraint' }];
+  }
+  const n = Array.from(row.label).length;
+  if (n < 1 || n > 30) {
+    return [400, { code: "23514", details: null, hint: null, message: 'new row for relation "recipients" violates check constraint "recipients_label_check"' }];
+  }
+  if (row.kakao_hash != null && others.some((o) => o.engineer_id === row.engineer_id && o.kakao_hash === row.kakao_hash)) {
+    return [
+      409,
+      {
+        code: "23505",
+        details: `Key (engineer_id, kakao_hash)=(${row.engineer_id}, ${row.kakao_hash}) already exists.`,
+        hint: null,
+        message: 'duplicate key value violates unique constraint "recipients_engineer_id_kakao_hash_key"',
+      },
+    ];
+  }
+  return null;
 }
 
 function eventRow({ ageMin, ...e }, now = Date.now()) {
@@ -99,15 +149,20 @@ function readBody(req) {
   });
 }
 
-/** PostgREST 필터: eq·neq·in·gte(시각)만. 나머지는 무시 */
+/** PostgREST 필터: eq·neq·in·gte(시각)·is(null·true·false)만. 나머지는 무시 */
 function filterRows(rows, params) {
   let out = rows;
   for (const [k, v] of params) {
-    if (["select", "limit", "order", "offset"].includes(k)) continue;
-    const m = /^(eq|neq|in|gte)\.(.*)$/.exec(v);
+    if (["select", "limit", "order", "offset", "columns", "on_conflict"].includes(k)) continue;
+    const m = /^(eq|neq|in|gte|is)\.(.*)$/.exec(v);
     if (!m) continue;
     const [, op, arg] = m;
-    if (op === "eq") out = out.filter((r) => String(r[k]) === arg);
+    if (op === "is") {
+      // .is("recipient_id", null) → recipient_id=is.null. 칸이 아예 없는 줄도 null로 본다
+      const want = { null: null, true: true, false: false }[arg.toLowerCase()];
+      if (want === undefined) continue;
+      out = out.filter((r) => (want === null ? r[k] == null : r[k] === want));
+    } else if (op === "eq") out = out.filter((r) => String(r[k]) === arg);
     else if (op === "neq") out = out.filter((r) => String(r[k]) !== arg);
     else if (op === "in") {
       const set = new Set(arg.replace(/^\((.*)\)$/, "$1").split(",").map((s) => s.replace(/^"(.*)"$/, "$1")));
@@ -138,6 +193,82 @@ function authed(req) {
   return h === `Bearer ${FIXTURE.accessToken}`;
 }
 
+function isService(req) {
+  return (req.headers.apikey ?? "") === FIXTURE.serviceKey;
+}
+
+/** Accept: application/vnd.pgrst.object+json (single()) — 줄이 꼭 하나여야 객체로, 아니면 406 */
+function wantsObject(req) {
+  return (req.headers.accept ?? "").includes("vnd.pgrst.object");
+}
+
+function sendRows(req, res, status, rows) {
+  if (wantsObject(req)) {
+    if (rows.length !== 1) {
+      return send(res, 406, { code: "PGRST116", details: `The result contains ${rows.length} rows`, hint: null, message: "JSON object requested, multiple (or no) rows returned" });
+    }
+    return send(res, status, rows[0]);
+  }
+  return send(res, status, rows, countHeader(req, rows.length));
+}
+
+const RLS_DENIED = { code: "42501", details: null, hint: null, message: 'new row violates row-level security policy for table "recipients"' };
+
+/**
+ * 받는 분 이름표 (ROOM-16). RLS 흉내: 사용자 토큰이면 engineer_id가 그 사용자인 줄만 읽고 바꾸고 넣는다, 서비스 키면 전부.
+ * 로그인 안 한 요청(anon)은 아무것도 못 본다
+ */
+async function handleRecipients(req, res, url) {
+  const service = isService(req);
+  const user = !service && authed(req);
+  const mine = (r) => service || (user && r.engineer_id === FIXTURE.user.id);
+  const select = url.searchParams.get("select");
+  const representation = (req.headers.prefer ?? "").includes("return=representation");
+
+  if (req.method === "GET" || req.method === "HEAD") {
+    let rows = sortRows(filterRows(recipients.filter(mine), url.searchParams), url.searchParams.get("order"));
+    const limit = Number(url.searchParams.get("limit"));
+    if (limit > 0) rows = rows.slice(0, limit);
+    return sendRows(req, res, 200, rows.map((r) => project(r, select)));
+  }
+
+  if (req.method === "POST") {
+    if (!service && !user) return send(res, 401, { code: "42501", message: "permission denied for table recipients" });
+    const body = await readBody(req);
+    const list = Array.isArray(body) ? body : body && typeof body === "object" ? [body] : [];
+    const now = Date.now();
+    const added = [];
+    for (const item of list) {
+      const row = recipientRow(item, now);
+      // with check (auth.uid() = engineer_id)
+      if (!service && row.engineer_id !== FIXTURE.user.id) return send(res, 403, RLS_DENIED);
+      const bad = recipientViolation(row, [...recipients, ...added]);
+      if (bad) return send(res, ...bad);
+      added.push(row);
+    }
+    recipients.push(...added);
+    if (!representation) return send(res, 201);
+    return sendRows(req, res, 201, added.map((r) => project(r, select)));
+  }
+
+  if (req.method === "PATCH") {
+    const patch = (await readBody(req)) ?? {};
+    const matched = filterRows(recipients.filter(mine), url.searchParams);
+    // 먼저 모두 검사하고 바꾼다 (한 줄이라도 어기면 아무것도 안 바뀐다)
+    for (const r of matched) {
+      const next = { ...r, ...patch };
+      if (!service && next.engineer_id !== FIXTURE.user.id) return send(res, 403, RLS_DENIED);
+      const bad = recipientViolation(next, recipients.filter((o) => o !== r));
+      if (bad) return send(res, ...bad);
+    }
+    for (const r of matched) Object.assign(r, patch);
+    if (!representation) return send(res, 204);
+    return sendRows(req, res, 200, matched.map((r) => project(r, select)));
+  }
+
+  return send(res, 405, { message: `mock: ${req.method} /rest/v1/recipients` });
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
   const p = url.pathname;
@@ -145,6 +276,7 @@ const server = http.createServer(async (req, res) => {
     if (p === "/__health") return send(res, 200, { ok: true });
     if (p === "/__events") return send(res, 200, events);
     if (p === "/__rooms") return send(res, 200, rooms);
+    if (p === "/__recipients") return send(res, 200, recipients);
     if (p === "/__reset" && req.method === "POST") {
       reset(url.searchParams.get("room") ?? undefined);
       return send(res, 200, { ok: true });
@@ -154,7 +286,8 @@ const server = http.createServer(async (req, res) => {
       const now = Date.now();
       if (Array.isArray(body.rooms)) rooms = body.rooms.map((r) => seededRoom(r, now));
       if (Array.isArray(body.events)) events = body.events.map((e) => eventRow(e, now));
-      return send(res, 200, { ok: true });
+      if (Array.isArray(body.recipients)) recipients = body.recipients.map((r) => recipientRow(r, now));
+      return send(res, 200, { ok: true, recipients });
     }
     if (p === "/__patch-room" && req.method === "POST") {
       const { id, ...patch } = (await readBody(req)) ?? {};
@@ -196,7 +329,8 @@ const server = http.createServer(async (req, res) => {
       }
       // HEAD = select(…, { head: true }): 개수만 (본문은 node가 버린다)
       if (req.method === "GET" || req.method === "HEAD") {
-        const rows = matched.map((r) => project(r, select));
+        const limit = Number(url.searchParams.get("limit") ?? NaN);
+        const rows = (Number.isFinite(limit) ? matched.slice(0, limit) : matched).map((r) => project(r, select));
         if (single) {
           if (rows.length !== 1) {
             return send(res, 406, { code: "PGRST116", details: `The result contains ${rows.length} rows`, message: "JSON object requested, multiple (or no) rows returned" });
@@ -207,6 +341,15 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method === "PATCH") {
         const patch = (await readBody(req)) ?? {};
+        // rooms.recipient_id references recipients(id)
+        if (patch.recipient_id != null && !recipients.some((x) => x.id === patch.recipient_id)) {
+          return send(res, 409, {
+            code: "23503",
+            details: `Key (recipient_id)=(${patch.recipient_id}) is not present in table "recipients".`,
+            hint: null,
+            message: 'insert or update on table "rooms" violates foreign key constraint "rooms_recipient_id_fkey"',
+          });
+        }
         for (const r of matched) Object.assign(r, patch);
         const rows = matched.map((r) => project(r, select));
         if ((req.headers.prefer ?? "").includes("return=representation")) {
@@ -219,8 +362,10 @@ const server = http.createServer(async (req, res) => {
 
     // 통계 화면(/stats)·대시보드·대기 화면 고객 진행 상황용 읽기. eq·neq·in·gte 필터만 적용하고 자기 방 기록을 준다 (RLS 흉내)
     if (p === "/rest/v1/events" && req.method === "GET") {
-      if (!authed(req)) return send(res, 200, []);
-      const mine = new Set(rooms.filter((r) => r.engineer_id === FIXTURE.user.id).map((r) => r.id));
+      // 서비스 키면 전부(받는 분 잇기가 여러 명에게 보냈는지 볼 때, ROOM-16), 사용자 토큰이면 자기 방 것만
+      const service = (req.headers.apikey ?? "") === FIXTURE.serviceKey;
+      if (!service && !authed(req)) return send(res, 200, []);
+      const mine = new Set(rooms.filter((r) => service || r.engineer_id === FIXTURE.user.id).map((r) => r.id));
       const select = url.searchParams.get("select");
       const rows = sortRows(filterRows(events.filter((e) => mine.has(e.room_id)), url.searchParams), url.searchParams.get("order"));
       return send(res, 200, rows.map((e, i) => project({ id: i + 1, ...e }, select)));
@@ -232,6 +377,8 @@ const server = http.createServer(async (req, res) => {
       for (const e of list) events.push(eventRow(e));
       return send(res, 201);
     }
+
+    if (p === "/rest/v1/recipients") return await handleRecipients(req, res, url);
 
     send(res, 404, { message: `mock: ${req.method} ${p}` });
   } catch (e) {

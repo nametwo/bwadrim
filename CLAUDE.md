@@ -32,13 +32,15 @@ src/app/
   join/[token]                                   # 고객 진입, 공개. 32자리 링크 토큰(ROOM-12). start-screen(시작), camera-help(거부 원인별 안내), camera-start(통화)
   api/turn                                       # 링크 토큰 검증 후 Cloudflare TURN 단기 자격증명 발급
   api/events                                     # 고객(비로그인) 쪽 지표 이벤트 수집
-  api/kakao/share-webhook                        # 카카오톡 공유 전송 성공 웹훅 → kakao_sent(채팅방 종류·해시, ROOM-15)
+  api/kakao/share-webhook                        # 카카오톡 공유 전송 성공 웹훅 → kakao_sent(채팅방 종류·해시, ROOM-15), 서명된 상담 id만 믿음, 받는 분 이름표에 잇기(ROOM-16)
 src/lib/
   supabase/{client,server,admin}.ts              # admin = service role, 서버 전용
   webrtc/                                        # peer 연결, ICE 설정, 시그널링, 포인터 좌표(pointer.ts), 화면 멈춤·그리기(draw.ts), 카메라 전환·손전등(camera.ts), DataChannel 래퍼(data-link.ts), 방향 지시 메시지(guide.ts), 사진 찍기·주고받기(photo.ts, CALL-16), 대시보드 탭에서 마이크 미리 받기(mic-ahead.ts, CALL-01)
   tracking/                                      # 평면 앵커 추적(AR 핀, CALL-14). 설계는 tracking/README.md, 벤치는 scripts/tracking-bench
   join-token.ts                                  # 고객 링크 토큰 형식 검사
   engineer-name.ts                               # 엔지니어 표시 이름 (user_metadata.name, OPS-03). 고객 시작 화면 기사님 카드
+  kakao-webhook.ts                               # 카톡 공유 웹훅 키 확인·상담 id 서명 (ROOM-15)
+  recipients.ts                                  # 받는 분 이름표: 웹훅이 온 카톡 1:1 방을 상담에 잇기 (서버 전용, ROOM-16). 글자 다듬기는 recipient-label.ts
   photo-save.ts                                  # 통화 중 찍은 사진 저장 (폰 공유 창·다운로드, CALL-16)
   format.ts                                      # 화면 시각·시간 글자 ('오늘 오후 5:03', 한국 시간 고정)
   wake-lock.ts                                   # 통화 중 화면 꺼짐 방지
@@ -47,7 +49,7 @@ src/lib/
   events.ts                                      # 지표 이벤트 기록
   metrics.ts                                     # 핵심 지표 계산 (통계 화면). endedConnected = 끝난 상담이 고객과 연결됐었는지 (대시보드 칩·끝난 상담 화면도 같이 씀)
 src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기). anchor/·anchor-overlay = AR 핀 층(CALL-14), guide-dpad(방향 링·가까이/멀리 알약)·guide-pad-geometry·guide-overlay(고객 노란 원 화살표·네 모서리)·guide-pill = 방향 지시(CALL-15), open-in-browser = 앱 안 브라우저 안내(고객 JOIN-10·엔지니어 AUTH-09)
-  ui/                                            # 디자인 시스템 부품(NFR-08, 피그마 컴포넌트와 같은 이름): button(Button·ButtonLink·buttonClass), icons(선 아이콘), sheet(아래 확인 창), notice-screen(한 화면 한 안내), bottom-cta(아래에 붙는 버튼 자리), brand(로고), status-chip, step-item, banner, call-control(통화 원형 버튼), stat-card, engineer-card, call-timer
+  ui/                                            # 디자인 시스템 부품(NFR-08, 피그마 컴포넌트와 같은 이름): button(Button·ButtonLink·buttonClass), icons(선 아이콘), sheet(아래 확인 창), notice-screen(한 화면 한 안내), bottom-cta(아래에 붙는 버튼 자리), brand(로고), status-chip, step-item, banner, call-control(통화 원형 버튼), stat-card, engineer-card, call-timer, text-field(입력칸)
 supabase/schema.sql
 docs/requirements.md                             # 기능 요구사항 (기준 문서)
 할일.md                                          # 나중에 할 일 메모. 하기로 하면 requirements.md로 옮기고 지운다
@@ -111,4 +113,4 @@ AR 핀(CALL-14)은 전용 DataChannel `anchor`(고객이 offer에 포함). 기�
 
 - PC 화면 공유, 원격 제어, 설치형은 1차 범위 아님
 - 브라우저 localStorage에 세션 정보 저장 금지 (고객 폰은 공용일 수 있음)
-- 고객 이름·전화번호·연락처 저장 금지 (NFR-07). 받는 사람 고르기는 문자 앱·카톡에 맡긴다
+- 고객 전화번호·연락처 목록 저장 금지 (NFR-07). 받는 사람 고르기는 문자 앱·카톡에 맡긴다. 저장하는 건 엔지니어가 직접 붙인 받는 분 이름표와 카톡 방 해시뿐이고, 마지막 연락 뒤 1년에 지운다(ROOM-16, OPS-06)

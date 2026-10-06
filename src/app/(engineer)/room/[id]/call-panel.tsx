@@ -59,6 +59,7 @@ import {
 } from "./actions";
 import type { SentVia } from "./share-buttons";
 import { AppBar, AppBarAction, CallTimer, QualityPill, ShortcutsBox } from "./call-ui";
+import type { KakaoShareArgs } from "@/lib/kakao-webhook";
 import { WaitingView } from "./waiting-view";
 import { PhotoSaveView, SavePhotosFirst } from "./photo-save-view";
 
@@ -115,6 +116,7 @@ export function CallPanel({
   joinUrl,
   createdLabel,
   everConnected: initialEverConnected,
+  kakaoArgs,
 }: {
   roomId: string;
   // 고객 링크 토큰. TURN 자격증명 발급에 쓴다
@@ -125,6 +127,8 @@ export function CallPanel({
   createdLabel: string;
   // 이미 '연결됨'인 상담인지. 한 번도 연결 안 된 상담은 '상담 닫기'(연결 없이 닫음)
   everConnected: boolean;
+  // 카톡 전송 웹훅용 서명된 상담 id (ROOM-15·16). 서버에 카카오 어드민 키가 없으면 null
+  kakaoArgs: KakaoShareArgs | null;
 }) {
   const router = useRouter();
   const [state, setState] = useState<PanelState>({ phase: "idle" });
@@ -259,7 +263,8 @@ export function CallPanel({
     const poll = async () => {
       if (document.hidden) return;
       const p = await getJoinProgress(roomId).catch(() => null);
-      if (!stopped && p) setProgress(p);
+      // 받는 분(ROOM-16)을 이번에 읽지 못했으면(undefined) 하던 대로 둔다 — 이름을 적는 중인 칸이 사라지지 않게
+      if (!stopped && p) setProgress((prev) => (p.recipient === undefined ? { ...p, recipient: prev?.recipient } : p));
     };
     poll();
     const id = setInterval(poll, PROGRESS_POLL_MS);
@@ -1157,6 +1162,7 @@ export function CallPanel({
     <WaitingView
       joinUrl={joinUrl}
       roomId={roomId}
+      kakaoArgs={kakaoArgs}
       createdLabel={createdLabel}
       micOn={state.phase === "call" ? micOn : null}
       sentVia={sentVia}

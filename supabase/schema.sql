@@ -124,3 +124,48 @@ create policy "bwadrim engineer lane: send" on realtime.messages
     realtime.messages.extension in ('broadcast', 'presence')
     and private.open_room_owner(realtime.topic(), 'e') = (select auth.uid())
   );
+
+-- ─── 받는 분 이름표 (ROOM-16, NFR-07) ───
+-- 엔지니어가 직접 붙인 이름(자유 글, '김 사장님'·'역삼점' 등)과 그 사람과의 카톡 1:1 방 해시(ROOM-15).
+-- 해시는 보내는 사람·받는 사람 한 쌍마다 다르다(2026-10-06 실기기 확인) → 엔지니어마다 따로 둔다.
+-- 전화번호·연락처 목록은 저장하지 않는다. 마지막으로 보낸 날부터 1년이 지나면 지운다(OPS-06)
+create table if not exists recipients (
+  id           uuid primary key default gen_random_uuid(),
+  engineer_id  uuid not null references auth.users(id) on delete cascade,
+  label        text not null check (char_length(label) between 1 and 30),
+  kakao_hash   text,
+  last_sent_at timestamptz not null default now(),
+  created_at   timestamptz not null default now(),
+  unique (engineer_id, kakao_hash)
+);
+
+alter table recipients enable row level security;
+
+drop policy if exists "engineer manages own recipients" on recipients;
+create policy "engineer manages own recipients" on recipients
+  for all using (auth.uid() = engineer_id) with check (auth.uid() = engineer_id);
+
+-- 상담마다: 카톡 카드가 간 1:1 방 해시(카카오 웹훅이 채움)와 그 방의 이름표
+alter table rooms add column if not exists kakao_hash text;
+alter table rooms add column if not exists recipient_id uuid references recipients(id) on delete set null;
+create index if not exists rooms_kakao_hash_idx on rooms(engineer_id, kakao_hash);
+
+-- 1년 지난 이름표와 해시 지우기 (OPS-06). 매일 한국 시간 새벽 3시(UTC 18시).
+-- 이름표: 그 분께 마지막으로 보낸 날(last_sent_at)부터 1년. 상담: 만든 지 1년이면 방 해시와 이름표 연결을 끊는다(목록·화면이 같게)
+create or replace function public.expire_recipients()
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  delete from recipients where last_sent_at < now() - interval '1 year';
+  update rooms set kakao_hash = null, recipient_id = null
+    where (kakao_hash is not null or recipient_id is not null) and created_at < now() - interval '1 year';
+  update events set props = props - 'hash_chat_id'
+    where name = 'kakao_sent' and props ? 'hash_chat_id' and created_at < now() - interval '1 year';
+$$;
+revoke all on function public.expire_recipients() from public, anon, authenticated;
+
+create extension if not exists pg_cron with schema pg_catalog;
+-- 같은 이름으로 다시 부르면 일정만 바뀐다(여러 번 실행해도 잡은 하나)
+select cron.schedule('bwadrim-expire-recipients', '0 18 * * *', 'select public.expire_recipients()');

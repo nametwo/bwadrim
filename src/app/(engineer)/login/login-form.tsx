@@ -4,13 +4,13 @@ import { useActionState, useState } from "react";
 import { BottomCta } from "@/components/ui/bottom-cta";
 import { Button } from "@/components/ui/button";
 import { AlertIcon, EyeIcon, EyeOffIcon } from "@/components/ui/icons";
+import { textFieldClass } from "@/components/ui/text-field";
 import { login, type LoginState } from "./actions";
 
 const initialState: LoginState = { error: null };
 
 // 회색 면 입력칸 — 누르면 흰 바탕 + 파란 테두리, 틀리면 빨간 테두리
-const inputClass =
-  "h-14 w-full rounded-2xl border-2 border-transparent bg-bg-subtle px-4 text-body-l text-text-primary outline-none transition-colors placeholder:text-text-tertiary focus:border-border-focus focus:bg-bg-page aria-invalid:border-danger";
+const inputClass = textFieldClass();
 
 export function LoginForm({ next }: { next: string }) {
   const [state, formAction, pending] = useActionState(login, initialState);
