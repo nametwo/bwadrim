@@ -29,7 +29,7 @@
 src/proxy.ts                                     # 세션 갱신 + 엔지니어 라우트 보호 (Next 16: middleware → proxy)
 src/app/
   (engineer)/login, /dashboard, /room/[id], /stats  # 로그인 필요. 방 생성·종료는 서버 액션. stats = 핵심 지표(DATA-06). layout = 앱 안 브라우저면 인터넷 앱으로(AUTH-09)
-  join/[token]                                   # 고객 진입, 공개. 32자리 링크 토큰(ROOM-12). start-screen(시작), camera-help(거부 원인별 안내), camera-start(통화)
+  join/[token]                                   # 고객 진입, 공개. 32자리 링크 토큰(ROOM-12). start-screen(시작), camera-help(거부 원인별 안내), camera-start(통화), owner-notice(그 상담 엔지니어가 로그인한 채로 열면, JOIN-13)
   api/turn                                       # 링크 토큰 검증 후 Cloudflare TURN 단기 자격증명 발급
   api/events                                     # 고객(비로그인) 쪽 지표 이벤트 수집
   api/kakao/share-webhook                        # 카카오톡 공유 전송 성공 웹훅 → kakao_sent(채팅방 종류·해시, ROOM-15), 서명된 상담 id만 믿음, 받는 분 이름표에 잇기(ROOM-16)
@@ -45,6 +45,7 @@ src/lib/
   format.ts                                      # 화면 시각·시간 글자 ('오늘 오후 5:03', 한국 시간 고정)
   wake-lock.ts                                   # 통화 중 화면 꺼짐 방지
   in-app-browser.ts                              # 카톡 등 인앱 브라우저 감지·외부 브라우저로 열기
+  preview-bot.ts                                 # 링크 미리보기 봇(카톡 스크랩·아이메시지 등) UA 감지 → link_opened 안 남김 (JOIN-12, 출처는 파일 주석)
   kakao-share.ts                                 # 카톡 보내기(카카오링크, ROOM-14). 카카오 키가 있을 때만. SDK는 링크 보내기 화면에서 미리 받는다
   events.ts                                      # 지표 이벤트 기록
   metrics.ts                                     # 핵심 지표 계산 (통계 화면). endedConnected = 끝난 상담이 고객과 연결됐었는지 (대시보드 칩·끝난 상담 화면도 같이 씀)

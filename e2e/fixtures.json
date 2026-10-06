@@ -1,5 +1,5 @@
 {
-  "$comment": "E2E 가짜 Supabase 고정 데이터 (e2e/mock-supabase.mjs와 테스트가 함께 읽는다). 진짜 키가 아니다. 방 6~8번(a006~a008)은 받는 분 이름표 e2e/recipient.spec.ts 전용.",
+  "$comment": "E2E 가짜 Supabase 고정 데이터 (e2e/mock-supabase.mjs와 테스트가 함께 읽는다). 진짜 키가 아니다. 방 6~8번(a006~a008)은 받는 분 이름표 e2e/recipient.spec.ts 전용, 9번(a009)은 링크 열람 기록 e2e/join-open.spec.ts 전용.",
   "supabasePort": 54329,
   "anonKey": "e2e-anon-key",
   "serviceKey": "e2e-service-key",
@@ -68,6 +68,12 @@
       "code": "E2EHHH",
       "status": "waiting",
       "join_token": "e2e02222222222222222222222222228"
+    },
+    {
+      "id": "e2e00000-0000-4000-8000-00000000a009",
+      "code": "E2EIII",
+      "status": "waiting",
+      "join_token": "e2e03333333333333333333333333339"
     }
   ]
 }

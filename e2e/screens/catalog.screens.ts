@@ -638,6 +638,16 @@ test("고객 진입", async ({ browser, baseURL }) => {
         return [cust(kakao, "카카오톡"), cust(naver, "네이버 앱")];
       },
     );
+
+    const owner = await rig.engineer();
+    await shot(
+      { section: "join", ids: ["JOIN-13", "ROOM-13"], title: "엔지니어가 자기 링크를 열면", note: "로그인한 그 상담 엔지니어에게는 고객 화면 대신 안내. 고객으로 기록하지 않는다. 끝났거나 만료된 상담이면 그 상담 화면으로 바로 간다" },
+      async () => {
+        await open(owner, `/join/${ROOM.join_token}`);
+        await expect(owner.getByTestId("join-owner")).toBeVisible({ timeout: 30_000 });
+        return [eng(owner)];
+      },
+    );
   });
 });
 
