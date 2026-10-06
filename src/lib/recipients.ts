@@ -31,7 +31,8 @@ async function sentToMany(db: Db, roomId: string) {
 /**
  * 카카오 웹훅이 알려 준 1:1 방을 상담에 잇는다 (서버 전용, RLS 우회). 웹훅의 kakao_sent 기록을 남긴 뒤에 부른다.
  * 이미 이름표가 있는 방이면 상담에 이름표를 붙이고 마지막으로 보낸 날을 새로 한다.
- * 처음 보는 방이면 해시만 남긴다 → 엔지니어 화면이 '누구에게 보냈나요?'를 묻는다.
+ * 처음 보는 방인데 엔지니어가 알림보다 먼저 이 상담에 이름을 적어 뒀으면(방 없는 이름표) 그 이름표에 이 방을 잇는다.
+ * 그 밖에 처음 보는 방이면 해시만 남긴다 → 엔지니어 화면이 '누구에게 보냈나요?'를 묻는다.
  * 1:1 방만 잇는다: 나와의 채팅·그룹방·오픈채팅은 받는 분이 한 사람이 아니다.
  * 30초 안에 서로 다른 1:1 방이 둘 이상 오면(여러 명을 한 번에 고름) 상담의 받는 분을 비우고 묻지 않는다.
  * 웹훅이 동시에 와도 끝에 비워지도록, 잇고 나서 한 번 더 확인한다. 나중에 한 분께 다시 보내면 그분으로 잇는다.
@@ -43,7 +44,7 @@ export async function linkKakaoRecipient(roomId: string, chatType: string, hash:
     const db = createAdminClient();
     const { data: room, error } = await db
       .from("rooms")
-      .select("engineer_id, status, expires_at")
+      .select("engineer_id, status, expires_at, recipient_id")
       .eq("id", roomId)
       .maybeSingle();
     if (error) throw error;
@@ -63,9 +64,23 @@ export async function linkKakaoRecipient(roomId: string, chatType: string, hash:
       .maybeSingle();
     if (findError) throw findError;
 
+    // 알림보다 먼저 적어 둔 이름(방 없는 이름표)이 있으면 그 이름표가 이 방의 이름표가 된다
+    let recipientId: string | null = known?.id ?? null;
+    if (!recipientId && room.recipient_id) {
+      const { data: adopted, error: adoptError } = await db
+        .from("recipients")
+        .update({ kakao_hash: hash })
+        .eq("id", room.recipient_id)
+        .is("kakao_hash", null)
+        .select("id")
+        .maybeSingle();
+      if (adoptError) throw adoptError;
+      recipientId = (adopted?.id as string | undefined) ?? null;
+    }
+
     const { error: roomError } = await db
       .from("rooms")
-      .update({ kakao_hash: hash, recipient_id: known?.id ?? null })
+      .update({ kakao_hash: hash, recipient_id: recipientId })
       .eq("id", roomId);
     if (roomError) throw roomError;
 

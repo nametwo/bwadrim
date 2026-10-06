@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { formatDuration, formatKstDateTime, kstMonthStartIso } from "@/lib/format";
+import { formatDuration, formatKstDateTime, formatKstRange, kstMonthStartIso } from "@/lib/format";
 import { endedConnected } from "@/lib/metrics";
 import { engineerNameOf } from "@/lib/engineer-name";
 import { BottomCta } from "@/components/ui/bottom-cta";
@@ -199,11 +199,12 @@ export default async function DashboardPage() {
                   const d = connected ? durationSec(room) : null;
                   const chip = statusOf(room, connected || (endedReadFailed && room.status === "ended"));
                   const label = labels.get(room.id);
-                  const when = formatKstDateTime(new Date(room.created_at), now);
+                  // 이름표가 없으면 시작~끝 시각으로 — 전화 앱 최근 기록·문자 앱 검색과 맞춰 보게
+                  const when = formatKstRange(new Date(room.created_at), room.ended_at ? new Date(room.ended_at) : null, now);
                   const took = d !== null ? `${formatDuration(d)} 걸림` : "기록 없음";
                   return (
                     <li key={room.id}>
-                      {/* 피그마 SessionRow: 받는 분 이름표가 있으면 그 이름(ROOM-16), 없으면 시각으로 구분한다 */}
+                      {/* 피그마 SessionRow: 받는 분 이름표가 있으면 그 이름(ROOM-16), 없으면 시작~끝 시각으로 구분한다 */}
                       <Link href={`/room/${room.id}`} className="flex items-center gap-3 px-5 py-3 active:bg-bg-subtle">
                         <span className="flex min-w-0 flex-1 flex-col">
                           {/* 서버(Vercel)는 UTC라서 한국 시간으로 고정해 보여 준다 (BUG-06) */}

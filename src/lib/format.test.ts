@@ -4,6 +4,7 @@ import {
   formatDuration,
   formatKstDateTime,
   formatKstDay,
+  formatKstRange,
   formatKstTime,
   kstMonthStartIso,
 } from "./format";
@@ -53,5 +54,23 @@ describe("kstMonthStartIso", () => {
     expect(kstMonthStartIso(NOW)).toBe("2026-08-31T15:00:00.000Z");
     // 한국은 이미 10월 1일인 순간
     expect(kstMonthStartIso(new Date("2026-09-30T16:00:00Z"))).toBe("2026-09-30T15:00:00.000Z");
+  });
+});
+
+describe("formatKstRange", () => {
+  it("같은 오전·오후면 끝은 시각만", () => {
+    expect(formatKstRange(new Date("2026-09-27T08:03:00Z"), new Date("2026-09-27T08:15:00Z"), NOW)).toBe("오늘 오후 5:03~5:15");
+  });
+
+  it("오전에서 오후로 넘어가면 끝에도 오전·오후", () => {
+    expect(formatKstRange(new Date("2026-09-27T02:50:00Z"), new Date("2026-09-27T03:10:00Z"), NOW)).toBe("오늘 오전 11:50~오후 12:10");
+  });
+
+  it("날이 바뀌면 끝에도 날짜", () => {
+    expect(formatKstRange(new Date("2026-09-26T14:50:00Z"), new Date("2026-09-26T15:05:00Z"), NOW)).toBe("어제 오후 11:50~오늘 오전 12:05");
+  });
+
+  it("끝이 없으면 시작만", () => {
+    expect(formatKstRange(new Date("2026-09-24T03:00:00Z"), null, NOW)).toBe("9월 24일 (목) 오후 12:00");
   });
 });

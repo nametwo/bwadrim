@@ -61,14 +61,18 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
       : connected === false
         ? { key: "not-connected", title: "연결 없이 닫은 상담이에요", icon: <ClockIcon />, tint: "bg-bg-muted text-icon-secondary" }
         : { key: "ended", title: "상담이 끝났어요", icon: <CheckIcon />, tint: "bg-success-tint text-text-success" };
-    // 카톡 1:1 방으로 보낸 상담이면 받는 분 이름표 (ROOM-16). 칸이 없거나(DB 준비 전) 못 읽으면 안 보인다
-    let recipient: { label: string | null } | null = null;
-    const { data: sentTo } = await supabase.from("rooms").select("kakao_hash, recipient_id").eq("id", room.id).maybeSingle();
-    if (sentTo?.kakao_hash) {
-      recipient = { label: null };
+    // 받는 분 이름표 (ROOM-16). 이름이 없으면 여기서 붙인다. 칸이 없거나(DB 준비 전) 못 읽으면 안 보인다
+    let recipient: { label: string | null; auto: boolean } | null = null;
+    const { data: sentTo, error: sentToError } = await supabase
+      .from("rooms")
+      .select("kakao_hash, recipient_id")
+      .eq("id", room.id)
+      .maybeSingle();
+    if (!sentToError && sentTo) {
+      recipient = { label: null, auto: !!sentTo.kakao_hash };
       if (sentTo.recipient_id) {
         const { data: r, error: labelError } = await supabase.from("recipients").select("label").eq("id", sentTo.recipient_id).maybeSingle();
-        recipient = labelError ? null : { label: r?.label ?? null };
+        recipient = labelError ? null : { ...recipient, label: r?.label ?? null };
       }
     }
 
@@ -103,7 +107,7 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
 
         {recipient && (
           <div className="mt-8">
-            <RecipientCard roomId={room.id} label={recipient.label} />
+            <RecipientCard roomId={room.id} label={recipient.label} auto={recipient.auto} />
           </div>
         )}
 

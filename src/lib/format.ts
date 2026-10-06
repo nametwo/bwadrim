@@ -67,6 +67,21 @@ export function formatKstDateTime(date: Date, now: Date = new Date()): string {
   return `${formatKstDay(date, now)} ${formatKstTime(date)}`;
 }
 
+/**
+ * 상담 시각 범위: '오늘 오후 5:03~5:15' · '오늘 오전 11:50~오후 12:10' · 끝이 없으면 '오늘 오후 5:03'.
+ * 이름표가 없는 상담을 전화 앱 최근 기록·문자 앱 검색과 시각으로 맞춰 보게 한다 (ROOM-04)
+ */
+export function formatKstRange(start: Date, end: Date | null, now: Date = new Date()): string {
+  const from = formatKstDateTime(start, now);
+  if (!end) return from;
+  const s = kstParts(start);
+  const e = kstParts(end);
+  if (dayNumber(s) !== dayNumber(e)) return `${from}~${formatKstDateTime(end, now)}`;
+  const to = formatKstTime(end);
+  // 같은 오전·오후면 뒤쪽은 시각만
+  return `${from}~${(s.hour < 12) === (e.hour < 12) ? to.replace(/^오[전후] /, "") : to}`;
+}
+
 /** 걸린 시간: '40초' · '12분' · '1시간 5분' */
 export function formatDuration(totalSec: number): string {
   const sec = Math.max(0, Math.round(totalSec));

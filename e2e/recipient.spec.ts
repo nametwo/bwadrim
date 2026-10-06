@@ -19,7 +19,8 @@ import { RealtimeHub, describeHub } from "./realtime-mock";
 //  - 카톡 1:1 방으로 간 게 웹훅으로 오면 대기 화면에 '누구에게 보냈나요?' → 저장하면 '받는 분 역삼점'
 //  - 같은 분(같은 해시)께 다른 상담을 보내면 묻지 않고 바로 이름이 붙는다
 //  - 상담 목록·끝난 상담 화면에도 이름. '고치기'로 바꾸면 그분께 보낸 상담 모두 바뀐다
-//  - 서명이 없거나 다른 상담 것·어드민 키가 틀린 웹훅은 아무것도 안 바꾼다. 나와의 채팅·그룹방은 이름을 묻지 않는다
+//  - 서명이 없거나 다른 상담 것·어드민 키가 틀린 웹훅은 아무것도 안 바꾼다. 나와의 채팅·그룹방은 방을 잇지 않는다
+//  - 문자·복사처럼 카톡 방이 없는 상담도 보낸 뒤 이름을 적을 수 있다(이 상담에만). 알림보다 먼저 적은 이름에는 나중에 온 방이 이어진다
 //  - 해시는 보내는 사람·받는 사람 한 쌍마다 하나라 이름표는 엔지니어마다 따로다(다른 엔지니어 이름표는 쓰지 않는다)
 // 진짜 카카오 없이: e2e 서버는 카카오 JS 키가 비어 '카톡 보내기' 버튼이 없다(playwright.config.ts).
 // 그래서 '링크 복사'로 보낸 상태를 만들고, 카카오가 보냈을 웹훅을 테스트가 가짜 어드민 키로 직접 보낸다.
@@ -123,9 +124,13 @@ test("처음 보내는 분은 이름을 묻고, 같은 분께 다시 보내면 �
   try {
     // 1) 첫 상담: 보낸 뒤 웹훅(형과의 1:1 방)이 오면 '누구에게 보냈나요?'
     await waitingAfterSend(a, R1.id);
-    await expect(a.getByTestId("recipient")).toHaveCount(0);
-    expect(await sendHook(baseURL!, R1.id, "DirectChat", "h-hyung")).toBe(200);
+    // 보내자마자는 방을 모르니 이 상담에만 붙는 이름을 묻는다
     const cardA = a.getByTestId("recipient");
+    await expect(cardA).toHaveAttribute("data-state", "ask", { timeout: 10_000 });
+    await expect(cardA).toContainText("이름을 적어 두면 상담 목록에 이 이름으로 보여요.");
+    expect(await sendHook(baseURL!, R1.id, "DirectChat", "h-hyung")).toBe(200);
+    // 카톡 알림이 오면 그 방의 이름을 묻는다(다음부터 저절로)
+    await expect(cardA).toContainText("처음 보내는 분이에요. 이름을 적어 두면 다음부터 저절로 나와요.", { timeout: 10_000 });
     await expect(cardA).toHaveAttribute("data-state", "ask", { timeout: 10_000 });
     await expect(cardA).toContainText("누구에게 보냈나요?");
     await expect(cardA).toContainText("처음 보내는 분이에요. 이름을 적어 두면 다음부터 저절로 나와요.");
@@ -150,9 +155,9 @@ test("처음 보내는 분은 이름을 묻고, 같은 분께 다시 보내면 �
     // 2) 두 번째 상담을 같은 분께: 묻지 않고 처음부터 '받는 분 역삼점'. 마지막으로 보낸 날이 새로 된다
     await waitingAfterSend(b, R2.id);
     expect(await sendHook(baseURL!, R2.id, "DirectChat", "h-hyung")).toBe(200);
+    // 보내자마자는 방을 몰라 묻다가, 알림이 오면 묻지 않고 '받는 분 역삼점'으로 바뀐다
     const cardB = b.getByTestId("recipient");
-    await expect(cardB).toBeVisible({ timeout: 10_000 });
-    expect(await cardB.getAttribute("data-state")).toBe("known");
+    await expect(cardB).toHaveAttribute("data-state", "known", { timeout: 10_000 });
     await expect(b.getByTestId("recipient-label")).toHaveText("역삼점");
     expect(await mockRoom(R2.id)).toMatchObject({ kakao_hash: "h-hyung", recipient_id: created.id });
     await expect.poll(async () => (await mockRecipients())[0].last_sent_at > created.last_sent_at).toBe(true);
@@ -289,7 +294,9 @@ test("서명·어드민 키가 틀린 웹훅은 아무것도 안 바꾸고, 나�
       .toBe(true);
 
     await page.waitForTimeout(POLL_MS + 1000);
-    await expect(page.getByTestId("recipient")).toHaveCount(0);
+    // 방이 이어지지 않았으니 이 상담에만 붙는 이름을 묻는 그대로다
+    await expect(page.getByTestId("recipient")).toHaveAttribute("data-state", "ask");
+    await expect(page.getByTestId("recipient")).toContainText("이름을 적어 두면 상담 목록에 이 이름으로 보여요.");
     expect(await mockRoom(R3.id)).toMatchObject({ kakao_hash: null, recipient_id: null });
     expect(await mockRoom(R2.id)).toMatchObject({ kakao_hash: null, recipient_id: null });
     expect(await mockRecipients()).toEqual(before);
@@ -319,7 +326,7 @@ test("서명·어드민 키가 틀린 웹훅은 아무것도 안 바꾸고, 나�
   }
 });
 
-test("여러 명을 한 번에 고르면 받는 분을 정하지 않고 묻지 않는다 · 새로고침해도 받는 분 카드가 남는다", async ({ browser, baseURL }) => {
+test("여러 명을 한 번에 고르면 받는 분을 정하지 않는다 · 새로고침해도 받는 분 카드가 남는다", async ({ browser, baseURL }) => {
   test.setTimeout(120_000);
   const { hub, ctx } = await engineer(browser, baseURL!);
   const page = await ctx.newPage();
@@ -356,9 +363,65 @@ test("여러 명을 한 번에 고르면 받는 분을 정하지 않고 묻지 �
     await page.getByRole("button", { name: /연결 준비/ }).click();
     await expect(page.getByTestId("eng-waiting")).toBeVisible({ timeout: 30_000 });
     await page.waitForTimeout(POLL_MS + 1000);
-    await expect(page.getByTestId("recipient")).toHaveCount(0);
+    // 누구에게 보냈는지 정하지 않는다 — 방 없이 이 상담에만 붙는 이름을 묻는다
+    await expect(page.getByTestId("recipient")).toHaveAttribute("data-state", "ask");
+    await expect(page.getByTestId("recipient")).toContainText("이름을 적어 두면 상담 목록에 이 이름으로 보여요.");
     // 이름표는 그대로(여동생 해시에 엉뚱한 이름이 생기지 않는다)
     expect(await mockRecipients()).toEqual([expect.objectContaining({ label: "형", kakao_hash: "h-hyung" })]);
+    expect(logs).toEqual([]);
+  } finally {
+    if (test.info().status !== test.info().expectedStatus) console.log("hub:", describeHub(hub), logs.join("\n"));
+    await ctx.close();
+  }
+});
+
+test("문자로 보낸 상담도 이름을 적을 수 있고(이 상담에만), 알림보다 먼저 적은 이름에는 나중에 온 카톡 방이 이어진다 · 이름 없으면 목록은 시작~끝 시각", async ({ browser, baseURL }) => {
+  test.setTimeout(150_000);
+  const { hub, ctx } = await engineer(browser, baseURL!);
+  const page = await ctx.newPage();
+  const b = await ctx.newPage();
+  const logs = collectErrors([["eng", page], ["b", b]]);
+
+  try {
+    // 1) 문자처럼 방 없이 보낸 상담: 이 상담에만 붙는 이름
+    await waitingAfterSend(page, R1.id);
+    const card = page.getByTestId("recipient");
+    await expect(card).toHaveAttribute("data-state", "ask", { timeout: 10_000 });
+    await expect(card).toContainText("이름을 적어 두면 상담 목록에 이 이름으로 보여요.");
+    await saveName(page, "선릉 치킨", "tap");
+    await expect(page.getByTestId("recipient-label")).toHaveText("선릉 치킨");
+    const [own] = await mockRecipients();
+    expect(own).toMatchObject({ engineer_id: FIXTURE.user.id, label: "선릉 치킨", kakao_hash: null });
+    expect((await mockRoom(R1.id))?.recipient_id).toBe(own.id);
+    // 보관 기간은 이 상담을 만든 때부터
+    expect(Date.parse(own.last_sent_at)).toBe(Date.parse((await mockRoom(R1.id))!.created_at));
+    // 고치기: 이 상담의 이름만
+    await page.getByTestId("recipient-edit").click();
+    await expect(card).toContainText("이 상담의 이름이 바뀌어요.");
+    await card.getByRole("button", { name: "취소" }).click();
+
+    // 2) 이름을 적은 뒤에 카톡 알림이 오면 그 이름표가 그 방의 이름표가 된다 → 같은 분께 다른 상담을 보내면 저절로
+    expect(await sendHook(baseURL!, R1.id, "DirectChat", "h-chicken")).toBe(200);
+    await expect.poll(async () => (await mockRecipients())[0]?.kakao_hash, { timeout: 10_000 }).toBe("h-chicken");
+    expect(await mockRoom(R1.id)).toMatchObject({ kakao_hash: "h-chicken", recipient_id: own.id });
+    await expect(page.getByTestId("recipient-label")).toHaveText("선릉 치킨", { timeout: 10_000 });
+
+    await waitingAfterSend(b, R2.id);
+    expect(await sendHook(baseURL!, R2.id, "DirectChat", "h-chicken")).toBe(200);
+    await expect(b.getByTestId("recipient-label")).toHaveText("선릉 치킨", { timeout: 10_000 });
+    expect(await mockRecipients()).toHaveLength(1);
+
+    // 3) 이름 없이 닫은 상담은 목록에 시작~끝 시각으로
+    await b.close();
+    await mockReset(R3.id);
+    await waitingAfterSend(page, R3.id);
+    await closeRoom(page);
+    const row = dashRow(page, R3.id);
+    await expect(row).toContainText(/오(전|후) \d{1,2}:\d{2}~/);
+    await expect(row.getByTestId("room-label")).toHaveCount(0);
+    // 아직 열려 있는 두 상담은 진행 중 줄에 이름이 붙는다
+    await expect(dashRow(page, R1.id)).toContainText("선릉 치킨 · ");
+    await expect(dashRow(page, R2.id)).toContainText("선릉 치킨 · ");
     expect(logs).toEqual([]);
   } finally {
     if (test.info().status !== test.info().expectedStatus) console.log("hub:", describeHub(hub), logs.join("\n"));

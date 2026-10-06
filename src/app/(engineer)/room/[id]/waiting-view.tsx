@@ -73,8 +73,8 @@ export function WaitingView({
   sheets: ReactNode;
 }) {
   const linkOpened = !!progress?.linkOpened;
-  // 카톡 1:1 방으로 간 게 확인됐으면(ROOM-16) 이 화면에서 누르지 않았어도 보낸 것이다 (새로고침·다른 기기에서 열었을 때)
-  const via: SentVia | null = sentVia ?? (progress?.recipient ? "kakao" : null);
+  // 카톡 카드가 간 게 확인됐으면(카카오 알림, ROOM-15·16) 이 화면에서 누르지 않았어도 보낸 것이다 (새로고침·다른 기기에서 열었을 때)
+  const via: SentVia | null = sentVia ?? (progress?.recipient?.auto || progress?.kakaoSent ? "kakao" : null);
   const sent = !!via || linkOpened || everConnected || failed;
   const can = useSendWays();
 
@@ -238,10 +238,15 @@ export function WaitingView({
         </ol>
       </section>
 
-      {/* 카톡 1:1 방으로 간 게 확인되면(웹훅, ROOM-15) 받는 분 이름표 — 처음 보내는 분이면 이름을 묻는다 (ROOM-16) */}
+      {/* 받는 분 이름표 (ROOM-16): 보낸 뒤 이름이 없으면 묻는다. 카톡 알림(ROOM-15)이 와서 아는 분이면 저절로 */}
       {progress?.recipient && (
         <div className="mt-3">
-          <RecipientCard key={progress.recipient.key} roomId={roomId} label={progress.recipient.label} />
+          <RecipientCard
+            key={progress.recipient.key}
+            roomId={roomId}
+            label={progress.recipient.label}
+            auto={progress.recipient.auto}
+          />
         </div>
       )}
 

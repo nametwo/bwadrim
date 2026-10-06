@@ -68,10 +68,13 @@ export type JoinProgress = {
   camera: "granted" | "denied" | null;
   // 거부 원인(JOIN-05의 reason: NotAllowedError 등)
   deniedReason: string | null;
-  // 카톡 받는 분 (ROOM-16). null = 이 상담이 간 1:1 방이 없음(아직 안 왔거나, 여러 명에게 한 번에 보냄).
-  // label이 null이면 처음 보내는 분 → 화면이 이름을 묻는다. undefined = 이번에 읽지 못함(화면은 하던 대로 둔다).
-  // key는 그분과의 카톡 방(해시) — 다른 분께 다시 보내 방이 바뀌면 화면이 카드를 새로 그린다
-  recipient?: { key: string; label: string | null } | null;
+  // 카톡 카드가 어느 방에든 간 적이 있는지(카카오 알림 kakao_sent, ROOM-15). 새로고침해도 '보낸 뒤' 화면으로
+  kakaoSent: boolean;
+  // 받는 분 이름표 (ROOM-16). label이 null이면 아직 이름이 없음 → 보낸 뒤 화면이 이름을 묻는다.
+  // auto: 카톡 1:1 방(해시)이 이어져 있어 같은 분께 다시 보내면 이름이 저절로 붙는지. 문자·공유·복사는 false.
+  // key는 그 방(없으면 'room') — 카톡 알림이 와서 방이 바뀌면 화면이 카드를 새로 그린다.
+  // undefined = 이번에 읽지 못함(화면은 하던 대로 둔다)
+  recipient?: { key: string; label: string | null; auto: boolean };
 };
 
 export async function getJoinProgress(roomId: string): Promise<JoinProgress | null> {
@@ -80,14 +83,16 @@ export async function getJoinProgress(roomId: string): Promise<JoinProgress | nu
     .from("events")
     .select("id, name, props")
     .eq("room_id", roomId)
-    .in("name", ["link_opened", "camera_granted", "camera_denied"])
+    .in("name", ["link_opened", "camera_granted", "camera_denied", "kakao_sent"])
     .order("id", { ascending: true });
   if (error || !data) return null;
 
   let linkOpened = false;
   let camera: JoinProgress["camera"] = null;
   let deniedReason: string | null = null;
+  let kakaoSent = false;
   for (const e of data as { name: string; props: Record<string, unknown> | null }[]) {
+    if (e.name === "kakao_sent") kakaoSent = true;
     if (e.name === "link_opened") linkOpened = true;
     if (e.name === "camera_granted") {
       camera = "granted";
@@ -103,39 +108,42 @@ export async function getJoinProgress(roomId: string): Promise<JoinProgress | nu
     linkOpened: linkOpened || camera !== null,
     camera,
     deniedReason,
+    kakaoSent,
     recipient: await getRecipient(supabase, roomId),
   };
 }
 
 type Supabase = Awaited<ReturnType<typeof createClient>>;
 
-// 이 상담의 카톡 받는 분 이름표 (ROOM-16). 칸이 아직 없거나(DB 준비 전) 읽지 못하면 undefined
+// 이 상담의 받는 분 이름표 (ROOM-16). 칸이 아직 없거나(DB 준비 전) 읽지 못하면 undefined
 async function getRecipient(supabase: Supabase, roomId: string): Promise<JoinProgress["recipient"]> {
   const { data: room, error } = await supabase
     .from("rooms")
     .select("kakao_hash, recipient_id")
     .eq("id", roomId)
     .maybeSingle();
-  if (error) return undefined;
-  if (!room?.kakao_hash) return null;
-  const key = room.kakao_hash as string;
-  if (!room.recipient_id) return { key, label: null };
+  if (error || !room) return undefined;
+  const hash = (room.kakao_hash as string | null) ?? null;
+  const base = { key: hash ?? "room", auto: !!hash };
+  if (!room.recipient_id) return { ...base, label: null };
   const { data: r, error: labelError } = await supabase
     .from("recipients")
     .select("label")
     .eq("id", room.recipient_id)
     .maybeSingle();
   if (labelError) return undefined;
-  return { key, label: r?.label ?? null };
+  return { ...base, label: r?.label ?? null };
 }
 
 export type NameRecipientResult =
   | { ok: true; label: string }
-  | { ok: false; reason: "auth" | "empty" | "no-kakao" | "db" };
+  | { ok: false; reason: "auth" | "empty" | "db" };
 
-// 받는 분 이름 붙이기·고치기 (ROOM-16). 카톡 1:1 방 해시가 있는 상담만 된다.
-// 처음이면 이름표를 만들고, 같은 분께 보냈지만 이름이 없던 내 다른 상담에도 함께 붙인다.
-// 이미 이름표가 있으면 이름만 고친다 — 그분께 보낸 모든 상담의 이름이 같이 바뀐다
+// 받는 분 이름 붙이기·고치기 (ROOM-16). 이미 이름표가 있으면 이름만 고친다.
+// 카톡 1:1 방(해시)이 있는 상담: 처음이면 그 방의 이름표를 만들고, 같은 분께 보냈지만 이름이 없던 내 다른 상담에도 함께 붙인다.
+//   그 뒤로 같은 분께 카톡을 보내면 저절로 붙고, 고치면 그분께 보낸 모든 상담의 이름이 같이 바뀐다.
+// 방이 없는 상담(문자·공유·복사, 카톡 알림이 아직 안 옴): 이 상담에만 붙는 이름표를 만든다.
+//   카톡 알림이 나중에 오면 이 이름표에 그 방이 이어진다(linkKakaoRecipient)
 export async function nameRecipient(roomId: string, raw: string): Promise<NameRecipientResult> {
   const label = cleanLabel(raw);
   if (!label) return { ok: false, reason: "empty" };
@@ -150,15 +158,30 @@ export async function nameRecipient(roomId: string, raw: string): Promise<NameRe
   // RLS로 자기 상담·자기 이름표만 읽고 바뀐다
   const { data: room, error } = await supabase
     .from("rooms")
-    .select("kakao_hash, recipient_id")
+    .select("kakao_hash, recipient_id, created_at")
     .eq("id", roomId)
     .maybeSingle();
-  if (error) return { ok: false, reason: "db" };
-  if (!room?.kakao_hash) return { ok: false, reason: "no-kakao" };
+  if (error || !room) return { ok: false, reason: "db" };
 
   if (room.recipient_id) {
     const { error: renameError } = await supabase.from("recipients").update({ label }).eq("id", room.recipient_id);
     return renameError ? { ok: false, reason: "db" } : { ok: true, label };
+  }
+
+  if (!room.kakao_hash) {
+    // 이 상담에만 붙는 이름표. 보관 기간은 이 상담을 만든 때부터(OPS-06)
+    const { data: own, error: ownError } = await supabase
+      .from("recipients")
+      .insert({ engineer_id: user.id, label, last_sent_at: room.created_at })
+      .select("id")
+      .single();
+    if (ownError || !own) return { ok: false, reason: "db" };
+    const { error: linkError } = await supabase
+      .from("rooms")
+      .update({ recipient_id: own.id })
+      .eq("id", roomId)
+      .is("recipient_id", null);
+    return linkError ? { ok: false, reason: "db" } : { ok: true, label };
   }
 
   // 웹훅이 늦게 와서 상담에는 아직 안 이어졌지만 같은 방 이름표가 이미 있을 수도 있다
