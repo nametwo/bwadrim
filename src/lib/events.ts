@@ -14,6 +14,7 @@ export type EventName =
   | "anchor_used"
   | "guide_used"
   | "photo_taken"
+  | "kakao_sent"
   | "ended";
 
 export type EventActor = "engineer" | "customer" | "system";

@@ -49,10 +49,12 @@ type Way = "kakao" | "share" | "copy";
 // 나머지는 글자 버튼으로 낮춰 화면 아래가 버튼 더미로 무거워지지 않게 한다
 export function ShareButtons({
   joinUrl,
+  roomId,
   resend = false,
   onSent,
 }: {
   joinUrl: string;
+  roomId: string;
   resend?: boolean;
   onSent?: (via: SentVia) => void;
 }) {
@@ -95,7 +97,7 @@ export function ShareButtons({
     // 미리 받기에 실패했으면 다시 받는 동안 도는 표시
     if (!window.Kakao) setKakaoLoading(true);
     try {
-      await sendKakaoLink(joinUrl);
+      await sendKakaoLink(joinUrl, roomId);
       sent("kakao");
     } catch {
       setKakaoFailed(true);

@@ -1156,6 +1156,7 @@ export function CallPanel({
   return (
     <WaitingView
       joinUrl={joinUrl}
+      roomId={roomId}
       createdLabel={createdLabel}
       micOn={state.phase === "call" ? micOn : null}
       sentVia={sentVia}

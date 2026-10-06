@@ -55,7 +55,9 @@ export function loadKakao(): Promise<KakaoSdk> {
 
 // 카톡 친구 선택 화면을 띄운다. SDK 로딩·초기화에 실패하면 throw.
 // 미리 불러 뒀으면 기다리지 않고 바로 연다(누른 그 순간 안에서)
-export async function sendKakaoLink(joinUrl: string) {
+// roomId는 전송 성공 웹훅(api/kakao/share-webhook, ROOM-15)이 어느 상담인지 알게 실어 보낸다.
+// 이 값이 없으면 카카오가 웹훅을 보내지 않는다
+export async function sendKakaoLink(joinUrl: string, roomId: string) {
   const kakao = window.Kakao ?? (await loadKakao());
   if (!kakao.isInitialized()) kakao.init(kakaoKey);
   const link = { mobileWebUrl: joinUrl, webUrl: joinUrl };
@@ -70,5 +72,6 @@ export async function sendKakaoLink(joinUrl: string) {
       link,
     },
     buttons: [{ title: "카메라 켜기", link }],
+    serverCallbackArgs: { room: roomId },
   });
 }

@@ -36,6 +36,7 @@ type Tone = "wait" | "ok" | "error";
 
 export function WaitingView({
   joinUrl,
+  roomId,
   createdLabel,
   micOn,
   sentVia,
@@ -51,6 +52,7 @@ export function WaitingView({
   sheets,
 }: {
   joinUrl: string;
+  roomId: string;
   createdLabel: string;
   /** null = 아직 모름(마이크 권한 묻는 중) */
   micOn: boolean | null;
@@ -124,7 +126,7 @@ export function WaitingView({
         </p>
 
         <BottomCta>
-          <ShareButtons joinUrl={joinUrl} onSent={onSent} />
+          <ShareButtons joinUrl={joinUrl} roomId={roomId} onSent={onSent} />
         </BottomCta>
         {sheets}
       </main>
@@ -251,7 +253,7 @@ export function WaitingView({
       </details>
 
       <BottomCta>
-        <ShareButtons joinUrl={joinUrl} resend onSent={onSent} />
+        <ShareButtons joinUrl={joinUrl} roomId={roomId} resend onSent={onSent} />
       </BottomCta>
       {sheets}
     </main>
