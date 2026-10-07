@@ -1171,6 +1171,21 @@ test("홈 화면 앱 설치", async ({ browser, baseURL }) => {
       },
     );
 
+    const samsung = await rig.engineer({ install: true, userAgent: UA.samsung });
+    await shot(
+      {
+        section: "dashboard",
+        ids: ["NFR-09", "BUG-24"],
+        title: "홈 화면 앱 설치 안내 — 삼성 인터넷",
+        note: "삼성 인터넷은 앱으로 설치시키지 않는다(Play 프로텍트가 삼성이 만든 APK를 막음). 설치 버튼 없이 메뉴로 홈 화면 바로가기를 만드는 세 단계",
+      },
+      async () => {
+        await open(samsung, "/dashboard");
+        await expect(samsung.getByTestId("install-prompt")).toHaveAttribute("data-platform", "samsung", { timeout: 15_000 });
+        return [{ label: "갤럭시 삼성 인터넷", page: samsung }];
+      },
+    );
+
     const iphone = await rig.engineer({ install: true, userAgent: UA.iphone26 });
     const iphone17 = await rig.engineer({ install: true, userAgent: UA.iphone });
     await shot(

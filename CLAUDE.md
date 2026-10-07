@@ -53,6 +53,7 @@ src/lib/
 src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기). anchor/·anchor-overlay = AR 핀 층(CALL-14), guide-dpad(방향 링·가까이/멀리 알약)·guide-pad-geometry·guide-overlay(고객 노란 원 화살표·네 모서리)·guide-pill = 방향 지시(CALL-15), open-in-browser = 앱 안 브라우저 안내(고객 JOIN-10·엔지니어 AUTH-09), install-prompt = 엔지니어 홈 화면 앱 설치 화면(NFR-09)
   ui/                                            # 디자인 시스템 부품(NFR-08, 피그마 컴포넌트와 같은 이름): button(Button·ButtonLink·buttonClass), icons(선 아이콘), sheet(아래 확인 창), notice-screen(한 화면 한 안내), bottom-cta(아래에 붙는 버튼 자리), brand(로고), status-chip, step-item, banner, call-control(통화 원형 버튼), stat-card, engineer-card, call-timer, text-field(입력칸)
 public/manifest.webmanifest, public/icons/          # 엔지니어 홈 화면 앱 설정·아이콘 (NFR-09, 엔지니어 화면에만 붙음)
+public/manifest-samsung.webmanifest                 # 삼성 인터넷용 웹 앱 설정(display: browser, 바로가기만). 삼성이 직접 만든 APK는 Play 프로텍트가 막는다(BUG-24). 서비스 워커는 쓰지 않음(public/sw.js = 예전 등록 지우기)
 supabase/schema.sql
 docs/requirements.md                             # 기능 요구사항 (기준 문서)
 할일.md                                          # 나중에 할 일 메모. 하기로 하면 requirements.md로 옮기고 지운다

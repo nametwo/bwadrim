@@ -13,10 +13,19 @@ import {
   MoreIcon,
   MoreVerticalIcon,
 } from "@/components/ui/icons";
-import { installPlatform, installSteps, type InstallPlatform, type InstallStep } from "@/lib/install-guide";
+import {
+  HOME_SCREEN_URL,
+  installPlatform,
+  installSteps,
+  isFromHomeScreen,
+  type InstallPlatform,
+  type InstallStep,
+} from "@/lib/install-guide";
 
 // 엔지니어 홈 화면 앱 설치 유도 (NFR-09). 폰 브라우저로 상담 목록을 열면 먼저 큰 설치 화면을 보여 준다.
 //  - 안드로이드: 브라우저가 설치 창을 띄울 수 있으면(beforeinstallprompt) '봐드림 앱 설치' 버튼 하나. 아직이면 메뉴로 설치하는 세 단계
+//  - 삼성 인터넷: 앱으로 설치시키지 않고(Play 프로텍트가 삼성이 만든 APK를 막는다, BUG-24) 메뉴로 홈 화면 바로가기를 만드는 세 단계.
+//    바로가기가 '홈 화면에서 열었다' 표시가 붙은 주소를 담게 해서, 아이콘으로 열면 이 화면을 다시 띄우지 않는다
 //  - 아이폰: 웹이 설치 창을 띄울 수 없어 세 단계를 글과 아이콘으로
 //  - '다음에 할게요'·'다 했어요'면 이 브라우저 창을 닫을 때까지 다시 묻지 않는다(sessionStorage, 상담 정보 아님)
 //  - 홈 화면 아이콘으로 연 앱(standalone), PC, 앱 안 브라우저, 이미 설치한 안드로이드 크롬에는 띄우지 않는다
@@ -48,8 +57,16 @@ function startCapture() {
   if (w.__bwInstall) deferred = w.__bwInstall;
   if (w.__bwInstalled) installedNow = true;
   if (deferred || installedNow) emit();
-  // 삼성 인터넷은 서비스 워커가 있어야 앱으로 설치된다 (public/sw.js, 아무것도 가로채지 않음). 크롬·사파리는 없어도 된다
-  if (/SamsungBrowser/.test(navigator.userAgent)) navigator.serviceWorker?.register("/sw.js", { scope: "/" }).catch(() => {});
+  // 예전에 삼성 인터넷에만 등록하던 서비스 워커를 지운다 (BUG-24). 이 사이트는 이제 서비스 워커를 쓰지 않는다
+  navigator.serviceWorker
+    ?.getRegistrations()
+    .then((regs) => {
+      for (const r of regs) {
+        const url = (r.active ?? r.waiting ?? r.installing)?.scriptURL ?? "";
+        if (url.endsWith("/sw.js")) r.unregister();
+      }
+    })
+    .catch(() => {});
   window.addEventListener("beforeinstallprompt", (e) => {
     e.preventDefault();
     deferred = e as InstallEvent;
@@ -74,6 +91,8 @@ export function InstallCatcher() {
 }
 
 const LATER_KEY = "bwadrim:install-later";
+// 이 창에서 주소에 '홈 화면에서 열었다' 표시를 직접 붙였다(삼성 인터넷). 새로고침하면 그 표시가 남아 있어도 바로가기로 연 게 아니다
+const MARKED_KEY = "bwadrim:install-marked";
 
 type Guide = { platform: InstallPlatform; steps: InstallStep[] };
 
@@ -86,9 +105,12 @@ function readGuide(): Guide | null {
     window.matchMedia?.("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone === true;
   if (standalone) return guideCache;
   try {
+    // 홈 화면 바로가기로 열었으면(삼성 인터넷) 이 창에서는 묻지 않는다. 상담에 갔다 와서 표시가 빠져도
+    if (isFromHomeScreen(location.search) && sessionStorage.getItem(MARKED_KEY) !== "1") sessionStorage.setItem(LATER_KEY, "1");
     if (sessionStorage.getItem(LATER_KEY) === "1") return guideCache;
   } catch {
-    // 저장소를 못 쓰는 창이면 매번 묻는다
+    // 저장소를 못 쓰는 창이면 매번 묻는다. 그런 창은 주소에 표시를 붙이지 않으니, 표시가 있으면 바로가기로 연 것이다
+    if (isFromHomeScreen(location.search)) return guideCache;
   }
   const platform = installPlatform(navigator.userAgent, navigator.maxTouchPoints);
   if (platform) guideCache = { platform, steps: installSteps(navigator.userAgent, platform, navigator.maxTouchPoints) };
@@ -142,10 +164,25 @@ export function InstallPrompt() {
     emit();
   }, []);
 
+  // 삼성 인터넷의 '홈 화면' 바로가기는 지금 주소를 담기도 한다. 안내가 떠 있는 동안만 표시가 붙은 주소로 바꿔 둔다(새로 불러오지 않음)
+  const samsung = guide?.platform === "samsung" && !closed;
+  useEffect(() => {
+    if (!samsung || location.pathname !== "/dashboard") return;
+    try {
+      sessionStorage.setItem(MARKED_KEY, "1");
+    } catch {
+      // 표시를 기억할 수 없으면 주소도 바꾸지 않는다 — 새로고침했을 때 안내가 사라지지 않게
+      return;
+    }
+    history.replaceState(null, "", HOME_SCREEN_URL);
+  }, [samsung]);
+
   // 이미 설치했는지 확인이 끝나야 보여 준다 (안드로이드 크롬 1.5초 안, 그 밖은 바로)
   if (!guide || closed || installedCheck !== "unknown") return null;
 
   function close() {
+    // 안내를 닫으면 붙여 둔 표시를 뗀다 (이 주소가 방문 기록에 남지 않게)
+    if (guide?.platform === "samsung" && isFromHomeScreen(location.search)) history.replaceState(null, "", "/dashboard");
     try {
       sessionStorage.setItem(LATER_KEY, "1");
     } catch {
