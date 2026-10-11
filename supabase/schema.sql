@@ -45,17 +45,18 @@ create index if not exists events_name_idx on events(name, created_at);
 alter table rooms  enable row level security;
 alter table events enable row level security;
 
--- 엔지니어: 자기 방만
+-- 엔지니어: 자기 방만.
+-- auth.uid()는 (select auth.uid())로 감싸 쿼리마다 한 번만 부르게 한다(줄마다 부르지 않게). 뜻은 같다
 drop policy if exists "engineer manages own rooms" on rooms;
 create policy "engineer manages own rooms" on rooms
-  for all using (auth.uid() = engineer_id) with check (auth.uid() = engineer_id);
+  for all using ((select auth.uid()) = engineer_id) with check ((select auth.uid()) = engineer_id);
 
 -- 고객(anon): 방 정보는 서버 API(service role)를 통해서만 읽는다. 직접 select 없음.
 -- 이벤트 insert는 서버 API를 통해서만.
 drop policy if exists "engineer reads own events" on events;
 create policy "engineer reads own events" on events
   for select using (
-    exists (select 1 from rooms r where r.id = events.room_id and r.engineer_id = auth.uid())
+    exists (select 1 from rooms r where r.id = events.room_id and r.engineer_id = (select auth.uid()))
   );
 
 -- 예전 6자리 코드 생성 헬퍼 (ROOM-02 폐기로 삭제)
@@ -143,12 +144,14 @@ alter table recipients enable row level security;
 
 drop policy if exists "engineer manages own recipients" on recipients;
 create policy "engineer manages own recipients" on recipients
-  for all using (auth.uid() = engineer_id) with check (auth.uid() = engineer_id);
+  for all using ((select auth.uid()) = engineer_id) with check ((select auth.uid()) = engineer_id);
 
 -- 상담마다: 카톡 카드가 간 1:1 방 해시(카카오 웹훅이 채움)와 그 방의 이름표
 alter table rooms add column if not exists kakao_hash text;
 alter table rooms add column if not exists recipient_id uuid references recipients(id) on delete set null;
 create index if not exists rooms_kakao_hash_idx on rooms(engineer_id, kakao_hash);
+-- 이름표를 지울 때(on delete set null, 매일 정리) 그 이름표를 단 상담을 rooms 전체를 훑지 않고 찾게
+create index if not exists rooms_recipient_idx on rooms(recipient_id);
 
 -- 1년 지난 이름표와 해시 지우기 (OPS-06). 매일 한국 시간 새벽 3시(UTC 18시).
 -- 이름표: 그 분께 마지막으로 보낸 날(last_sent_at)부터 1년. 상담: 만든 지 1년이면 방 해시와 이름표 연결을 끊는다(목록·화면이 같게)

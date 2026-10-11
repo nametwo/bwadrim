@@ -1,6 +1,15 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { HOME_SCREEN_URL, installPlatform, installSteps, isFromHomeScreen, isSamsungInternet, manifestHref } from "./install-guide";
+import {
+  HOME_SCREEN_URL,
+  installPlatform,
+  installSteps,
+  iosBrowserApp,
+  isFromHomeScreen,
+  isIOSDevice,
+  isSamsungInternet,
+  manifestHref,
+} from "./install-guide";
 
 const manifest = (name: string) => JSON.parse(readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8"));
 
@@ -19,7 +28,49 @@ const UA = {
   mac: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
   kakao:
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 KAKAOTALK 10.8.0",
+  iosFirefox:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/131.0 Mobile/15E148 Safari/605.1.15",
+  iosEdge:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 EdgiOS/129.0.2792.84 Mobile/15E148 Safari/605.1.15",
+  iosOpera:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) OPiOS/5.0.0 Version/18.0 Mobile/15E148 Safari/604.1",
+  iosWhale:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Whale/3.10.2.1 Mobile/15E148 Safari/604.1",
+  iosNaver:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 NAVER(inapp; search; 2000; 12.6.3)",
 };
+
+describe("isIOSDevice (JOIN-05, NFR-09)", () => {
+  it("아이폰·아이패드, 맥처럼 보여도 터치가 되면 아이패드", () => {
+    expect(isIOSDevice(UA.safari17)).toBe(true);
+    expect(isIOSDevice(UA.iosChrome)).toBe(true);
+    expect(isIOSDevice(UA.ipad, 5)).toBe(true);
+  });
+
+  it("터치가 안 되는 맥과 안드로이드는 아니다", () => {
+    expect(isIOSDevice(UA.ipad, 0)).toBe(false);
+    expect(isIOSDevice(UA.ipad)).toBe(false);
+    expect(isIOSDevice(UA.mac, 0)).toBe(false);
+    expect(isIOSDevice(UA.chrome, 5)).toBe(false);
+  });
+});
+
+describe("iosBrowserApp (JOIN-05, NFR-09)", () => {
+  it("사파리면 null", () => {
+    expect(iosBrowserApp(UA.safari17)).toBeNull();
+    expect(iosBrowserApp(UA.safari26)).toBeNull();
+    expect(iosBrowserApp(UA.ipad)).toBeNull();
+  });
+
+  it("사파리가 아니면 설정 앱에 보이는 앱 이름", () => {
+    expect(iosBrowserApp(UA.iosChrome)).toBe("Chrome");
+    expect(iosBrowserApp(UA.iosFirefox)).toBe("Firefox");
+    expect(iosBrowserApp(UA.iosEdge)).toBe("Edge");
+    expect(iosBrowserApp(UA.iosOpera)).toBe("Opera");
+    expect(iosBrowserApp(UA.iosWhale)).toBe("Whale");
+    expect(iosBrowserApp(UA.iosNaver)).toBe("NAVER");
+  });
+});
 
 describe("installPlatform (NFR-09)", () => {
   it("폰과 아이패드만 안내한다", () => {

@@ -7,7 +7,9 @@ import { ChevronLeftIcon, LinkIcon, MessageIcon, MicIcon, MicOffIcon } from "@/c
 import { AppBar, AppBarAction } from "./call-ui";
 import { inviteMessage, ShareButtons, useSendWays, type SentVia } from "./share-buttons";
 import { RecipientCard } from "./recipient-card";
+import { waitHead, type WaitKind } from "./wait-status";
 import type { KakaoShareArgs } from "@/lib/kakao-webhook";
+import { cameraFailureOf, type CameraFailure } from "@/app/join/[token]/camera-help";
 import type { JoinProgress } from "./actions";
 
 // 고객 부르기 (피그마 E03 새 A/S 시작 → E04 고객 기다리는 중, ROOM-05·13).
@@ -24,15 +26,13 @@ const SENT_TITLE: Record<SentVia, string> = {
   copy: "링크를 복사했어요",
 };
 
-// 카메라가 막혔을 때 엔지니어가 전화로 해 줄 말 (JOIN-05 원인별)
-function deniedCoach(reason: string | null) {
-  if (reason === "NotReadableError" || reason === "AbortError") {
-    return "다른 앱이 카메라를 쓰고 있어요. 카메라·영상통화 앱을 닫고 다시 눌러 달라고 말씀해 주세요.";
-  }
-  if (reason === "NotFoundError" || reason === "OverconstrainedError") return "카메라를 찾지 못했어요. 다른 폰으로 링크를 열어 달라고 말씀해 주세요.";
-  if (reason === "unsupported") return "사파리나 크롬으로 링크를 열어 달라고 말씀해 주세요.";
-  return "고객님 화면에 켜는 방법이 나와 있어요. 그대로 따라 해 달라고 말씀해 주세요.";
-}
+// 카메라가 막혔을 때 엔지니어가 전화로 해 줄 말. 원인 나누기는 고객 화면(JOIN-05)과 같은 함수를 쓴다
+const DENIED_COACH: Record<CameraFailure, string> = {
+  busy: "다른 앱이 카메라를 쓰고 있어요. 카메라·영상통화 앱을 닫고 ‘다시 시도하기’를 눌러 달라고 말씀해 주세요.",
+  missing: "카메라를 찾지 못했어요. 다른 폰으로 링크를 열어 달라고 말씀해 주세요.",
+  unsupported: "사파리나 크롬으로 링크를 열어 달라고 말씀해 주세요.",
+  blocked: "고객님 화면에 켜는 방법이 나와 있어요. 그대로 따라 해 달라고 말씀해 주세요.",
+};
 
 type Tone = "wait" | "ok" | "error";
 
@@ -46,9 +46,12 @@ export function WaitingView({
   onSent,
   progress,
   peerPresent,
+  peerLeft,
+  presenceKnown,
   failed,
   everConnected,
   banners,
+  onBack,
   onClose,
   closeLabel,
   closeDisabled,
@@ -64,9 +67,15 @@ export function WaitingView({
   onSent: (via: SentVia) => void;
   progress: JoinProgress | null;
   peerPresent: boolean;
+  /** 고객이 채널에 있다가 나가는 것을 이 화면에서 봤다 */
+  peerLeft: boolean;
+  /** 이번 통화 대기에서 채널 presence를 한 번이라도 받았다 */
+  presenceKnown: boolean;
   failed: boolean;
   everConnected: boolean;
   banners: ReactNode;
+  /** '<'(상담 목록으로). 찍은 사진이 있으면 먼저 저장할지 묻는다 (CALL-16) */
+  onBack?: () => void;
   onClose: () => void;
   closeLabel: string;
   closeDisabled?: boolean;
@@ -80,6 +89,7 @@ export function WaitingView({
 
   const appBar = (
     <AppBar
+      onBack={onBack}
       right={
         <AppBarAction onClick={onClose} disabled={closeDisabled}>
           {closeLabel}
@@ -139,54 +149,68 @@ export function WaitingView({
     );
   }
 
-  // E04 고객 기다리는 중 — 제목이 지금 단계를 말한다
+  // E04 고객 기다리는 중 — 제목이 지금 단계를 말한다 (wait-status.ts)
   const cam = progress?.camera ?? null;
-  const coming = peerPresent || cam === "granted";
-  const head: { tone: Tone; title: ReactNode; sub: ReactNode } = failed
-    ? { tone: "error", title: "연결에 실패했어요", sub: "고객님께 링크를 다시 열어 달라고 말씀해 주세요." }
-    : cam === "denied"
-      ? {
-          tone: "error",
-          title: (
-            <>
-              고객님 카메라가
-              <br />
-              막혀 있어요
-            </>
-          ),
-          sub: deniedCoach(progress?.deniedReason ?? null),
-        }
-      : coming
-        ? { tone: "ok", title: "곧 연결돼요", sub: "고객님이 카메라를 켰어요. 잠시만 기다려 주세요." }
-        : linkOpened
-          ? {
-              tone: "wait",
-              title: (
-                <>
-                  고객님이 카메라를
-                  <br />
-                  켜기를 기다리고 있어요
-                </>
-              ),
-              sub: "고객님이 카메라를 켜면 바로 연결돼요",
-            }
-          : {
-              tone: "wait",
-              title: everConnected ? (
-                <>
-                  고객님을 다시
-                  <br />
-                  기다리고 있어요
-                </>
-              ) : (
-                <>
-                  고객님이 링크를 열기를
-                  <br />
-                  기다리고 있어요
-                </>
-              ),
-              sub: `${createdLabel}에 만든 상담이에요`,
-            };
+  const { kind, coming } = waitHead({
+    failed,
+    cam,
+    peerPresent,
+    peerLeft,
+    presenceKnown,
+    everConnected,
+    linkOpened,
+    cameraAgoSec: progress?.cameraAgoSec ?? null,
+  });
+  const heads: Record<WaitKind, { tone: Tone; title: ReactNode; sub: ReactNode }> = {
+    failed: { tone: "error", title: "연결에 실패했어요", sub: "고객님께 링크를 다시 열어 달라고 말씀해 주세요." },
+    denied: {
+      tone: "error",
+      title: (
+        <>
+          고객님 카메라가
+          <br />
+          막혀 있어요
+        </>
+      ),
+      sub: DENIED_COACH[cameraFailureOf(progress?.deniedReason ?? "")],
+    },
+    // 왔다가 나갔다(창을 닫음·연결 실패·연결 전 '끝내기') 또는 새로고침 뒤 채널에 없다. 카메라 허용 기록이 남아 있어도 이쪽
+    left: {
+      tone: "wait",
+      title: (
+        <>
+          고객님을 다시
+          <br />
+          기다리고 있어요
+        </>
+      ),
+      sub: "고객님이 다시 들어오면 바로 이어져요",
+    },
+    coming: { tone: "ok", title: "곧 연결돼요", sub: "고객님이 카메라를 켰어요. 잠시만 기다려 주세요." },
+    opened: {
+      tone: "wait",
+      title: (
+        <>
+          고객님이 카메라를
+          <br />
+          켜기를 기다리고 있어요
+        </>
+      ),
+      sub: "고객님이 카메라를 켜면 바로 연결돼요",
+    },
+    waiting: {
+      tone: "wait",
+      title: (
+        <>
+          고객님이 링크를 열기를
+          <br />
+          기다리고 있어요
+        </>
+      ),
+      sub: `${createdLabel}에 만든 상담이에요`,
+    },
+  };
+  const head = heads[kind];
 
   const steps: { state: StepState; label: string }[] = [
     { state: "done", label: via ? SENT_TITLE[via] : "링크를 보냈어요" },
@@ -200,6 +224,7 @@ export function WaitingView({
         : linkOpened
           ? { state: "current", label: "카메라 허용을 기다리는 중" }
           : { state: "todo", label: "카메라 허용" },
+    // 고객이 나간 뒤에는 '연결하는 중…'을 거둔다
     coming ? { state: "current", label: "연결하는 중…" } : { state: "todo", label: "연결되면 바로 영상이 보여요" },
   ];
 
@@ -214,7 +239,7 @@ export function WaitingView({
 
       <section className="flex flex-col items-start gap-2 pt-3" aria-live="polite">
         <StatusDot tone={head.tone} />
-        <h1 className="mt-3 text-title-l" data-testid="eng-wait-title">
+        <h1 className="mt-3 text-title-l" data-testid="eng-wait-title" data-state={kind}>
           {head.title}
         </h1>
         <p className={`text-body-m ${head.tone === "error" ? "text-text-danger" : "text-text-secondary"}`}>{head.sub}</p>

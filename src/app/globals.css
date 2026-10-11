@@ -109,9 +109,14 @@
   --color-guide-on-band: var(--color-gray-0);
   --color-guide-outline: var(--color-gray-950);
 
-  /* 가리키기 — 디자인 시스템은 브랜드 블루. 지금 CALL-08·09는 빨강(red-500)이라 바꿀지 결정 필요 */
+  /* 가리키기 — 디자인 시스템 값은 --color-pointer(브랜드 블루) */
   --color-pointer: var(--color-brand-500);
   --color-pointer-halo: var(--color-gray-0);
+  /*
+   * 지금 CALL-08(레이저 포인터)·09(정지 화면 그리기)·14(AR 핀·화살표) 구현 색은 빨강 하나 (NFR-08 제약).
+   * 캔버스로 그리는 곳은 src/lib/pointer-color.ts에 같은 값을 옮겨 적었다. 바꾸려면 요구사항부터 고칠 것
+   */
+  --color-pointer-live: var(--color-red-500);
 
   --color-overlay-scrim: var(--color-black-50);
 
@@ -175,6 +180,8 @@
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.06), 0 4px 12px rgb(0 0 0 / 0.06);
   --shadow-float: 0 2px 6px rgb(0 0 0 / 0.08), 0 8px 24px rgb(0 0 0 / 0.18);
   --shadow-sheet: 0 -8px 24px rgb(0 0 0 / 0.12);
+  /* 어두운 막 위에 띄우는 노란 화살표·글자 (고객 '허용' 안내, JOIN-02) — drop-shadow-signal */
+  --drop-shadow-signal: 0 2px 6px var(--color-black-50);
 }
 
 body {

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { CallSession, sendBye, type CallQuality, type CallState } from "@/lib/webrtc/call";
 import { fetchIceServers } from "@/lib/webrtc/ice";
@@ -61,7 +60,7 @@ import type { SentVia } from "./share-buttons";
 import { AppBar, AppBarAction, CallTimer, QualityPill, ShortcutsBox } from "./call-ui";
 import type { KakaoShareArgs } from "@/lib/kakao-webhook";
 import { WaitingView } from "./waiting-view";
-import { PhotoSaveView, SavePhotosFirst } from "./photo-save-view";
+import { PhotoSaveView, SavePhotosFirst, type PhotoNotice } from "./photo-save-view";
 
 // 누가 통화를 끝냈는지. null = 고객과 연결된 적 없이 닫음
 type Closer = "engineer" | "customer" | null;
@@ -71,8 +70,9 @@ type PanelState =
   | { phase: "call"; call: CallState; peerPresent: boolean }
   // 상담을 닫는 중(endRoom). 실패하면 이 화면에서 다시 시도한다. 통화로는 돌아가지 않는다
   | { phase: "closing"; by: Closer }
-  // 상담을 닫은 뒤 통화 중 찍은 사진을 저장할지 묻는다(CALL-16). relogin: 로그인이 풀려 닫지 못했다
-  | { phase: "photos"; by: Closer; relogin: boolean }
+  // 통화 중 찍은 사진을 저장할지 묻는다(CALL-16). relogin: 저장하고 나면 로그인 화면으로.
+  // notice: 상담을 닫는 길이 아닌 데서 왔다(다시 로그인·이어받음·다른 기기에서 끝남·만료·'<'). null이면 상담을 닫은 뒤
+  | { phase: "photos"; by: Closer; relogin: boolean; notice: PhotoNotice | null }
   // 고객이 끝내서 상담을 닫았다(찍은 사진 없음)
   | { phase: "ended" };
 
@@ -156,6 +156,11 @@ export function CallPanel({
   // 링크를 어떻게 보냈는지(E03 → E04), 고객이 어디까지 왔는지 (ROOM-13)
   const [sentVia, setSentVia] = useState<SentVia | null>(null);
   const [progress, setProgress] = useState<JoinProgress | null>(null);
+  // 고객이 채널에 있는지 이번 통화 대기에서 한 번이라도 들었는지 / 있다가 나갔는지 (ROOM-13 '고객님을 다시 기다리고 있어요').
+  // 카메라 허용 기록은 지워지지 않으므로, 나간 것은 presence로 기억한다
+  const [presenceKnown, setPresenceKnown] = useState(false);
+  const [peerLeft, setPeerLeft] = useState(false);
+  const peerSeenRef = useRef(false);
   // 고객 쪽 기기가 바뀐 직후 잠깐 알린다 (BUG-04: 링크가 새서 다른 사람이 들어온 경우를 알아채게)
   const [peerChanged, setPeerChanged] = useState(false);
   const peerChangedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -253,18 +258,28 @@ export function CallPanel({
     }
   });
 
-  // 고객 진행 상황: 고객을 기다리는 동안 몇 초마다 묻는다 (링크 열림 → 카메라 허용·거부)
+  // 고객 진행 상황: 고객을 기다리는 동안 몇 초마다 묻는다 (링크 열림 → 카메라 허용·거부).
+  // 이어받기로 밀려난 화면·통화 권한 거부 화면에서도 돈다 — 그사이 다른 기기에서 상담을 끝냈거나 만료됐으면 끝난 상담 화면으로(ROOM-11)
   const waitingForCustomer =
     (state.phase === "call" && state.call !== "connected" && !(state.call === "connecting" && state.peerPresent)) ||
     (state.phase === "idle" && autoStarting);
+  const roomGoneRef = useRef<(gone: "ended" | "expired") => void>(() => {});
+  useEffect(() => {
+    roomGoneRef.current = (gone) => leaveKeepingPhotos(gone === "expired" ? "expired" : "ended-elsewhere", "refresh");
+  });
   useEffect(() => {
     if (!waitingForCustomer) return;
     let stopped = false;
     const poll = async () => {
       if (document.hidden) return;
       const p = await getJoinProgress(roomId).catch(() => null);
+      if (stopped || !p) return;
+      if (p.roomGone) {
+        if (!closingRef.current && !unmountedRef.current) roomGoneRef.current(p.roomGone);
+        return;
+      }
       // 받는 분(ROOM-16)을 이번에 읽지 못했으면(undefined) 하던 대로 둔다 — 이름을 적는 중인 칸이 사라지지 않게
-      if (!stopped && p) setProgress((prev) => (p.recipient === undefined ? { ...p, recipient: prev?.recipient } : p));
+      setProgress((prev) => (p.recipient === undefined ? { ...p, recipient: prev?.recipient } : p));
     };
     poll();
     const id = setInterval(poll, PROGRESS_POLL_MS);
@@ -298,6 +313,17 @@ export function CallPanel({
       releaseWakeLockRef.current?.();
       return;
     }
+    // 상담이 이미 끝났거나 만료됐다(다른 기기에서 끝냄·24시간 지남). 채널에 들어가 봐야 정책이 막아
+    // '통화 권한을 확인하지 못했어요'(로그인 문제처럼 보임)가 뜨므로 세션을 만들지 않고 끝난 상담 화면으로 간다 (ROOM-11)
+    if (ice.roomGone) {
+      mic?.getTracks().forEach((t) => t.stop());
+      releaseWakeLockRef.current?.();
+      releaseWakeLockRef.current = null;
+      setStarting(false);
+      setAutoStarting(false);
+      leaveKeepingPhotos("gone", "refresh");
+      return;
+    }
     micStreamRef.current = mic;
     setMicOn(!!mic);
     setTurnError(ice.turnError);
@@ -311,7 +337,10 @@ export function CallPanel({
         // 연결된 적 없는데 고객이 '통화 종료'를 눌렀다(기다리다 잘못 누름 등). 아직 통화한 것이 없으니 상담은 닫지 않고
         // 다시 기다린다. 고객이 같은 링크를 다시 열면 이어진다. 엔지니어가 들어오기 전에 누른 경우(종료 알림이 아무에게도
         // 안 감)와도 결과가 같다. 그만두려는 것이었다면 엔지니어가 '상담 닫기'로 닫는다
-        const call: CallState = state === "ended" && !everConnectedRef.current ? "waiting" : state;
+        const endedBeforeConnect = state === "ended" && !everConnectedRef.current;
+        const call: CallState = endedBeforeConnect ? "waiting" : state;
+        // 고객은 나갔다 — 카메라 허용 기록이 남아 있어도 '곧 연결돼요'가 아니라 다시 기다린다
+        if (endedBeforeConnect) setPeerLeft(true);
         lastCallRef.current = call;
         // 연결이 바뀌면 고객 쪽 정지 화면도 사라지므로 이쪽도 풀어 둔다
         if (call !== "connected") {
@@ -374,11 +403,20 @@ export function CallPanel({
         peerChangedTimerRef.current = setTimeout(() => setPeerChanged(false), 8000);
       },
       onPeerPresent: (present) => {
+        setPresenceKnown(true);
+        if (present) {
+          peerSeenRef.current = true;
+          setPeerLeft(false);
+        } else if (peerSeenRef.current) {
+          setPeerLeft(true);
+        }
         setState((prev) =>
           prev.phase === "call" ? { ...prev, peerPresent: present } : prev,
         );
       },
     });
+    // 새 세션은 고객이 채널에 있는지 아직 모른다
+    setPresenceKnown(false);
     sessionRef.current = session;
     setAnchorLink(session.anchorLink);
     setGuideLink(session.guideLink);
@@ -611,16 +649,37 @@ export function CallPanel({
   }, [connectedNow, sheet]);
 
   // 고객 화면에 종료를 알리고(bye) 이쪽 연결·마이크·화면 켜짐을 정리한다.
-  // 세션이 없어도(연결 준비 전, 새로고침 후) 기다리던 고객 화면이 '상담이 끝났어요'로 바뀌어야 한다 — REST로 보내고 잠깐 기다린다
+  // 세션이 없어도(연결 준비 전, 새로고침 후) 기다리던 고객 화면이 '상담이 끝났어요'로 바뀌어야 한다 — REST로 보내고 잠깐 기다린다.
+  // 세션이 있어도 종료 알림이 가는 것을 기다린다(채널을 만들기 전이면 세션이 REST로 대신 보낸다). 상담을 닫으면 채널 정책이 bye를 막는다
   async function hangupAndStop() {
     const session = sessionRef.current;
-    session?.hangup();
+    const bye = session ? session.hangup() : sendBye(roomId, "engineer");
     stopSession();
-    if (!session) {
-      await Promise.race([
-        sendBye(roomId, "engineer").catch(() => {}),
-        new Promise((r) => setTimeout(r, BYE_WAIT_MS)),
-      ]);
+    await Promise.race([
+      Promise.resolve(bye).catch(() => {}),
+      new Promise((r) => setTimeout(r, BYE_WAIT_MS)),
+    ]);
+  }
+
+  // 상담을 닫지 않고 이 화면을 떠난다. 저장 안 한 사진이 있으면 먼저 사진 저장 화면에서 묻고(CALL-16), 떠날 곳은 그 화면이 정한다.
+  //  - login: 통화 중 로그인이 풀려 다시 로그인 (다시 로그인하면 이 상담으로 돌아온다)
+  //  - dashboard: 상담 목록으로 (상담은 열린 채로 둔다. 종료 알림은 보내지 않는다)
+  //  - refresh: 상담이 이미 끝났거나 만료됐다. 이 주소를 다시 그려 끝난 상담 화면(ROOM-11)을 띄운다
+  function leaveKeepingPhotos(notice: PhotoNotice, then: "login" | "dashboard" | "refresh") {
+    if (photosRef.current.length > 0 && !photosSavedRef.current) {
+      closingRef.current = true;
+      stopSession();
+      setSheet(null);
+      setState({ phase: "photos", by: null, relogin: then === "login", notice });
+      return;
+    }
+    if (then === "login") router.replace(`/login?next=/room/${roomId}`);
+    else if (then === "dashboard") router.push("/dashboard");
+    else {
+      closingRef.current = true;
+      stopSession();
+      setSheet(null);
+      router.refresh();
     }
   }
 
@@ -686,14 +745,14 @@ export function CallPanel({
     const hasPhotos = photosRef.current.length > 0 && !photosSavedRef.current;
     if (result?.ok) {
       // 찍은 사진이 있으면 지워지기 전에 저장할지 묻는다. 없으면 고객이 끝낸 경우만 알리고, 내가 끝냈으면 바로 목록으로
-      if (hasPhotos) setState({ phase: "photos", by, relogin: false });
+      if (hasPhotos) setState({ phase: "photos", by, relogin: false, notice: null });
       else if (by === "customer") setState({ phase: "ended" });
       else router.replace("/dashboard");
       return;
     }
     if (result?.reason === "auth") {
       // 다시 로그인하면 끝내지 못한 이 상담으로 돌아온다. 사진은 로그인 화면으로 가면 지워지니 먼저 묻는다
-      if (hasPhotos) setState({ phase: "photos", by, relogin: true });
+      if (hasPhotos) setState({ phase: "photos", by, relogin: true, notice: null });
       else router.replace(`/login?next=/room/${roomId}`);
       return;
     }
@@ -743,16 +802,18 @@ export function CallPanel({
     </Banner>
   );
 
-  const peerNotice = peerChanged && (
-    <Banner
-      tone="warning"
-      role="alert"
-      icon={<AlertIcon className="size-[22px]" />}
-      sub="고객님이 새로고침했거나 다른 기기로 들어왔어요. 모르는 사람이면 통화를 끝내세요."
-    >
-      고객 쪽 기기가 바뀌었어요
-    </Banner>
-  );
+  // endName: 이 화면에서 끝내는 버튼 이름 (통화 화면 '종료', 기다리는 화면 '통화 종료'·'상담 닫기')
+  const peerNotice = (endName: string) =>
+    peerChanged && (
+      <Banner
+        tone="warning"
+        role="alert"
+        icon={<AlertIcon className="size-[22px]" />}
+        sub={`고객님이 새로고침했거나 다른 기기로 들어왔어요. 모르는 사람이면 ‘${endName}’를 눌러 주세요.`}
+      >
+        고객 쪽 기기가 바뀌었어요
+      </Banner>
+    );
 
   if (state.phase === "photos") {
     return (
@@ -760,6 +821,7 @@ export function CallPanel({
         photos={photos}
         byCustomer={state.by === "customer"}
         relogin={state.relogin}
+        notice={state.notice}
         onLeave={() => router.replace(state.relogin ? `/login?next=/room/${roomId}` : "/dashboard")}
       />
     );
@@ -926,14 +988,17 @@ export function CallPanel({
             </span>
           </div>
           {turnError && (
+            // 누르는 자리는 48px, 보이는 원은 36px (옆 '연결 좋음' 알약과 붙어 있어 작으면 잘 안 눌린다)
             <button
               type="button"
               onClick={() => setTurnOpen((o) => !o)}
               aria-expanded={turnOpen}
               aria-label="연결 경고 보기"
-              className="grid size-9 flex-none place-items-center rounded-full bg-warning-tint text-text-warning"
+              className="grid size-touch flex-none place-items-center"
             >
-              <AlertIcon className="size-5" />
+              <span className="grid size-9 place-items-center rounded-full bg-warning-tint text-text-warning">
+                <AlertIcon className="size-5" />
+              </span>
             </button>
           )}
           <QualityPill quality={quality} connecting={!connected} />
@@ -952,7 +1017,7 @@ export function CallPanel({
             onPointerUp={frozen ? undefined : onPressUp}
             onPointerCancel={endPress}
             onContextMenu={(e) => e.preventDefault()}
-            className="relative min-h-0 flex-1 touch-none overflow-hidden bg-black select-none [-webkit-touch-callout:none]"
+            className="relative min-h-0 flex-1 touch-none overflow-hidden bg-call-bg select-none [-webkit-touch-callout:none]"
           >
             <video
               ref={videoRef}
@@ -1004,7 +1069,7 @@ export function CallPanel({
                 </Banner>
               )}
               {turnOpen && turnBanner}
-              {peerNotice}
+              {peerNotice("종료")}
               {freezeError && !frozen && (
                 <Banner tone="error" role="alert">
                   연결이 불안정해 화면을 멈추지 못했어요. 다시 눌러 주세요.
@@ -1059,13 +1124,13 @@ export function CallPanel({
                 onPointerDown={(e) => e.stopPropagation()}
                 onPointerUp={(e) => e.stopPropagation()}
                 disabled={photoBusy || unstable}
-                className="absolute right-3 bottom-3 z-20 grid size-14 place-items-center rounded-full bg-gray-0 text-gray-900 shadow-float active:scale-95 disabled:opacity-60"
+                className="absolute right-3 bottom-3 z-20 grid size-14 place-items-center rounded-full bg-bg-page text-icon shadow-float active:scale-95 disabled:opacity-60"
               >
                 {photoBusy ? <Spinner className="size-6" /> : <CameraIcon className="size-7" />}
                 {photos.length > 0 && (
                   <span
                     data-testid="eng-photo-count"
-                    className="absolute -top-1 -right-1 grid h-6 min-w-6 place-items-center rounded-full bg-call-bg px-1.5 text-label-s text-call-text ring-2 ring-gray-0"
+                    className="absolute -top-1 -right-1 grid h-6 min-w-6 place-items-center rounded-full bg-call-bg px-1.5 text-label-s text-call-text ring-2 ring-bg-page"
                   >
                     {photos.length}
                   </span>
@@ -1122,18 +1187,25 @@ export function CallPanel({
         title="다른 기기에서 이어받았어요"
         actions={
           <>
-            <Button size="xl" block onClick={() => start()} loading={starting}>
+            <Button size="xl" block onClick={() => start()} loading={starting} data-testid="eng-take-back">
               {starting ? "준비 중…" : "여기서 다시 받기"}
             </Button>
-            <Link href="/dashboard" className="py-3 text-center text-body-m text-text-secondary underline underline-offset-4">
+            {/* 이 기기에서 찍은 사진은 이 기기에만 있다 — 저장 안 한 사진이 있으면 먼저 묻는다 (CALL-16) */}
+            <Button
+              variant="ghost"
+              size="m"
+              block
+              onClick={() => leaveKeepingPhotos("replaced", "dashboard")}
+              data-testid="eng-replaced-leave"
+            >
               상담 목록으로
-            </Link>
+            </Button>
           </>
         }
       >
         이 기기는 통화에서 빠졌어요.
         <br />
-        여기서 계속하려면 아래 버튼을 누르세요.
+        이 기기로 계속하려면 ‘여기서 다시 받기’를 눌러 주세요.
       </NoticeScreen>
     );
   }
@@ -1145,7 +1217,8 @@ export function CallPanel({
         icon={<AlertIcon className="size-10" />}
         title="통화 권한을 확인하지 못했어요"
         actions={
-          <Button size="xl" block onClick={() => router.replace(`/login?next=/room/${roomId}`)}>
+          // 통화 중 찍은 사진은 로그인 화면으로 가면 사라진다 — 먼저 묻는다 (CALL-16)
+          <Button size="xl" block onClick={() => leaveKeepingPhotos("relogin-call", "login")} data-testid="eng-relogin">
             다시 로그인
           </Button>
         }
@@ -1169,14 +1242,17 @@ export function CallPanel({
       onSent={setSentVia}
       progress={progress}
       peerPresent={peerPresent}
+      peerLeft={peerLeft}
+      presenceKnown={presenceKnown}
       failed={call === "failed"}
       everConnected={everConnected}
       banners={
         <>
           {turnBanner}
-          {peerNotice}
+          {peerNotice(endLabel)}
         </>
       }
+      onBack={() => leaveKeepingPhotos("left", "dashboard")}
       onClose={requestEnd}
       closeLabel={endLabel}
       closeDisabled={starting && !autoStarting}

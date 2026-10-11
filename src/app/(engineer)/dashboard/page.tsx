@@ -7,7 +7,7 @@ import { endedConnected } from "@/lib/metrics";
 import { engineerNameOf } from "@/lib/engineer-name";
 import { BottomCta } from "@/components/ui/bottom-cta";
 import { Brand } from "@/components/ui/brand";
-import { ChartIcon, ChevronRightIcon, ClockIcon, LogoutIcon, MessageIcon, RefreshIcon } from "@/components/ui/icons";
+import { AlertIcon, ChartIcon, ChevronRightIcon, ClockIcon, LogoutIcon, MessageIcon, RefreshIcon } from "@/components/ui/icons";
 import { StatusChip } from "@/components/ui/status-chip";
 import { logout } from "../login/actions";
 import { createRoom } from "./actions";
@@ -55,7 +55,7 @@ export default async function DashboardPage() {
   // proxy가 1차로 막지만, 데이터 접근 지점에서 한 번 더 확인
   if (!user) redirect("/login");
 
-  const [{ data: rooms }, month] = await Promise.all([
+  const [{ data: rooms, error: roomsError }, month] = await Promise.all([
     supabase
       .from("rooms")
       .select("id, status, resolved_remotely, created_at, expires_at, ended_at")
@@ -70,7 +70,8 @@ export default async function DashboardPage() {
   const list = (rooms ?? []) as Room[];
   const open = list.filter((r) => isOpen(r, now));
   const past = list.filter((r) => !isOpen(r, now));
-  const monthCount = month.count ?? 0;
+  // 읽기에 실패했으면 0건으로 보이지 않게 — 숫자 자리에 '—'
+  const monthCount = month.error || month.count === null ? null : month.count;
 
   // 끝난 상담이 고객과 연결됐었는지 (metrics.endedConnected와 같은 판정).
   // 예전 상담은 방에 남은 해결 여부로, 그 밖에는 'ended' 기록으로 가린다. 목록에 보이는 방 것만 한 번에 읽는다(RLS로 자기 방만)
@@ -126,14 +127,14 @@ export default async function DashboardPage() {
           <Link
             href="/stats"
             data-testid="month-card"
-            aria-label={`이번 달 상담 ${monthCount}건, 통계 보기`}
+            aria-label={monthCount === null ? "이번 달 상담 수를 불러오지 못했어요, 통계 보기" : `이번 달 상담 ${monthCount}건, 통계 보기`}
             className="flex flex-col rounded-3xl bg-bg-page p-5 transition-colors active:bg-bg-subtle"
           >
             <span className="flex items-center justify-between text-label-m text-text-secondary">
               이번 달 상담
               <ChevronRightIcon className="size-5 text-icon-secondary" />
             </span>
-            <span className="mt-1 text-display-l text-text-primary">{monthCount}건</span>
+            <span className="mt-1 text-display-l text-text-primary">{monthCount === null ? "—" : `${monthCount}건`}</span>
           </Link>
 
           {open.length > 0 && (
@@ -182,7 +183,16 @@ export default async function DashboardPage() {
 
           <section className="rounded-3xl bg-bg-page py-2">
             <h2 className="px-5 pt-3 pb-1 text-title-s">최근 상담</h2>
-            {list.length === 0 ? (
+            {roomsError ? (
+              // 읽기에 실패했으면 '아직 상담이 없어요'로 단정하지 않는다
+              <div data-testid="dash-load-error" className="flex flex-col items-center gap-2 px-6 pt-6 pb-8 text-center">
+                <span className="mb-2 grid size-14 place-items-center rounded-full bg-bg-muted text-icon-secondary">
+                  <AlertIcon className="size-7" />
+                </span>
+                <p className="text-label-l">상담 목록을 불러오지 못했어요</p>
+                <p className="text-body-m text-text-secondary">화면을 새로고침해 주세요</p>
+              </div>
+            ) : list.length === 0 ? (
               <div className="flex flex-col items-center gap-2 px-6 pt-6 pb-8 text-center">
                 <span className="mb-2 grid size-14 place-items-center rounded-full bg-bg-muted text-icon-secondary">
                   <MessageIcon className="size-7" />

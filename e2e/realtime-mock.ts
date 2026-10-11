@@ -3,6 +3,7 @@ import type { BrowserContext, Route, WebSocketRoute } from "@playwright/test";
 // Supabase Realtime 가짜 (브라우저 WebSocket을 Playwright가 가로챔 — 서버 없음).
 // 통화 시그널링(src/lib/webrtc/call.ts)이 쓰는 만큼만: phx_join · heartbeat · presence(track) · broadcast(offer/answer/ice/bye),
 // 그리고 소켓 없이 REST로 보내는 broadcast(세션 없이 보내는 종료 알림 sendBye: /realtime/v1/api/broadcast).
+// 테스트 손잡이: disconnect(소켓만 끊긴 척) · presence(지금 올라 있는 기기) · inject(제3자가 보낸 신호 흉내).
 // 프로토콜: Phoenix vsn 2.0.0 — 텍스트는 JSON 배열 [join_ref, ref, topic, event, payload],
 // 사용자 broadcast는 바이너리 (보냄: kind 3 userBroadcastPush / 받음: kind 4 userBroadcast, realtime-js serializer.js).
 // 여러 페이지(엔지니어·고객, 다른 컨텍스트여도 됨)의 소켓을 이 허브 하나가 이어 준다.
@@ -30,8 +31,8 @@ export class RealtimeHub {
   private seq = 0;
   private readonly clients = new Set<Client>();
   /** topic → client → presence */
-  private readonly presence = new Map<string, Map<Client, PresenceEntry>>();
-  /** 전달한 broadcast (디버깅·검증용). from 0 = 소켓 없이 REST로 보낸 것 */
+  private readonly presences = new Map<string, Map<Client, PresenceEntry>>();
+  /** 전달한 broadcast (디버깅·검증용). from 0 = 소켓 없이 REST로 보낸 것, -1 = 테스트가 inject로 넣은 것 */
   readonly broadcasts: { topic: string; event: string; from: number }[] = [];
   /** 이 이벤트(offer·answer 등)의 broadcast는 버린다 — '연결 중' 상태에 머물게 할 때 (화면 카탈로그) */
   readonly drop = new Set<string>();
@@ -87,12 +88,56 @@ export class RealtimeHub {
         console.warn("[realtime-mock] 메시지 처리 실패:", e);
       }
     });
-    ws.onClose(() => this.disconnect(c));
+    ws.onClose(() => this.removeClient(c));
   }
 
-  private disconnect(c: Client) {
+  private removeClient(c: Client) {
     if (!this.clients.delete(c)) return;
     for (const topic of c.topics.keys()) this.leave(c, topic);
+  }
+
+  /** 테스트는 'realtime:' 없이 room:{id}:c처럼 써도 된다 */
+  private static fullTopic(topic: string) {
+    return topic.startsWith("realtime:") ? topic : `realtime:${topic}`;
+  }
+
+  private static shortTopic(topic: string) {
+    return topic.replace(/^realtime:/, "");
+  }
+
+  /**
+   * 시그널링 소켓만 잠깐 끊긴 척 (앱 전환·망 전환, CALL-05). match에 맞는 채널에 자기 presence를 올린 클라이언트
+   * (= 그 채널로 보내는 쪽)의 소켓을 닫는다. 그 채널을 듣기만 하는 상대 쪽 소켓은 그대로다.
+   * 서버가 끊긴 것을 알아챈 것처럼 구성원에게 presence leave가 가고, realtime-js가 스스로 다시 붙어 같은 id로 다시 track한다.
+   * match는 'realtime:'을 뺀 이름(room:{id}:c)을 받는다. 돌려주는 값 = 닫은 소켓 수
+   */
+  disconnect(match: (topic: string) => boolean): number {
+    const targets = [...this.clients].filter((c) =>
+      [...this.presences].some(([topic, map]) => map.has(c) && match(RealtimeHub.shortTopic(topic))),
+    );
+    for (const c of targets) {
+      this.removeClient(c);
+      // 'Unauthorized' 같은 말을 넣지 말 것 — 통화 세션이 권한 거부로 본다
+      c.ws.close({ code: 4000, reason: "e2e dropped" }).catch(() => {});
+    }
+    return targets.length;
+  }
+
+  /** 이 채널에 지금 올라 있는 presence 메타 ({id, at, phx_ref}) */
+  presence(topic: string): Record<string, unknown>[] {
+    return [...(this.presences.get(RealtimeHub.fullTopic(topic))?.values() ?? [])].map((e) => e.meta);
+  }
+
+  /**
+   * 이 채널 구성원에게 누군가 broadcast를 보낸 척한다 — 링크를 가진 제3자가 고객 채널(:c)에 쓴 신호 흉내 (CALL-12).
+   * 받는 쪽 형식은 실제 broadcast와 같다. drop 목록은 보지 않는다
+   */
+  inject(topic: string, event: string, payload: unknown) {
+    const full = RealtimeHub.fullTopic(topic);
+    this.broadcasts.push({ topic: full, event, from: -1 });
+    for (const c of this.members(full)) {
+      this.sendJson(c, [null, null, full, "broadcast", { type: "broadcast", event, payload }]);
+    }
   }
 
   private sendJson(c: Client, msg: unknown[]) {
@@ -121,7 +166,7 @@ export class RealtimeHub {
 
   private presenceState(topic: string) {
     const out: Record<string, { metas: Record<string, unknown>[] }> = {};
-    for (const e of this.presence.get(topic)?.values() ?? []) {
+    for (const e of this.presences.get(topic)?.values() ?? []) {
       (out[e.key] ??= { metas: [] }).metas.push(e.meta);
     }
     return out;
@@ -159,8 +204,8 @@ export class RealtimeHub {
         if (payload?.event === "track") {
           const key = j.presenceKey ?? `anon-${c.id}`;
           const meta = { ...(payload.payload ?? {}), phx_ref: `p${++this.seq}` };
-          const map = this.presence.get(topic) ?? new Map<Client, PresenceEntry>();
-          this.presence.set(topic, map);
+          const map = this.presences.get(topic) ?? new Map<Client, PresenceEntry>();
+          this.presences.set(topic, map);
           const prev = map.get(c);
           map.set(c, { key, meta });
           const diff = {
@@ -190,7 +235,7 @@ export class RealtimeHub {
   }
 
   private untrack(c: Client, topic: string) {
-    const map = this.presence.get(topic);
+    const map = this.presences.get(topic);
     const prev = map?.get(c);
     if (!map || !prev) return;
     map.delete(c);

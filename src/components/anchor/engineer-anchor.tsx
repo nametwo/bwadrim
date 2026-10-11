@@ -8,6 +8,7 @@ import {
   type EngineerSnapshot,
 } from "@/lib/tracking/session";
 import { AnchorOverlay } from "@/components/anchor-overlay";
+import { Button } from "@/components/ui/button";
 import { SessionHolder } from "./session-holder";
 import { engineerChip, needsRetap, referenceToast, type ChipTone } from "./usage";
 
@@ -25,7 +26,8 @@ const TONE_CLASS: Record<ChipTone, string> = {
   ok: "bg-success",
   wait: "bg-call-text-secondary",
   bad: "bg-danger",
-  guide: "bg-danger",
+  // 화면 밖이라 화살표로 안내하는 건 정상 흐름이다. 빨강(danger)은 '놓침'에만
+  guide: "bg-warning",
 };
 
 function select(s: EngineerSnapshot) {
@@ -107,31 +109,33 @@ export function EngineerAnchorLayer({
       {(chip || showToast || retap) && (
         <div className="pointer-events-none absolute inset-x-2 top-2 flex flex-col items-start gap-1.5">
           {chip && (
-            <span className="flex items-center gap-2 rounded-full bg-black-80 px-3 py-1.5 text-sm font-medium text-call-text">
+            <span className="flex items-center gap-2 rounded-full bg-black-80 px-3 py-1.5 text-label-s text-call-text">
               <span className={`h-2.5 w-2.5 rounded-full ${TONE_CLASS[chip.tone]}`} aria-hidden="true" />
               {chip.text}
             </span>
           )}
           {showToast && (
-            <span className="rounded-xl bg-black-80 px-3 py-2 text-sm text-call-text">{toast}</span>
+            <span className="rounded-xl bg-black-80 px-3 py-2 text-body-s text-call-text">{toast}</span>
           )}
           {retap && (
-            <span className="rounded-xl bg-black-80 px-3 py-2 text-sm text-call-text">
+            <span className="rounded-xl bg-black-80 px-3 py-2 text-body-s text-call-text">
               표시를 놓쳤어요. 다시 길게 눌러 주세요
             </span>
           )}
         </div>
       )}
       {snap.anchor && (
-        <button
-          type="button"
+        <Button
+          variant="call"
+          size="m"
           // 영상 위 제스처(탭·길게 누르기)로 번지지 않게
           onPointerDown={(e) => e.stopPropagation()}
           onClick={() => apiRef.current?.clear()}
-          className="absolute top-2 right-2 h-11 rounded-full bg-black-80 px-4 text-sm font-semibold text-call-text active:bg-call-control-pressed"
+          // 영상 위라 칩과 같은 반투명 알약. call 기본(bg-call-control·rounded-xl)보다 앞서게 !를 붙인다
+          className="absolute top-2 right-2 rounded-full! bg-black-80! active:bg-call-control-pressed!"
         >
           핀 지우기
-        </button>
+        </Button>
       )}
     </>
   );

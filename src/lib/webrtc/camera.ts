@@ -49,7 +49,7 @@ async function openCamera(facing: Facing): Promise<MediaStreamTrack> {
 
 export type SwitchResult =
   | { ok: true; stream: MediaStream; facing: Facing }
-  // stream: 실패 후 쓸 스트림(원래 카메라). null이면 카메라를 다시 열지 못했다
+  // stream: 실패 후 쓸 스트림(원래 카메라나 아무 카메라). null이면 카메라를 다시 열지 못했다 — 영상이 꺼진 채다
   | {
       ok: false;
       reason: "failed" | "needs_tap";
@@ -59,7 +59,8 @@ export type SwitchResult =
 
 // 반대쪽 카메라로 바꾼 새 스트림(기존 마이크 유지)을 돌려준다.
 // 1) 지금 카메라를 켠 채 새 카메라를 연다(끊김 없음) 2) 안 되면 지금 카메라를 끄고 연다
-// (카메라 두 개를 동시에 못 여는 폰) 3) 그래도 안 되면 원래 카메라를 다시 연다.
+// (카메라 두 개를 동시에 못 여는 폰) 3) 그래도 안 되면 원래 카메라를 다시 연다
+// 4) 그것도 안 되면 방향을 따지지 않고 아무 카메라나 연다. facing은 원래 값으로 둔다(어느 쪽인지 모른다).
 export async function switchCamera(
   current: MediaStream,
   from: Facing,
@@ -87,7 +88,12 @@ export async function switchCamera(
       const back = await openCamera(from);
       return { ok: false, reason: "failed", stream: withVideo(back), facing: from };
     } catch {
-      return { ok: false, reason: "failed", stream: null, facing: from };
+      try {
+        const any = await navigator.mediaDevices.getUserMedia({ video: true });
+        return { ok: false, reason: "failed", stream: withVideo(any.getVideoTracks()[0]), facing: from };
+      } catch {
+        return { ok: false, reason: "failed", stream: null, facing: from };
+      }
     }
   }
 }

@@ -7,25 +7,30 @@ import { Button } from "@/components/ui/button";
 import { CheckIcon, CloseIcon, CopyIcon, ExternalIcon, MoreIcon } from "@/components/ui/icons";
 
 // 인앱 브라우저로 열렸을 때 (고객 JOIN-10 피그마 C05, 엔지니어 AUTH-09). 카카오톡·라인은 자동으로 기본 브라우저로 넘기고,
-// 나머지 앱은 직접 열도록 메뉴 그림으로 안내한다. 안드로이드 등에서 그 자리에서 되는 경우를 위해 '이대로 계속하기'를 둔다.
+// 나머지 앱은 직접 열도록 메뉴 그림으로 안내한다. 이름을 모르는 앱의 웹뷰(webview, 고객 화면만)는 메뉴가 어디 있는지 몰라 복사 안내만 한다.
+// 안드로이드 등에서 그 자리에서 되는 경우를 위해 '이대로 계속하기'를 둔다.
 // 제목·설명은 쓰는 쪽이 정하고, '이대로 계속하기'를 누르면 children(원래 화면)을 보여 준다.
+// audience="customer"면 고객 기준(NFR-02)으로 키운다: 버튼 아래 안내 18px, 누를 버튼은 모두 64px
 export function OpenInBrowser({
   kind,
   title,
   body,
   testId,
+  audience = "engineer",
   children,
 }: {
   kind: InAppKind;
   title: ReactNode;
   body: ReactNode;
   testId?: string;
+  audience?: "customer" | "engineer";
   children: ReactNode;
 }) {
   const [stay, setStay] = useState(false);
   const [copied, setCopied] = useState(false);
   const triedRef = useRef(false);
   const canOpen = kind === "kakaotalk" || kind === "line";
+  const customer = audience === "customer";
 
   function openExternal() {
     const target = externalOpenUrl(kind, window.location.href);
@@ -52,17 +57,22 @@ export function OpenInBrowser({
 
   if (stay) return children;
 
-  const copyButton = (primary: boolean) => (
-    <Button
-      variant={primary ? "primary" : "ghost"}
-      size={primary ? "xl" : "m"}
-      block
-      onClick={copy}
-      icon={copied ? <CheckIcon className="size-5" /> : <CopyIcon className="size-5" />}
-    >
-      {copied ? "복사됐어요" : "링크 복사하기"}
-    </Button>
-  );
+  // 고객 화면에서는 보조 버튼도 64px (회색 바탕), 엔지니어 화면에서는 글자 버튼
+  const copyButton = (primary: boolean) => {
+    const big = primary || customer;
+    const iconClass = big ? "size-6" : "size-5";
+    return (
+      <Button
+        variant={primary ? "primary" : customer ? "secondary" : "ghost"}
+        size={big ? "xl" : "m"}
+        block
+        onClick={copy}
+        icon={copied ? <CheckIcon className={iconClass} /> : <CopyIcon className={iconClass} />}
+      >
+        {copied ? "복사됐어요" : "링크 복사하기"}
+      </Button>
+    );
+  };
 
   return (
     <NoticeScreen
@@ -91,10 +101,18 @@ export function OpenInBrowser({
           </button>
         </>
       }
-      footer={canOpen ? undefined : "복사한 링크를 사파리·크롬·삼성 인터넷 주소창에 붙여 넣어도 돼요."}
+      footer={
+        canOpen
+          ? undefined
+          : kind === "webview"
+            ? "복사한 링크를 사파리·크롬·삼성 인터넷 주소창에 붙여 넣어 주세요."
+            : "복사한 링크를 사파리·크롬·삼성 인터넷 주소창에 붙여 넣어도 돼요."
+      }
+      footerSize={customer ? "l" : "s"}
     >
       <p>{body}</p>
-      {!canOpen && <MenuPicture />}
+      {/* 이름을 모르는 앱은 메뉴 모양·자리를 몰라 그림을 빼고, 복사해 붙여 넣는 길만 알려 준다 */}
+      {!canOpen && kind !== "webview" && <MenuPicture />}
     </NoticeScreen>
   );
 }

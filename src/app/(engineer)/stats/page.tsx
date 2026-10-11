@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { ChevronLeftIcon } from "@/components/ui/icons";
 import { StatCard } from "@/components/ui/stat-card";
+import { formatAvgDuration } from "@/lib/format";
 import {
   computeMetrics,
   type MetricEvent,
@@ -21,21 +22,26 @@ const PERIODS = [
   { key: "all", label: "전체", days: null },
 ] as const;
 
-// Supabase는 한 번에 최대 1000줄까지 준다 — 끝까지 나눠 받는다
+// Supabase는 한 번에 최대 1000줄까지 준다 — 나눠 받는다. MAX_PAGES쪽까지 다 차면 거기서 멈추고 잘렸다고 알린다
 const PAGE = 1000;
 const MAX_PAGES = 50;
+// 이벤트는 내 방 id로 좁혀 받는다. 주소가 너무 길어지지 않게 100개씩, 한 번에 4묶음까지
+const ROOM_CHUNK = 100;
+const PARALLEL = 4;
+// 지표(metrics.ts)에 쓰는 이벤트만 받는다 — room_created·kakao_sent·도구 기록 등은 세지 않는다
+const METRIC_EVENTS = ["link_opened", "camera_granted", "connected", "relay_used", "pointer_used", "freeze_used", "ended"];
 
 async function fetchAll<T>(
   page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
-): Promise<T[]> {
+): Promise<{ rows: T[]; truncated: boolean }> {
   const rows: T[] = [];
   for (let i = 0; i < MAX_PAGES; i++) {
     const { data, error } = await page(i * PAGE, (i + 1) * PAGE - 1);
     if (error) throw error;
-    rows.push(...(data ?? []));
-    if (!data || data.length < PAGE) break;
+    for (const r of data ?? []) rows.push(r);
+    if (!data || data.length < PAGE) return { rows, truncated: false };
   }
-  return rows;
+  return { rows, truncated: true };
 }
 
 function daysAgo(days: number) {
@@ -46,39 +52,51 @@ function percent(r: Ratio) {
   return r.of === 0 ? "—" : `${Math.round((r.hit / r.of) * 100)}%`;
 }
 
-function minutes(sec: number) {
-  const m = Math.floor(sec / 60);
-  const s = Math.round(sec % 60);
-  return m ? `${m}분 ${s}초` : `${s}초`;
-}
-
 // 핵심 지표 화면 (DATA-06). 내 세션만 센다(RLS)
 export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) redirect("/login?next=/stats");
-
   const { period: raw } = await searchParams;
-  const period = PERIODS.find((p) => p.key === raw) ?? PERIODS[1];
+  const picked = PERIODS.find((p) => p.key === raw);
+  // 로그인 뒤 고른 기간 그대로 돌아오게 (AUTH-04)
+  if (!user) redirect(`/login?next=${encodeURIComponent(picked ? `/stats?period=${picked.key}` : "/stats")}`);
+
+  const period = picked ?? PERIODS[1];
   const since = period.days ? daysAgo(period.days) : null;
 
-  const [rooms, events] = await Promise.all([
-    fetchAll<MetricRoom>((from, to) => {
-      let q = supabase.from("rooms").select("id, resolved_remotely");
-      if (since) q = q.gte("created_at", since);
-      return q.order("created_at", { ascending: false }).range(from, to);
-    }),
-    // 기간 안에 만든 세션의 이벤트만 쓰므로, 기간 시작 이후 이벤트만 받아도 된다
-    fetchAll<MetricEvent>((from, to) => {
-      let q = supabase.from("events").select("room_id, name, props");
-      if (since) q = q.gte("created_at", since);
-      return q.order("id", { ascending: true }).range(from, to);
-    }),
-  ]);
+  // 기간 안에 만든 상담을 먼저 받고, 그 상담들의 이벤트만 받는다 (이벤트가 언제 남았는지는 보지 않는다)
+  const rooms = await fetchAll<MetricRoom>((from, to) => {
+    let q = supabase.from("rooms").select("id, resolved_remotely");
+    if (since) q = q.gte("created_at", since);
+    return q.order("created_at", { ascending: false }).range(from, to);
+  });
+  const ids = rooms.rows.map((r) => r.id);
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += ROOM_CHUNK) chunks.push(ids.slice(i, i + ROOM_CHUNK));
+  const parts: { rows: MetricEvent[]; truncated: boolean }[] = [];
+  for (let i = 0; i < chunks.length; i += PARALLEL) {
+    const got = await Promise.all(
+      chunks.slice(i, i + PARALLEL).map((chunk) =>
+        fetchAll<MetricEvent>((from, to) =>
+          supabase
+            .from("events")
+            .select("room_id, name, props")
+            .in("room_id", chunk)
+            .in("name", METRIC_EVENTS)
+            .order("id", { ascending: true })
+            .range(from, to),
+        ),
+      ),
+    );
+    parts.push(...got);
+  }
+  const events = parts.flatMap((p) => p.rows);
+  // 어느 쪽이든 끝까지 못 받았으면 숫자가 일부만 센 것이라고 밝힌다
+  const truncated = rooms.truncated || parts.some((p) => p.truncated);
 
-  const m = computeMetrics(rooms, events);
+  const m = computeMetrics(rooms.rows, events);
 
   // 2×2 네 칸 (숫자 + 'N건 중 M건')
   const cards: { title: string; value: string; detail: string }[] = [
@@ -99,7 +117,7 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
     },
     {
       title: "상담당 평균",
-      value: m.avgDurationSec === null ? "—" : minutes(m.avgDurationSec),
+      value: m.avgDurationSec === null ? "—" : formatAvgDuration(m.avgDurationSec),
       detail: `연결된 뒤 끝낸 ${m.durationCount}건 기준`,
     },
   ];
@@ -130,6 +148,11 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
           <p className="text-body-m text-text-secondary">
             {period.days ? `최근 ${period.days}일` : "전체 기간"} · 상담 {m.sessions}건
           </p>
+          {truncated && (
+            <p data-testid="stats-truncated" className="text-body-s text-text-secondary">
+              기록이 많아 일부만 셌어요
+            </p>
+          )}
         </div>
 
         {/* 기간 고르기. 선택 상태는 중립색(파랑은 '지금 누를 것'에만) — 고른 칸이 진한 회색 */}
@@ -139,7 +162,7 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
               key={p.key}
               href={`/stats?period=${p.key}`}
               aria-current={p.key === period.key ? "page" : undefined}
-              className={`flex h-11 items-center justify-center rounded-xl text-label-m ${
+              className={`flex h-touch items-center justify-center rounded-xl text-label-m ${
                 p.key === period.key ? "bg-text-primary text-on-primary" : "text-text-secondary active:bg-bg-muted"
               }`}
             >

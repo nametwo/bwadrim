@@ -93,6 +93,20 @@ export function formatDuration(totalSec: number): string {
   return m ? `${h}시간 ${m}분` : `${h}시간`;
 }
 
+/**
+ * 통계 상담당 평균: '7초' · '2분 5초' · '1시간 2분' (DATA-06).
+ * 평균은 소수라 먼저 반올림하고 나눈다 — 나머지를 따로 반올림하면 '1분 60초'가 나온다
+ */
+export function formatAvgDuration(sec: number): string {
+  const t = Math.max(0, Math.round(sec));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = t % 60;
+  if (h) return m ? `${h}시간 ${m}분` : `${h}시간`;
+  if (m) return s ? `${m}분 ${s}초` : `${m}분`;
+  return `${s}초`;
+}
+
 /** 통화 시계: '3:07' · '1:02:09' */
 export function formatClock(totalSec: number): string {
   const sec = Math.max(0, Math.floor(totalSec));

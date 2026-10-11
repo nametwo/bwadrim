@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { logEvent } from "@/lib/events";
-import { detectInApp, IN_APP_LABEL } from "@/lib/in-app-browser";
+import { detectInApp, detectWebView, IN_APP_LABEL } from "@/lib/in-app-browser";
 import { isPreviewBot } from "@/lib/preview-bot";
 import { isJoinToken } from "@/lib/join-token";
 import { engineerNameOf } from "@/lib/engineer-name";
@@ -76,7 +76,9 @@ export default async function JoinPage({ params, searchParams }: PageProps<"/joi
           </a>
         }
       >
-        조금 있다가 아래 버튼을 눌러 주세요.
+        조금 있다가
+        <br />
+        ‘다시 열기’를 눌러 주세요.
       </NoticeScreen>
     );
   }
@@ -84,7 +86,9 @@ export default async function JoinPage({ params, searchParams }: PageProps<"/joi
   if (!room) {
     return (
       <NoticeScreen tone="neutral" icon={<LinkIcon className="size-10" />} title="열 수 없는 링크예요">
-        문자 속 링크를 다시 한 번 눌러 주세요.
+        문자나 카톡으로 받으신 링크를
+        <br />
+        다시 한번 눌러 주세요.
         <br />
         그래도 안 열리면 기사님께 새 링크를 받아 주세요.
       </NoticeScreen>
@@ -123,7 +127,9 @@ export default async function JoinPage({ params, searchParams }: PageProps<"/joi
   }
 
   const ua = (await headers()).get("user-agent") ?? "";
-  const inApp = detectInApp(ua);
+  // 이름을 아는 메신저·SNS 앱, 아니면 이름을 모르는 앱의 웹뷰(카메라 권한이 늘 거부된다). 웹뷰 판별은 고객 화면에서만 쓴다.
+  // 엔지니어의 '고객 화면 열어 보기'는 빼 둔다: 아이폰 홈 화면 앱 안에서 열면 웹뷰처럼 보이지만 카메라가 켜진다
+  const inApp = detectInApp(ua) ?? (!owner && detectWebView(ua) ? "webview" : null);
   // 문자·카톡이 미리보기를 만들려고 가져간 요청과 엔지니어 본인의 열어 보기는 고객이 연 것이 아니다 (DATA-01).
   // 화면과 미리보기 정보(metadata)는 똑같이 내보낸다
   if (!owner && !isPreviewBot(ua)) {
@@ -142,6 +148,7 @@ export default async function JoinPage({ params, searchParams }: PageProps<"/joi
       <OpenInBrowser
         kind={inApp}
         testId="join-in-app"
+        audience="customer"
         title={
           <>
             이 화면에서는

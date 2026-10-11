@@ -116,10 +116,10 @@ function AllowOverlay({ android }: { android: boolean }) {
     >
       <div className={`flex flex-col items-center gap-2 ${android ? "flex-col-reverse" : ""}`}>
         <ArrowRightIcon
-          className={`size-10 text-guide-signal drop-shadow-[0_2px_6px_rgb(0_0_0/0.6)] ${android ? "rotate-90" : "-rotate-90"}`}
+          className={`size-10 text-guide-signal drop-shadow-signal ${android ? "rotate-90" : "-rotate-90"}`}
           strokeWidth={3}
         />
-        <p className="text-center text-title-l text-gray-0 drop-shadow-[0_2px_6px_rgb(0_0_0/0.6)]">
+        <p className="text-center text-title-l text-gray-0 drop-shadow-signal">
           <span className="text-guide-signal">&lsquo;허용&rsquo;</span>을 눌러 주세요
         </p>
       </div>

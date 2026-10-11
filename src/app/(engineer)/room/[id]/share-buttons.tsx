@@ -137,7 +137,7 @@ export function ShareButtons({
   const copyLabel = copied === "ok" ? "복사됐어요" : "링크 복사";
   const copyIcon = (cls: string) => (copied === "ok" ? <CheckIcon className={cls} /> : <CopyIcon className={cls} />);
 
-  // 카톡이 안 될 때 대신 누를 버튼 이름 ('A'나 'B'로 / 'A', 'B'나 'C'로 — 이름이 모두 모음으로 끝난다)
+  // 카톡이 안 될 때 대신 누를 버튼 이름 ('A'나 'B'를 / 'A', 'B'나 'C'를 — 이름이 모두 모음으로 끝난다)
   const others = [...(can.sms ? [smsLabel] : []), ...(can.share ? ["공유하기"] : []), "링크 복사"].map((n) => `'${n}'`);
   const otherWays = others.length === 1 ? others[0] : `${others.slice(0, -1).join(", ")}나 ${others.at(-1)}`;
 
@@ -227,7 +227,7 @@ export function ShareButtons({
       {kakaoFailed && (
         <div role="status" className="flex flex-col gap-1 text-center text-body-s" data-testid="share-kakao-fail">
           <p className="text-text-danger">카카오톡을 열지 못했어요</p>
-          <p className="text-text-secondary">{otherWays}로 보내 주세요</p>
+          <p className="text-text-secondary">{otherWays}를 눌러 주세요</p>
         </div>
       )}
       {copied === "fail" && (

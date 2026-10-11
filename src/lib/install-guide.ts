@@ -28,11 +28,31 @@ export function manifestHref(ua: string): string {
 export const HOME_SCREEN_URL = "/dashboard?from=home";
 export const isFromHomeScreen = (search: string) => new URLSearchParams(search).get("from") === "home";
 
+/** 아이폰·아이패드인지. iPadOS 13+ 사파리는 맥처럼 보인다 — 맥인데 터치가 되면 아이패드 */
+export function isIOSDevice(ua: string, maxTouchPoints = 0): boolean {
+  return /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && maxTouchPoints > 1);
+}
+
+// 아이폰의 사파리가 아닌 인터넷 앱과, 폰 설정 앱에 보이는 그 앱 이름
+const IOS_BROWSER_APPS: [RegExp, string][] = [
+  [/CriOS/i, "Chrome"],
+  [/FxiOS/i, "Firefox"],
+  [/EdgiOS/i, "Edge"],
+  [/OPiOS/i, "Opera"],
+  [/Whale/i, "Whale"],
+  [/NAVER/i, "NAVER"],
+];
+
+/** 아이폰에서 연 인터넷 앱 이름. 사파리면 null.
+ *  사파리가 아닌 앱은 카메라 권한이 '설정 → 그 앱'에 있고(JOIN-05), 공유 버튼이 주소창 옆에 있다(NFR-09) */
+export function iosBrowserApp(ua: string): string | null {
+  return IOS_BROWSER_APPS.find(([re]) => re.test(ua))?.[1] ?? null;
+}
+
 /** 설치 안내를 띄울 폰인지. PC·앱 안 브라우저(카톡 등, AUTH-09가 먼저 인터넷 앱으로 넘김)는 null */
 export function installPlatform(ua: string, maxTouchPoints = 0): InstallPlatform | null {
   if (detectInApp(ua)) return null;
-  // iPadOS 13+ 사파리는 맥처럼 보인다 — 맥인데 터치가 되면 아이패드
-  if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && maxTouchPoints > 1)) return "ios";
+  if (isIOSDevice(ua, maxTouchPoints)) return "ios";
   if (/Android/.test(ua)) return isSamsungInternet(ua) ? "samsung" : "android";
   return null;
 }
@@ -43,7 +63,7 @@ export function installSteps(ua: string, platform: InstallPlatform, maxTouchPoin
     // 아이패드는 공유 버튼이 아래가 아니라 위쪽 도구 막대에 있다
     const ipad = /iPad/.test(ua) || (/Macintosh/.test(ua) && maxTouchPoints > 1);
     // 아이폰의 크롬·엣지·파이어폭스 등은 공유 버튼이 주소창 옆에 있다
-    const safari = !/CriOS|FxiOS|EdgiOS|OPiOS|Whale|NAVER/i.test(ua);
+    const safari = iosBrowserApp(ua) === null;
     // iOS 26 사파리 기본 모양(Compact)은 공유 버튼이 ⋯ 메뉴 안에 들어갔다. 예전 모양을 고른 폰도 있어 둘 다 말한다
     const version = Number(/Version\/(\d+)/.exec(ua)?.[1] ?? 0);
     const first: InstallStep = ipad

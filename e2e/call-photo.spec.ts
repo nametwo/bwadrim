@@ -6,6 +6,7 @@ import { RealtimeHub, describeHub } from "./realtime-mock";
 // 고객 화면에 '기사님이 사진을 찍었어요'. 통화를 끝내면 상담이 먼저 닫히고, 사진이 있으니 '찍은 사진 N장을 저장할까요?'
 // 화면이 뜬다. 사진은 서버에 올리지 않는다. 헤드리스 크롬은 파일 공유 창이 없어 다운로드로 저장된다.
 // 상담을 닫지 못하면(인터넷 끊김) 실패 화면에서 사진부터 저장할 수 있다 (ROOM-10).
+// 다른 기기가 이어받아 밀려난 폰에서 '상담 목록으로'를 눌러도 그 폰에서 찍은 사진부터 묻는다 (CALL-13).
 
 test.use({ launchOptions: fakeCamera(CLIPS.jitter) });
 test.describe.configure({ mode: "serial" });
@@ -155,6 +156,68 @@ test("상담을 끝내지 못해도(인터넷 끊김) 사진은 먼저 저장할
   } finally {
     if (test.info().status !== test.info().expectedStatus) console.log("hub:", describeHub(hub), logs.join("\n"));
     await engCtx.close();
+    await custCtx.close();
+  }
+});
+
+test("다른 기기가 이어받은 뒤 밀려난 폰에서 '상담 목록으로'를 누르면, 이 폰에서 찍은 사진부터 저장할지 묻는다 (CALL-13)", async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const hub = new RealtimeHub();
+  const engCtx = await browser.newContext({ ...PHONE, acceptDownloads: true });
+  await engCtx.addCookies([engineerCookie(baseURL!)]);
+  // 이어받는 두 번째 엔지니어 기기 (같은 계정)
+  const pcCtx = await browser.newContext({ viewport: { width: 1280, height: 800 }, permissions: ["camera", "microphone"] });
+  await pcCtx.addCookies([engineerCookie(baseURL!)]);
+  const custCtx = await browser.newContext(PHONE);
+  for (const c of [engCtx, pcCtx, custCtx]) await hub.attach(c);
+  const ep = await engCtx.newPage();
+  const pc = await pcCtx.newPage();
+  const cp = await custCtx.newPage();
+  const logs: string[] = [];
+  for (const [who, p] of [["eng", ep], ["pc", pc], ["cust", cp]] as const) p.on("pageerror", (e) => logs.push(`[${who}] ${e.message}`));
+
+  try {
+    await ep.goto(`/room/${ROOM.id}`);
+    await ep.getByRole("button", { name: /연결 준비/ }).click();
+    await cp.goto(`/join/${ROOM.join_token}`);
+    await cp.getByRole("button", { name: /카메라 켜고 시작하기/ }).click();
+    await expect(cp.getByTestId("cust-status")).toHaveText("기사님이 보고 있어요", { timeout: 30_000 });
+    const shutter = ep.getByTestId("eng-photo");
+    await expect(shutter).toBeEnabled({ timeout: 10_000 });
+    await shutter.click();
+    await expect(ep.getByTestId("eng-photo-count")).toHaveText("1", { timeout: 15_000 });
+
+    // 1) 두 번째 기기가 이어받는다 — 폰은 '다른 기기에서 이어받았어요', 고객은 새 기기와 이어진다
+    await pc.goto(`/room/${ROOM.id}`);
+    await pc.getByRole("button", { name: /마이크 켜고/ }).click();
+    const replaced = ep.getByTestId("eng-replaced-leave");
+    await expect(replaced).toBeVisible({ timeout: 20_000 });
+    await expect(ep.getByText("이 기기로 계속하려면 ‘여기서 다시 받기’를 눌러 주세요.")).toBeVisible();
+    await expect(pc.getByTestId("eng-call-status")).toContainText("통화 중", { timeout: 30_000 });
+
+    // 2) '상담 목록으로' → 바로 떠나지 않고 사진 저장 화면. 상담은 닫지 않는다(두 번째 기기에서 통화 중)
+    const byesBefore = hub.broadcasts.filter((b) => b.event === "bye").length;
+    await replaced.click();
+    const screen = ep.getByTestId("eng-photo-save");
+    await expect(screen).toHaveAttribute("data-notice", "replaced");
+    await expect(screen.getByRole("status")).toContainText("다른 기기에서 이어받았어요");
+    await expect(screen.getByRole("status")).toContainText("이 기기에서 찍은 사진은 여기에만 있어요.");
+    await expect(screen.getByRole("heading", { level: 1 })).toHaveText(/찍은 사진 1장을\s*저장할까요\?/);
+    await expect(ep.getByTestId("eng-photos").getByRole("img")).toHaveCount(1);
+    expect((await mockRooms()).find((r) => r.id === ROOM.id)?.status).not.toBe("ended");
+    expect(hub.broadcasts.filter((b) => b.event === "bye").length).toBe(byesBefore);
+    await expect(cp.getByTestId("cust-status")).toHaveText("기사님이 보고 있어요");
+
+    // 3) '저장 안 하고 나가기' → 상담 목록. 통화는 두 번째 기기에서 계속된다
+    await screen.getByRole("button", { name: "저장 안 하고 나가기" }).click();
+    await expect(ep).toHaveURL(/\/dashboard$/, { timeout: 15_000 });
+    await expect(pc.getByTestId("eng-call-status")).toContainText("통화 중");
+
+    expect(logs).toEqual([]);
+  } finally {
+    if (test.info().status !== test.info().expectedStatus) console.log("hub:", describeHub(hub), logs.join("\n"));
+    await engCtx.close();
+    await pcCtx.close();
     await custCtx.close();
   }
 });

@@ -263,7 +263,7 @@ export function InstallPrompt() {
                 </span>
               ))}
               <span className="flex flex-col items-center gap-1">
-                <BrandMark className="size-14 drop-shadow-md" />
+                <BrandMark className="size-14" />
                 <span className="text-label-m text-text-primary">봐드림</span>
               </span>
             </div>

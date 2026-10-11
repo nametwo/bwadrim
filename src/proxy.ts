@@ -44,9 +44,12 @@ export async function proxy(request: NextRequest) {
     !isServerAction &&
     PROTECTED_PREFIXES.some((p) => pathname.startsWith(p))
   ) {
+    // 쿼리도 함께 싣는다. 삼성 바로가기 표시(?from=home, NFR-09)나 통계 기간이 로그인 뒤에도 남게
     const url = request.nextUrl.clone();
+    const next = pathname + request.nextUrl.search;
     url.pathname = "/login";
-    url.searchParams.set("next", pathname);
+    url.search = "";
+    url.searchParams.set("next", next);
     return NextResponse.redirect(url);
   }
 

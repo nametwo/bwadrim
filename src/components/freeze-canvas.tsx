@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
+import { POINTER_HALO, POINTER_LIVE } from "@/lib/pointer-color";
 import { containRect } from "@/lib/webrtc/pointer";
 import type { Point, Stroke } from "@/lib/webrtc/draw";
 
@@ -58,8 +59,8 @@ export function FreezeCanvas({
     ];
     // 흰 테두리 위에 빨간 선 — 어떤 배경에서도 보이게
     for (const [color, extra] of [
-      ["white", 4],
-      ["#ef4444", 0],
+      [POINTER_HALO, 4],
+      [POINTER_LIVE, 0],
     ] as const) {
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
@@ -98,7 +99,7 @@ export function FreezeCanvas({
   }
 
   return (
-    <div className="absolute inset-0 bg-black">
+    <div className="absolute inset-0 bg-call-bg">
       {/* eslint-disable-next-line @next/next/no-img-element -- 통화 중 캡처한 data URL이라 최적화 대상이 아니다 */}
       <img
         ref={imgRef}

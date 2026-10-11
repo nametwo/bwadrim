@@ -118,9 +118,9 @@ export function CustomerAnchorLayer({
             <div
               data-testid="cust-card"
               role="alert"
-              className="flex h-[50svh] min-h-[300px] w-full max-w-md flex-col gap-3 rounded-3xl bg-bg-page p-4 text-text-primary shadow-2xl"
+              className="flex h-[50svh] min-h-[300px] w-full max-w-md flex-col gap-3 rounded-3xl bg-bg-page p-4 text-text-primary shadow-float"
             >
-              <p className="text-center text-[26px] leading-tight font-extrabold tracking-tight break-keep">
+              <p className="text-center text-title-l break-keep">
                 기사님이 표시한 곳을
                 <br />
                 비춰 주세요
@@ -136,7 +136,7 @@ export function CustomerAnchorLayer({
             <p
               data-testid="cust-arrow-text"
               role="alert"
-              className="w-full max-w-md rounded-3xl bg-black-80 px-5 py-5 text-center text-[28px] leading-tight font-extrabold text-call-text break-keep shadow-2xl"
+              className="w-full max-w-md rounded-3xl bg-black-80 px-5 py-5 text-center text-title-l text-call-text break-keep shadow-float"
             >
               화살표 쪽으로
               <br />

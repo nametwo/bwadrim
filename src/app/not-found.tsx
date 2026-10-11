@@ -17,7 +17,7 @@ export default function NotFound() {
     >
       주소가 틀렸거나 볼 수 없는 상담이에요.
       <br />
-      A/S 받으시는 사장님은 문자 속 링크를 다시 눌러 주세요.
+      A/S 받으시는 사장님은 문자나 카톡 속 링크를 다시 눌러 주세요.
     </NoticeScreen>
   );
 }

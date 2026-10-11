@@ -5,12 +5,14 @@ import { useEffect, useId, useRef, type ReactNode } from "react";
 // 아래에서 올라오는 확인 창. 엄지가 닿는 화면 아래쪽에 답 버튼을 둔다.
 // 연 직후 armMs 동안은 바깥(어두운 부분)을 눌러도 닫지 않는다 — 여는 버튼을 두 번 누른 두 번째 탭이
 // 바로 창을 닫아 버리지 않게. 답 버튼의 같은 보호는 쓰는 쪽이 한다(엔지니어 종료 CONFIRM_ARM_MS).
+// size l: 고객 화면(본문 18px 이상, NFR-02) — 설명 Body/L
 export function Sheet({
   open,
   onClose,
   title,
   description,
   tone = "light",
+  size = "m",
   armMs = 600,
   children,
   testId,
@@ -21,6 +23,8 @@ export function Sheet({
   title: ReactNode;
   description?: ReactNode;
   tone?: "light" | "dark";
+  /** l: 고객 화면용 큰 글자 */
+  size?: "m" | "l";
   armMs?: number;
   children: ReactNode;
   testId?: string;
@@ -75,7 +79,9 @@ export function Sheet({
         </h2>
         {description && (
           <p
-            className={`mt-2 text-center text-body-m ${dark ? "text-call-text-secondary" : "text-text-secondary"}`}
+            className={`mt-2 text-center ${size === "l" ? "text-body-l" : "text-body-m"} ${
+              dark ? "text-call-text-secondary" : "text-text-secondary"
+            }`}
           >
             {description}
           </p>

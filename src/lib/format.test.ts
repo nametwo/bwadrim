@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatAvgDuration,
   formatClock,
   formatDuration,
   formatKstDateTime,
@@ -34,12 +35,21 @@ describe("formatKstDay", () => {
   });
 });
 
-describe("formatDuration · formatClock", () => {
+describe("formatDuration · formatAvgDuration · formatClock", () => {
   it("걸린 시간", () => {
     expect(formatDuration(42)).toBe("42초");
     expect(formatDuration(12 * 60 + 10)).toBe("12분");
     expect(formatDuration(65 * 60)).toBe("1시간 5분");
     expect(formatDuration(120 * 60)).toBe("2시간");
+  });
+
+  it("통계 상담당 평균: 먼저 반올림해서 '1분 60초'·'60초'가 나오지 않게", () => {
+    expect(formatAvgDuration(7)).toBe("7초");
+    expect(formatAvgDuration(59.6)).toBe("1분");
+    expect(formatAvgDuration(119.5)).toBe("2분");
+    expect(formatAvgDuration(125)).toBe("2분 5초");
+    expect(formatAvgDuration(3725)).toBe("1시간 2분");
+    expect(formatAvgDuration(7200)).toBe("2시간");
   });
 
   it("통화 시계", () => {

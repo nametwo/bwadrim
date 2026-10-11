@@ -190,16 +190,6 @@ export function UserIcon(p: IconProps) {
   );
 }
 
-/** Icon/pen */
-export function PencilIcon(p: IconProps) {
-  return (
-    <Svg {...p}>
-      <path d="M12 20H21" />
-      <path d="M16.5 3.5C16.9 3.1 17.44 2.88 18 2.88C18.28 2.88 18.55 2.93 18.81 3.04C19.07 3.15 19.3 3.3 19.5 3.5C19.7 3.7 19.85 3.93 19.96 4.19C20.07 4.45 20.12 4.72 20.12 5C20.12 5.28 20.07 5.55 19.96 5.81C19.85 6.07 19.7 6.3 19.5 6.5L7 19L3 20L4 16L16.5 3.5Z" />
-    </Svg>
-  );
-}
-
 /** Icon/undo — 되돌리기 */
 export function UndoIcon(p: IconProps) {
   return (
@@ -401,18 +391,6 @@ export function SpeakerIcon(p: IconProps) {
     <Svg {...p}>
       <path d="M11 5L6 9H2V15H6L11 19V5Z" />
       <path d="M15.54 8.46C16.48 9.4 17 10.67 17 12C17 13.33 16.48 14.6 15.54 15.54M19.07 4.93C20.95 6.81 22 9.35 22 12C22 14.65 20.95 17.19 19.07 19.07" />
-    </Svg>
-  );
-}
-
-/** Icon/truck — 방문(출장) */
-export function CarIcon(p: IconProps) {
-  return (
-    <Svg {...p}>
-      <path d="M16 3H1V16H16V3Z" />
-      <path d="M16 8H20L23 11V16H16V8Z" />
-      <path d="M5.5 21C6.88 21 8 19.88 8 18.5C8 17.12 6.88 16 5.5 16C4.12 16 3 17.12 3 18.5C3 19.88 4.12 21 5.5 21Z" />
-      <path d="M18.5 21C19.88 21 21 19.88 21 18.5C21 17.12 19.88 16 18.5 16C17.12 16 16 17.12 16 18.5C16 19.88 17.12 21 18.5 21Z" />
     </Svg>
   );
 }

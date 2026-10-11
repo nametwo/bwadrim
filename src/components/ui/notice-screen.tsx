@@ -22,6 +22,7 @@ export function NoticeScreen({
   children,
   actions,
   footer,
+  footerSize = "s",
   brand = true,
   testId,
 }: {
@@ -33,6 +34,8 @@ export function NoticeScreen({
   actions?: ReactNode;
   /** 버튼 아래 작은 안내 */
   footer?: ReactNode;
+  /** 버튼 아래 안내 글자 크기. 고객이 꼭 따라 해야 할 다음 단계면 l(본문과 같은 18px) */
+  footerSize?: "s" | "l";
   /** 위쪽에 봐드림 표시 (어디서 온 화면인지 알게) */
   brand?: boolean;
   testId?: string;
@@ -58,7 +61,11 @@ export function NoticeScreen({
       {actions || footer ? (
         <BottomCta>
           {actions}
-          {footer && <p className="pt-1 text-center text-body-s text-text-secondary">{footer}</p>}
+          {footer && (
+            <p className={`pt-1 text-center text-text-secondary ${footerSize === "l" ? "text-body-l" : "text-body-s"}`}>
+              {footer}
+            </p>
+          )}
         </BottomCta>
       ) : (
         <div className="pb-[max(24px,env(safe-area-inset-bottom))]" />

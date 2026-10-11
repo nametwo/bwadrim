@@ -1,3 +1,4 @@
+import { POINTER_HALO, POINTER_LIVE } from "@/lib/pointer-color";
 import type { Annotation, Mat3, Point, Rect, TrackState, TrackUpdate } from "./types";
 import { mul3 } from "./geometry";
 
@@ -26,8 +27,9 @@ export interface SizeLike {
   height: number;
 }
 
-const RED = "#FF3B30";
-const WHITE = "#FFFFFF";
+// 핀·화살표 색은 레이저 포인터·정지 화면 그리기와 같은 빨강 하나 (globals.css --color-pointer-live)
+const RED = POINTER_LIVE;
+const WHITE = POINTER_HALO;
 /** 핀 반지름: ref 너비의 4% (ref 평면 위의 원 → 원근 타원) */
 export const PIN_REF_RADIUS = 0.04;
 export const PIN_MIN_CSS_RADIUS = 14;

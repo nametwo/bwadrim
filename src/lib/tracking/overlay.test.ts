@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { POINTER_HALO, POINTER_LIVE } from "@/lib/pointer-color";
 import {
   ARROW_INSET_CSS,
   ARROW_LENGTH_CSS,
@@ -219,10 +220,10 @@ describe("renderAnnotations", () => {
     const rings = r.paths.filter((p) => p.points.length === 32);
     expect(rings.length).toBe(3);
     const [pulse, white, red] = rings;
-    expect(white.style).toBe("#FFFFFF");
+    expect(white.style).toBe(POINTER_HALO);
     expect(white.width).toBe(7);
-    expect(red.style).toBe("#FF3B30");
-    expect(pulse.style).toBe("#FF3B30");
+    expect(red.style).toBe(POINTER_LIVE);
+    expect(pulse.style).toBe(POINTER_LIVE);
     // norm 0.5 → ref px 160 → css (160 + 0.5)·1 (픽셀 중심 규약)
     const cx = 160.5;
     const cy = 120.5;
@@ -282,8 +283,8 @@ describe("renderAnnotations", () => {
     const r = recorder();
     renderAnnotations(r.ctx, [s], I, ref, frame, m);
     expect(r.paths.map((p) => [p.style, p.width])).toEqual([
-      ["#FFFFFF", 10],
-      ["#FF3B30", 6],
+      [POINTER_HALO, 10],
+      [POINTER_LIVE, 6],
     ]);
     const pts = r.paths[0].points;
     expect(pts.length).toBe(3);
@@ -534,9 +535,9 @@ describe("renderGuideArrow", () => {
     renderGuideArrow(r.ctx, a, { timeMs: 0 });
     expect(r.paths.map((p) => [p.style, p.width])).toEqual([
       ["rgba(0,0,0,0.45)", 11],
-      ["#FFFFFF", 6],
+      [POINTER_HALO, 6],
     ]);
-    expect(r.ops.filter((o) => o.op === "fill").map((o) => o.style)).toEqual(["#FF3B30"]);
+    expect(r.ops.filter((o) => o.op === "fill").map((o) => o.style)).toEqual([POINTER_LIVE]);
     expect(r.tf[0]).toBe("t300.00,100.00");
     expect(r.tf[1]).toBe(`r${(Math.PI / 2).toFixed(3)}`);
     // 맥동: t=0이면 8px 뒤, 반 주기(600ms)에 끝 = 클램프 위치

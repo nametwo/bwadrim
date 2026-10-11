@@ -24,9 +24,11 @@ import {
 } from "@/lib/webrtc/camera";
 import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
+import { CallControl } from "@/components/ui/call-control";
 import { Sheet } from "@/components/ui/sheet";
 import { NoticeScreen } from "@/components/ui/notice-screen";
 import {
+  CameraIcon,
   CheckCircleIcon,
   ClockIcon,
   FlipCameraIcon,
@@ -89,6 +91,13 @@ export function CameraStart({
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // 폰이 탭 없이는 카메라를 못 바꿀 때: '바꾸기' 버튼을 띄운다
   const [flipRequested, setFlipRequested] = useState(false);
+  // 카메라 전환이 끝까지 실패해 영상이 꺼졌다 (JOIN-07·CALL-10). 탭 안에서 다시 켠다
+  const [cameraLost, setCameraLost] = useState(false);
+  const [reopening, setReopening] = useState(false);
+  const [reopenFailed, setReopenFailed] = useState(false);
+  // 통화 세대: 시작·다시 연결·끝·화면을 떠날 때마다 올린다. 카메라 열기·연결 준비를 기다리는(await) 사이에
+  // 통화가 끝났거나 새로 시작됐으면, 늦게 도착한 카메라는 끄고 손을 뗀다 (켜진 채 남지 않게)
+  const liveGenRef = useRef(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -156,12 +165,20 @@ export function CameraStart({
     }
   }
 
-  async function start() {
-    setPhase("starting");
+  // again: 끊긴 뒤·다른 폰에 넘어간 뒤 다시 연결(JOIN-09·11). 권한은 이미 받았으니 시작 화면('허용' 안내)을 거치지 않는다
+  async function start(again = false) {
+    liveGenRef.current += 1;
+    const gen = liveGenRef.current;
+    if (!again) setPhase("starting");
     // 폰을 비추기만 하고 화면을 안 건드려서 자동 잠금으로 끊기기 쉽다 — 버튼 탭 안에서 요청
     releaseWakeLock();
     releaseWakeLockRef.current = keepScreenOn();
     const opened = await openCamera();
+    if (gen !== liveGenRef.current) {
+      // 그사이 화면을 떠났거나 끝냈다 — 방금 켠 카메라는 아무도 모르니 여기서 끈다
+      if ("stream" in opened) opened.stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
     if ("error" in opened) {
       postEvent("camera_denied", { reason: opened.error });
       releaseWakeLock();
@@ -169,15 +186,23 @@ export function CameraStart({
       setPhase("denied");
       return;
     }
-    const stream = opened.stream;
-    streamRef.current = stream;
+    streamRef.current = opened.stream;
     setMicOff(!opened.mic);
     postEvent("camera_granted", { mic: opened.mic });
+    // 카메라가 켜졌으면 '허용' 안내를 바로 내리고 내 카메라와 '기다리는 중'을 먼저 보여 준다.
+    // 연결 준비(TURN 조회)는 그 뒤에 한다 — 느린 망에서 몇 초 걸려도 어두운 화면에 '허용'을 누르라고 남지 않게 (JOIN-02·04)
+    lastStateRef.current = "waiting";
+    setCallState("waiting");
+    setPhase("call");
+    if (videoRef.current) videoRef.current.srcObject = opened.stream;
 
     const ice = await fetchIceServers(token);
+    // 그사이 '통화 종료'를 눌렀거나 화면을 떠났다. 카메라는 그쪽에서 이미 껐다
+    if (gen !== liveGenRef.current) return;
     // 링크를 연 뒤 세션이 닫혔거나 만료됐다 — 종료 알림(bye)은 채널에 들어오기 전이라 받지 못했다
     if (ice.roomGone) {
-      stream.getTracks().forEach((t) => t.stop());
+      liveGenRef.current += 1;
+      streamRef.current?.getTracks().forEach((t) => t.stop());
       releaseWakeLock();
       setPhase("gone");
       return;
@@ -187,7 +212,8 @@ export function CameraStart({
       role: "customer",
       iceServers: ice.iceServers,
       clockOffsetMs: ice.clockOffsetMs,
-      localStream: stream,
+      // 기다리는 동안 고객이 카메라를 바꿨을 수 있다 — 지금 카메라로
+      localStream: streamRef.current,
       onState: (s) => {
         const prev = lastStateRef.current;
         lastStateRef.current = s;
@@ -211,6 +237,8 @@ export function CameraStart({
           }, 1000);
         }
         if (s === "ended" || s === "failed" || s === "denied" || s === "replaced") {
+          // 바꾸던 카메라가 늦게 열려도 켜진 채 남지 않게
+          liveGenRef.current += 1;
           streamRef.current?.getTracks().forEach((t) => t.stop());
           releaseWakeLock();
           setConfirmEnd(false);
@@ -253,7 +281,6 @@ export function CameraStart({
       () => showNotice("기사님이 사진을 찍었어요"),
     );
     session.join();
-    setPhase("call");
   }
 
   // 끝난 화면에 보여 줄 통화 시간
@@ -262,7 +289,8 @@ export function CameraStart({
     setTalkSec(at === null ? null : (Date.now() - at) / 1000);
   }
 
-  // 끊긴 뒤·다른 곳에 넘어간 뒤 다시 연결. 새로고침 없이 이 탭 안에서 카메라부터 다시 연다 (JOIN-09·11)
+  // 끊긴 뒤·다른 곳에 넘어간 뒤 다시 연결. 새로고침 없이 이 탭 안에서 카메라부터 다시 연다 (JOIN-09·11).
+  // 시작 화면으로 돌아가지 않고 통화 화면('기사님을 기다리는 중…')에서 다시 붙는다. 세대는 start가 올린다
   function restart() {
     stopPhotosRef.current?.();
     stopPhotosRef.current = null;
@@ -280,6 +308,8 @@ export function CameraStart({
     setCallState("waiting");
     setConfirmEnd(false);
     setFlipRequested(false);
+    setCameraLost(false);
+    setReopenFailed(false);
     setNotice(null);
     setFrozen(null);
     setStrokes([]);
@@ -287,23 +317,41 @@ export function CameraStart({
     setAnchorBanner(null);
     setGuideLink(null);
     resetGuide();
-    start();
+    start(true);
   }
 
   // 카메라 전/후면 전환 (replaceTrack — 재협상 불필요). byEngineer: 기사님이 원격으로 요청
   async function flipCamera(byEngineer: boolean) {
     const current = streamRef.current;
     if (!current || flippingRef.current) return;
+    const gen = liveGenRef.current;
+    // 바꾸는 사이 통화가 끝났거나 다시 시작됐다 — 새로 연 카메라는 아무도 끄지 않으니 여기서 끈다
+    const stale = (r: { stream: MediaStream | null }) => {
+      if (gen === liveGenRef.current) return false;
+      if (r.stream && r.stream !== current) r.stream.getVideoTracks().forEach((t) => t.stop());
+      return true;
+    };
     flippingRef.current = true;
     try {
       const r = await switchCamera(current, facingRef.current);
+      if (stale(r)) return;
       if (r.stream && r.stream !== current) {
-        await sessionRef.current?.replaceVideoTrack(r.stream.getVideoTracks()[0]);
+        // 지금 카메라를 먼저 바꿔 둔다 — 연결 준비 중이면 곧 만들 통화가 이 카메라로 시작한다
         streamRef.current = r.stream;
         if (videoRef.current) videoRef.current.srcObject = r.stream;
         torchRef.current = false; // 새 카메라는 손전등이 꺼진 상태
+        setCameraLost(false);
+        await sessionRef.current?.replaceVideoTrack(r.stream.getVideoTracks()[0]);
+        if (stale(r)) return;
       }
       facingRef.current = r.facing;
+      if (!r.stream) {
+        // 바꾸지도, 원래 카메라를 다시 켜지도 못했다 — 영상이 꺼진 채다. 고객에게 다시 켜는 버튼을 띄운다
+        setReopenFailed(false);
+        setCameraLost(true);
+        reportCamera("failed");
+        return;
+      }
       if (r.ok) {
         setFlipRequested(false);
         if (byEngineer) {
@@ -332,6 +380,47 @@ export function CameraStart({
     reportCamera(ok ? undefined : "failed");
   }
 
+  // '카메라 다시 켜기' (카메라가 꺼졌을 때). 고객의 탭 안에서 부르므로 탭이 있어야 카메라를 여는 폰(아이폰 등)에서도 열린다
+  async function reopenCamera() {
+    if (flippingRef.current) return;
+    const gen = liveGenRef.current;
+    flippingRef.current = true;
+    setReopening(true);
+    try {
+      let track: MediaStreamTrack;
+      try {
+        const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facingRef.current } });
+        track = s.getVideoTracks()[0];
+      } catch {
+        if (gen !== liveGenRef.current) return;
+        setReopenFailed(true);
+        reportCamera("failed");
+        return;
+      }
+      if (gen !== liveGenRef.current) {
+        track.stop();
+        return;
+      }
+      // 마이크는 그대로 두고 영상만 새 카메라로
+      const next = new MediaStream([track, ...(streamRef.current?.getAudioTracks() ?? [])]);
+      streamRef.current = next;
+      if (videoRef.current) videoRef.current.srcObject = next;
+      torchRef.current = false;
+      setCameraLost(false);
+      setReopenFailed(false);
+      setFlipRequested(false);
+      await sessionRef.current?.replaceVideoTrack(track);
+      if (gen !== liveGenRef.current) {
+        track.stop();
+        return;
+      }
+      reportCamera();
+    } finally {
+      flippingRef.current = false;
+      setReopening(false);
+    }
+  }
+
   function askEnd() {
     confirmShownAtRef.current = Date.now();
     setConfirmEnd(true);
@@ -341,10 +430,13 @@ export function CameraStart({
   // 연결되기 전에 눌렀으면 상담은 그대로라 링크를 다시 열면 된다
   function hangup() {
     if (Date.now() - confirmShownAtRef.current < CONFIRM_ARM_MS) return;
+    // 바꾸던 카메라·연결 준비가 늦게 끝나도 카메라를 다시 켜지 않게
+    liveGenRef.current += 1;
     sessionRef.current?.hangup();
     streamRef.current?.getTracks().forEach((t) => t.stop());
     releaseWakeLock();
     setConfirmEnd(false);
+    setCameraLost(false);
     endTalk();
     setCallState("ended");
   }
@@ -394,6 +486,7 @@ export function CameraStart({
   // 언마운트 정리
   useEffect(() => {
     return () => {
+      liveGenRef.current += 1;
       stopPhotosRef.current?.();
       sessionRef.current?.destroy();
       streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -420,7 +513,8 @@ export function CameraStart({
 
   if (phase === "gone") return goneScreen;
 
-  if (phase === "denied") return <CameraHelp failure={failure} onRetry={start} />;
+  // start(again)에 클릭 이벤트가 들어가지 않게 감싼다
+  if (phase === "denied") return <CameraHelp failure={failure} onRetry={() => start()} />;
 
   if (phase === "call") {
     if (callState === "ended") {
@@ -458,7 +552,7 @@ export function CameraStart({
           }
         >
           같은 링크가 다른 폰이나 창에서 열렸어요.
-          <br />이 폰으로 계속하시려면 아래 버튼을 눌러 주세요.
+          <br />이 폰으로 계속하시려면 &lsquo;이 폰으로 연결&rsquo;을 눌러 주세요.
         </NoticeScreen>
       );
     }
@@ -479,9 +573,9 @@ export function CameraStart({
             </Button>
           }
         >
-          와이파이나 데이터가 켜져 있는지 보고
+          와이파이나 데이터가 켜져 있는지 보시고
           <br />
-          다시 연결해 주세요.
+          &lsquo;다시 연결&rsquo;을 눌러 주세요.
         </NoticeScreen>
       );
     }
@@ -490,8 +584,9 @@ export function CameraStart({
     const guideShown = !frozen && guideView !== null;
     const connected = callState === "connected";
     const unstable = connected && quality === "unstable";
+    // 기사님을 기다리는 동안(나갔다 다시 오는 중 포함)은 핀 안내를 띄우지 않는다 — '기다리는 중' 카드와 엇갈리지 않게
     const statusText =
-      anchorBanner === "pin" && !frozen
+      connected && anchorBanner === "pin" && !frozen
         ? "빨간 동그라미를 봐 주세요"
         : frozen
         ? "화면을 멈추고 설명하고 있어요"
@@ -521,7 +616,7 @@ export function CameraStart({
           <CustomerAnchorLayer
             video={videoRef}
             link={anchorLink}
-            hidden={!!frozen || guideShown}
+            hidden={!!frozen || guideShown || !connected}
             onBanner={setAnchorBanner}
           />
         )}
@@ -564,13 +659,13 @@ export function CameraStart({
         <div className="relative mx-4 flex flex-col gap-3">
           {/* 피그마 C10: 잠깐 끊김 */}
           {unstable && (
-            <Banner tone="warning" role="status" sub="창을 닫지 말고 기다려 주세요">
+            <Banner tone="warning" role="status" size="l" sub="창을 닫지 말고 기다려 주세요">
               연결이 잠깐 끊겼어요
             </Banner>
           )}
           {/* 피그마 C09: 멈춘 동안은 폰을 내려놔도 된다 — 팔 떨림을 없앤다 */}
           {frozen && !unstable && (
-            <Banner tone="info" role="status" icon={<FreezeIcon className="size-[22px]" />} sub="폰을 내려놓으셔도 돼요">
+            <Banner tone="info" role="status" size="l" icon={<FreezeIcon className="size-6" />} sub="폰을 내려놓으셔도 돼요">
               기사님이 화면을 멈췄어요
             </Banner>
           )}
@@ -580,22 +675,6 @@ export function CameraStart({
               className="animate-[sheet-up_0.2s_ease-out] rounded-3xl bg-black-80 px-5 py-5 text-center text-title-m text-gray-0 shadow-float"
             >
               {notice}
-            </div>
-          )}
-          {flipRequested && (
-            <div className="flex flex-col items-center gap-3 rounded-3xl bg-bg-page px-5 py-5 text-center shadow-float">
-              <p className="text-title-m text-text-primary">기사님이 카메라를 바꿔 달라고 하셨어요</p>
-              <Button
-                size="xl"
-                block
-                onClick={() => flipCamera(false)}
-                icon={<FlipCameraIcon className="size-6" />}
-              >
-                카메라 바꾸기
-              </Button>
-              <Button variant="ghost" size="m" onClick={() => setFlipRequested(false)}>
-                닫기
-              </Button>
             </div>
           )}
         </div>
@@ -608,23 +687,14 @@ export function CameraStart({
               <p className="text-title-s text-call-text">
                 {unstable ? "다시 연결하는 중…" : callState === "connecting" ? "기사님과 연결하는 중…" : "기사님을 기다리는 중…"}
               </p>
-              {!unstable && <p className="text-body-m text-call-text-secondary">{waitHint}</p>}
+              {!unstable && <p className="text-body-l text-call-text-secondary">{waitHint}</p>}
             </div>
           </div>
         )}
 
         {/* 아래 (피그마 C07): 카메라 전환 + 통화 종료. 고객 쪽 버튼은 모두 크게 */}
         <div className="relative mt-auto flex items-end gap-4 bg-gradient-to-t from-black-80 to-transparent px-4 pt-12 pb-[max(20px,env(safe-area-inset-bottom))]">
-          <button
-            type="button"
-            onClick={() => flipCamera(false)}
-            className="group flex w-[76px] flex-none flex-col items-center gap-1.5"
-          >
-            <span className="grid size-16 place-items-center rounded-full bg-call-control text-call-icon group-active:bg-call-control-pressed">
-              <FlipCameraIcon className="size-7" />
-            </span>
-            <span className="text-label-m text-call-text">카메라 바꾸기</span>
-          </button>
+          <CallControl size="xl" icon={<FlipCameraIcon />} label="카메라 바꾸기" onClick={() => flipCamera(false)} />
           <Button
             variant="call-danger"
             size="xl"
@@ -636,18 +706,71 @@ export function CameraStart({
           </Button>
         </div>
 
-        {/* 피그마 C18: 실수로 누르는 일을 막는 확인 한 번. 고객 쪽 버튼은 모두 XL */}
+        {/* 폰이 탭 없이는 카메라를 못 바꿀 때(CALL-10): 엄지가 닿는 아래쪽에서 올라오는 창으로 묻는다 */}
+        <Sheet
+          open={flipRequested && !cameraLost}
+          onClose={() => setFlipRequested(false)}
+          title="기사님이 카메라를 바꿔 달라고 하셨어요"
+          testId="cust-flip-sheet"
+          size="l"
+        >
+          <Button size="xl" block onClick={() => flipCamera(false)} icon={<FlipCameraIcon className="size-6" />}>
+            카메라 바꾸기
+          </Button>
+          <Button variant="secondary" size="xl" block onClick={() => setFlipRequested(false)}>
+            닫기
+          </Button>
+        </Sheet>
+
+        {/* 카메라 전환이 끝까지 실패해 영상이 꺼졌다 (JOIN-07·CALL-10). 답을 받아야 해서 바깥을 눌러도 닫히지 않는다 */}
+        <Sheet
+          open={cameraLost}
+          title="카메라가 꺼졌어요"
+          description={
+            reopenFailed ? (
+              <>
+                카메라를 켜지 못했어요.
+                <br />
+                &lsquo;카메라 다시 켜기&rsquo;를 한 번 더 눌러 주세요.
+              </>
+            ) : (
+              "‘카메라 다시 켜기’를 눌러 주세요."
+            )
+          }
+          testId="cust-camera-lost"
+          size="l"
+        >
+          <Button size="xl" block loading={reopening} onClick={reopenCamera} icon={<CameraIcon className="size-6" />}>
+            카메라 다시 켜기
+          </Button>
+          <Button variant="secondary" size="xl" block onClick={askEnd}>
+            통화 종료
+          </Button>
+        </Sheet>
+
+        {/* 피그마 C18: 실수로 누르는 일을 막는 확인 한 번. 고객 쪽 버튼은 모두 XL.
+            카메라가 꺼졌다는 창에서 '통화 종료'를 눌러도 이 창이 위에 뜨도록 뒤에 둔다 */}
         <Sheet
           open={confirmEnd}
           onClose={() => setConfirmEnd(false)}
           title="상담을 끝낼까요?"
           description="기사님과 연결이 끊겨요."
           testId="cust-end-sheet"
+          size="l"
         >
           <Button variant="danger" size="xl" block onClick={hangup}>
             끝내기
           </Button>
-          <Button variant="secondary" size="xl" block onClick={() => setConfirmEnd(false)}>
+          <Button
+            variant="secondary"
+            size="xl"
+            block
+            onClick={() => {
+              // 뜬 직후의 탭은 무시한다 — '통화 종료'를 두 번 누른 두 번째 탭이 바로 창을 닫지 않게 (JOIN-08)
+              if (Date.now() - confirmShownAtRef.current < CONFIRM_ARM_MS) return;
+              setConfirmEnd(false);
+            }}
+          >
             계속하기
           </Button>
         </Sheet>
@@ -655,5 +778,5 @@ export function CameraStart({
     );
   }
 
-  return <StartScreen starting={phase === "starting"} onStart={start} engineerName={engineerName} />;
+  return <StartScreen starting={phase === "starting"} onStart={() => start()} engineerName={engineerName} />;
 }

@@ -56,8 +56,8 @@ export function PointerMarker({
         transform: "translate(-50%, -50%)",
       }}
     >
-      <span className="absolute inset-0 animate-ping rounded-full bg-red-500/50" />
-      <span className="absolute inset-0 rounded-full border-[6px] border-red-500 shadow-[0_0_0_3px_white,inset_0_0_0_3px_white]" />
+      <span className="absolute inset-0 animate-ping rounded-full bg-pointer-live/50" />
+      <span className="absolute inset-0 rounded-full border-[6px] border-pointer-live shadow-[0_0_0_3px_var(--color-pointer-halo),inset_0_0_0_3px_var(--color-pointer-halo)]" />
     </div>
   );
 }

@@ -76,7 +76,7 @@ export function LoginForm({ next }: { next: string }) {
         <p className="pt-1 text-center text-body-s text-text-secondary">
           계정은 관리자에게 받아 주세요.
           <br />
-          사장님은 문자 속 링크를 누르시면 돼요.
+          사장님은 문자나 카톡으로 받으신 링크를 누르시면 돼요.
         </p>
       </BottomCta>
     </form>

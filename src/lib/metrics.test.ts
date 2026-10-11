@@ -109,6 +109,19 @@ describe("computeMetrics", () => {
     expect(m.durationCount).toBe(0);
   });
 
+  it("카메라 허용률: link_opened 없이 camera_granted만 있는 상담(예: JOIN-13 고객 화면 열어 보기)은 분자·분모 모두에서 빠진다", () => {
+    const m = computeMetrics([{ id: "a" }, { id: "b" }, { id: "preview" }], [
+      ev("a", "link_opened"),
+      ev("a", "camera_granted"),
+      ev("b", "link_opened"),
+      // 링크 기록 없이 카메라만 켠 상담 → 100%를 넘거나 부풀지 않게 뺀다
+      ev("preview", "camera_granted"),
+    ]);
+    expect(m.linkToCamera).toEqual({ hit: 1, of: 2 });
+    // 연결 실패율은 카메라를 켠 상담 기준이라 그대로 들어간다
+    expect(m.connectFailure).toEqual({ hit: 2, of: 2 });
+  });
+
   it("비율은 이벤트 개수가 아니라 상담 수로 센다", () => {
     const rooms = ["a", "b", "c", "d"].map((id) => ({ id }));
     const m = computeMetrics(rooms, [

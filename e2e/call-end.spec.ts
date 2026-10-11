@@ -8,6 +8,8 @@ import { RealtimeHub, describeHub } from "./realtime-mock";
 //  - 고객 '통화 종료' → 확인 창. '계속하기'면 이어지고, '끝내기'면 상담도 닫힌다(엔지니어 화면 '고객님이 통화를 끝냈어요').
 //    고객 끝난 화면에 다시 연결 버튼은 없고, 링크를 다시 열면 '상담이 이미 끝났어요'
 //  - 연결 없이 '상담 닫기' → '닫기'
+//  - 연결 전에 고객이 나가면 엔지니어 제목은 '고객님을 다시 기다리고 있어요'(카메라 기록이 있어도 '곧 연결돼요'가 아님)
+//  - 다른 기기가 이어받아 끝내면 밀려난 기기도 끝난 상담 화면으로 ('여기서 다시 받기'를 눌러도 로그인 안내가 아니라)
 //  - 고객 마이크를 못 쓰면(전화 통화 중 등) 카메라만으로 연결하고 엔지니어 화면에 알린다
 // 진짜 Supabase 없이 — 다른 통화 테스트와 같은 가짜 서버·가짜 카메라·실제 WebRTC 루프백.
 
@@ -269,9 +271,12 @@ test("연결되기 전에 고객이 '끝내기'를 누르면 상담은 닫히지
     // 기사님 쪽으로 종료 알림(bye)은 갔다
     await expect.poll(() => hub.broadcasts.some((b) => b.event === "bye" && b.topic.endsWith(":c"))).toBe(true);
 
-    // 엔지니어는 계속 기다리고, 상담은 열려 있다
+    // 엔지니어는 계속 기다리고, 상담은 열려 있다. 카메라를 켰던 기록이 있어도 제목은 '곧 연결돼요'가 아니라 다시 기다림 (ROOM-13)
     await ep.waitForTimeout(2000);
     await expect(ep.getByTestId("eng-waiting")).toBeVisible();
+    await expect(ep.getByTestId("eng-wait-title")).toHaveAttribute("data-state", "left", { timeout: 10_000 });
+    await expect(ep.getByTestId("eng-wait-title")).toContainText("고객님을 다시");
+    await expect(ep.getByTestId("eng-progress")).toContainText("연결되면 바로 영상이 보여요");
     await expect(ep.getByTestId("eng-customer-ended")).toHaveCount(0);
     await expect(ep.getByTestId("eng-closing")).toHaveCount(0);
     const rec = await roomRecord();
@@ -288,6 +293,86 @@ test("연결되기 전에 고객이 '끝내기'를 누르면 상담은 닫히지
   } finally {
     if (test.info().status !== test.info().expectedStatus) console.log("hub:", describeHub(hub), logs.join("\n"));
     await engCtx.close();
+    await custCtx.close();
+  }
+});
+
+/** 폰(ep)으로 통화하다가 두 번째 엔지니어 기기(pc)가 이어받게 한다. 둘 다 같은 계정 */
+async function takeOver(ep: Page, pc: Page, cp: Page) {
+  await connect(ep, cp);
+  await pc.goto(`/room/${ROOM.id}`);
+  await pc.getByRole("button", { name: /마이크 켜고/ }).click();
+  await expect(ep.getByTestId("eng-take-back")).toBeVisible({ timeout: 20_000 });
+  await expect(cp.getByTestId("cust-status")).toHaveText("기사님이 보고 있어요", { timeout: 30_000 });
+  await expect(pc.getByTestId("eng-call-status")).toContainText("통화 중", { timeout: 30_000 });
+}
+
+/** 두 번째 기기에서 '종료' → '통화 끝내기' */
+async function endOn(pc: Page) {
+  await pc.getByTestId("eng-end").click();
+  await pc.waitForTimeout(ARM_WAIT_MS);
+  await pc.getByTestId("eng-end-sheet").getByRole("button", { name: "통화 끝내기" }).click();
+  await expect(pc).toHaveURL(/\/dashboard$/, { timeout: 15_000 });
+}
+
+test("이어받은 기기에서 상담을 끝내면 밀려난 기기도 몇 초 안에 끝난 상담 화면으로 (CALL-13, ROOM-11)", async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const hub = new RealtimeHub();
+  const engCtx = await open(hub, browser, baseURL!, true);
+  const pcCtx = await open(hub, browser, baseURL!, true);
+  const custCtx = await open(hub, browser, baseURL!, false);
+  const ep = await engCtx.newPage();
+  const pc = await pcCtx.newPage();
+  const cp = await custCtx.newPage();
+  const logs = collectErrors([["eng", ep], ["pc", pc], ["cust", cp]]);
+
+  try {
+    await takeOver(ep, pc, cp);
+    await endOn(pc);
+    await expect(cp.getByTestId("cust-ended")).toBeVisible({ timeout: 10_000 });
+    // 밀려난 폰은 아무것도 누르지 않아도 진행 상황을 묻다가 끝난 상담 화면으로 바뀐다
+    await expect(ep.getByTestId("room-closed")).toHaveAttribute("data-state", "ended", { timeout: 15_000 });
+    await expect(ep.getByText("통화 권한을 확인하지 못했어요")).toHaveCount(0);
+    expect((await roomRecord()).status).toBe("ended");
+    expect(logs).toEqual([]);
+  } finally {
+    if (test.info().status !== test.info().expectedStatus) console.log("hub:", describeHub(hub), logs.join("\n"));
+    await engCtx.close();
+    await pcCtx.close();
+    await custCtx.close();
+  }
+});
+
+test("끝난 상담에서 '여기서 다시 받기'를 누르면 로그인 안내 대신 끝난 상담 화면 (CALL-13, NET-03)", async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const hub = new RealtimeHub();
+  const engCtx = await open(hub, browser, baseURL!, true);
+  const pcCtx = await open(hub, browser, baseURL!, true);
+  const custCtx = await open(hub, browser, baseURL!, false);
+  const ep = await engCtx.newPage();
+  const pc = await pcCtx.newPage();
+  const cp = await custCtx.newPage();
+  const logs = collectErrors([["eng", ep], ["pc", pc], ["cust", cp]]);
+
+  try {
+    await takeOver(ep, pc, cp);
+    // 밀려난 폰이 진행 상황을 못 묻게 막아 둔다(서버 액션 실패) — 끝난 것을 먼저 알아채지 못한 채 '여기서 다시 받기'를 누르는 경우
+    const offline = (route: import("@playwright/test").Route) =>
+      route.request().method() === "POST" && route.request().headers()["next-action"] ? route.abort() : route.continue();
+    await ep.route(`**/room/${ROOM.id}`, offline);
+    await endOn(pc);
+    await expect(cp.getByTestId("cust-ended")).toBeVisible({ timeout: 10_000 });
+    await expect(ep.getByTestId("eng-take-back")).toBeVisible();
+
+    // 채널에 들어가 보지 않고(거부되면 '통화 권한을 확인하지 못했어요'가 뜬다) 끝난 상담 화면으로
+    await ep.getByTestId("eng-take-back").click();
+    await expect(ep.getByTestId("room-closed")).toHaveAttribute("data-state", "ended", { timeout: 15_000 });
+    await expect(ep.getByText("통화 권한을 확인하지 못했어요")).toHaveCount(0);
+    expect(logs).toEqual([]);
+  } finally {
+    if (test.info().status !== test.info().expectedStatus) console.log("hub:", describeHub(hub), logs.join("\n"));
+    await engCtx.close();
+    await pcCtx.close();
     await custCtx.close();
   }
 });

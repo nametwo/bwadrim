@@ -23,27 +23,33 @@ export function QualityPill({ quality, connecting }: { quality: CallQuality; con
   );
 }
 
+const BACK_CLASS = "-ml-2 grid size-touch place-items-center rounded-xl text-icon active:bg-bg-muted";
+
 /** 밝은 화면 위쪽 바 — 피그마 AppBar: 뒤로가기, 오른쪽 동작. 화면 제목은 바가 아니라 본문 맨 위에 크게 쓴다(title 없이) */
 export function AppBar({
   title,
   back = true,
+  onBack,
   right,
 }: {
   title?: ReactNode;
   back?: boolean;
+  /** 뒤로가기를 화면이 직접 처리한다 (찍은 사진을 먼저 챙기는 등, CALL-16). 없으면 상담 목록으로 바로 간다 */
+  onBack?: () => void;
   right?: ReactNode;
 }) {
   return (
     <header className="flex min-h-14 items-center gap-1">
-      {back && (
-        <Link
-          href="/dashboard"
-          aria-label="상담 목록으로"
-          className="-ml-2 grid size-touch place-items-center rounded-xl text-icon active:bg-bg-muted"
-        >
-          <ChevronLeftIcon className="size-6" />
-        </Link>
-      )}
+      {back &&
+        (onBack ? (
+          <button type="button" onClick={onBack} aria-label="상담 목록으로" data-testid="eng-back" className={BACK_CLASS}>
+            <ChevronLeftIcon className="size-6" />
+          </button>
+        ) : (
+          <Link href="/dashboard" aria-label="상담 목록으로" className={BACK_CLASS}>
+            <ChevronLeftIcon className="size-6" />
+          </Link>
+        ))}
       {title ? <h1 className="min-w-0 flex-1 truncate text-title-s">{title}</h1> : <span className="flex-1" />}
       {right}
     </header>

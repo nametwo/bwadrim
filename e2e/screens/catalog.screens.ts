@@ -218,6 +218,16 @@ test("대시보드·통계", async ({ browser, baseURL }) => {
 
     await open(ep, "/dashboard");
     const release = await holdPosts(ep, "/dashboard");
+    // 가짜 Supabase는 읽기를 실패하게 만들 수 없고, 잘림은 한 번에 받는 이벤트 수를 넘게 심어야 한다
+    await unreachable(
+      { section: "dashboard", ids: ["ROOM-04"], title: "대시보드 — 상담 목록을 못 읽었을 때 (dash-load-error)" },
+      "가짜 Supabase(e2e/mock-supabase.mjs)에 읽기 실패를 흉내 내는 스위치가 없다",
+    );
+    await unreachable(
+      { section: "dashboard", ids: ["DATA-06"], title: "통계 — 이벤트가 많아 일부만 셌을 때 (stats-truncated)" },
+      "가짜 Supabase에 한도를 넘는 이벤트를 심어야 한다. 카탈로그 데이터로는 한도에 닿지 않는다",
+    );
+
     await shot({ section: "dashboard", ids: ["ROOM-01"], title: "새 A/S 만드는 중…" }, async () => {
       await ep.getByRole("button", { name: /새 A\/S 시작/ }).click();
       await expect(ep.getByRole("button", { name: /만드는 중/ })).toBeVisible();
@@ -849,6 +859,41 @@ test("통화 중 — 도구·카메라·사진·끝내기", async ({ browser, ba
       return [eng(ep), cust(cp)];
     });
 
+    // 바꾸다가 새 카메라도 원래 카메라도 다시 못 열면 고객 영상이 꺼진다. 고객이 '카메라 다시 켜기'로 되살린다
+    const reopenMeta: ShotMeta = {
+      section: "camera",
+      ids: ["CALL-10", "JOIN-07"],
+      title: "고객이 '카메라 다시 켜기'",
+      note: "고객이 누르면(탭 안에서) 카메라를 다시 열어 영상이 이어진다",
+    };
+    const lost = await shot(
+      {
+        section: "camera",
+        ids: ["CALL-10", "JOIN-07"],
+        title: "고객 카메라가 꺼짐 (전환 중 카메라를 다시 못 엶)",
+        note: "가짜 카메라가 전환 요청을 모두 실패한 척. 고객 화면에 '카메라 다시 켜기'",
+      },
+      async () => {
+        await setFlip(cp, { fails: 10 });
+        await expect(ep.getByRole("button", { name: "카메라 바꾸기" })).toBeEnabled({ timeout: 8_000 });
+        await ep.getByRole("button", { name: "카메라 바꾸기" }).click();
+        await expect(cp.getByTestId("cust-camera-lost")).toBeVisible({ timeout: 10_000 });
+        await cp.waitForTimeout(400); // 아래에서 올라오는 움직임
+        return [eng(ep), cust(cp)];
+      },
+    );
+    await setFlip(cp, {});
+    if (lost) {
+      await shot(reopenMeta, async () => {
+        await cp.getByRole("button", { name: "카메라 다시 켜기" }).click();
+        await expect(cp.getByTestId("cust-camera-lost")).toHaveCount(0, { timeout: 10_000 });
+        await cp.waitForTimeout(500);
+        return [eng(ep), cust(cp)];
+      });
+    } else {
+      await unreachable(reopenMeta, "고객 카메라가 꺼진 화면(cust-camera-lost)에 가지 못해 '카메라 다시 켜기'를 누를 수 없었다");
+    }
+
     await shot({ section: "end", ids: ["CALL-06", "ROOM-10"], title: "통화를 끝낼까요? (E10)", note: "창이 떠 있는 동안에도 통화는 이어진다" }, async () => {
       await ep.getByTestId("eng-end").click();
       await expect(ep.getByTestId("eng-end-sheet")).toBeVisible();
@@ -990,11 +1035,37 @@ test("고객이 먼저 끝냄·닫는 중·로그인 풀림·고객이 나감·�
   await mockReset();
   await useRig(browser, baseURL, async (rig) => {
     const { ep, cp } = await connect(rig);
-    await shot({ section: "end", ids: ["CALL-05", "CALL-07"], title: "고객이 창을 닫고 나감", note: "엔지니어는 기다리는 화면으로. 고객이 다시 들어오면 자동으로 이어진다" }, async () => {
-      await cp.close();
-      await expect(ep.getByTestId("eng-waiting")).toBeVisible({ timeout: 20_000 });
-      return [eng(ep)];
-    });
+    // 나가기 전에 사진 한 장 — 아래 '<' 장면에서 사진 저장 화면이 뜨게 (CALL-16)
+    await ep.getByTestId("eng-photo").click();
+    await expect(ep.getByTestId("eng-photo-count")).toHaveText("1", { timeout: 15_000 });
+    await shot(
+      {
+        section: "end",
+        ids: ["CALL-05", "CALL-07", "ROOM-13"],
+        title: "고객이 창을 닫고 나감",
+        note: "엔지니어는 기다리는 화면으로. 카메라를 켰던 기록이 남아 있어도 제목은 '고객님을 다시 기다리고 있어요'. 고객이 다시 들어오면 자동으로 이어진다",
+      },
+      async () => {
+        await cp.close();
+        await expect(ep.getByTestId("eng-waiting")).toBeVisible({ timeout: 20_000 });
+        await expect(ep.getByTestId("eng-wait-title")).toContainText("다시", { timeout: 15_000 });
+        return [eng(ep)];
+      },
+    );
+    await shot(
+      {
+        section: "end",
+        ids: ["ROOM-05", "CALL-16"],
+        title: "고객이 나간 뒤 '<' → 찍은 사진 저장",
+        note: "'<'(상담 목록으로)는 상담을 닫지 않는다. 저장 안 한 사진이 있으면 나가기 전에 묻고, 없으면 바로 상담 목록",
+      },
+      async () => {
+        await ep.getByTestId("eng-back").click();
+        await expect(ep.getByTestId("eng-photo-save")).toHaveAttribute("data-notice", "left", { timeout: 10_000 });
+        await expect(ep.getByTestId("eng-photo-notice")).toContainText("상담은 아직 열려 있어요");
+        return [eng(ep)];
+      },
+    );
   });
 
   await mockReset();
@@ -1013,7 +1084,7 @@ test("고객이 먼저 끝냄·닫는 중·로그인 풀림·고객이 나감·�
 });
 
 test("연결 실패·이어받기·권한 거부·마이크 없이 통화", async ({ browser, baseURL }) => {
-  test.setTimeout(300_000);
+  test.setTimeout(480_000);
   await useRig(browser, baseURL, async (rig) => {
     const { ep, cp } = await connect(rig);
     // 브라우저가 연결을 '완전 실패'로 판정한 척. 고객은 실패하면 채널에서 나가므로 엔지니어 쪽을 먼저 찍는다
@@ -1044,6 +1115,16 @@ test("연결 실패·이어받기·권한 거부·마이크 없이 통화", asyn
       },
     );
 
+    // 밀려나기 전에 폰에서 사진 한 장 (CALL-16). 못 찍으면 아래 '상담 목록으로' 장면만 못 찍은 상태로 남는다
+    const photoTaken = await (async () => {
+      await expect(ep.getByTestId("eng-photo")).toBeEnabled({ timeout: 15_000 });
+      await ep.getByTestId("eng-photo").click();
+      await expect(ep.getByTestId("eng-photo-count")).toHaveText("1", { timeout: 15_000 });
+    })().then(
+      () => true,
+      () => false,
+    );
+
     const ep2 = await rig.engineer({ pc: true });
     await shot({ section: "end", ids: ["CALL-13"], title: "엔지니어가 다른 기기(PC)에서 이어받음" }, async () => {
       await engineerReady(ep2);
@@ -1052,6 +1133,77 @@ test("연결 실패·이어받기·권한 거부·마이크 없이 통화", asyn
       await ep2.waitForTimeout(500);
       return [{ label: "먼저 쓰던 엔지니어 폰", page: ep }, { label: "새 엔지니어 PC", page: ep2 }];
     });
+
+    await shot(
+      {
+        section: "end",
+        ids: ["CALL-13", "CALL-16"],
+        title: "밀려난 폰에서 '상담 목록으로' → 찍은 사진 저장",
+        note: "이 폰에서 찍은 사진은 이 폰에만 있다. 상담은 PC에서 이어진다. 저장 안 한 사진이 없으면 바로 상담 목록",
+      },
+      async () => {
+        if (!photoTaken) throw new Error("밀려나기 전에 폰에서 사진을 찍지 못했다");
+        await ep.getByTestId("eng-replaced-leave").click();
+        await expect(ep.getByTestId("eng-photo-save")).toHaveAttribute("data-notice", "replaced", { timeout: 10_000 });
+        await expect(ep.getByTestId("eng-photo-notice")).toContainText("다른 기기에서 이어받았어요");
+        return [{ label: "먼저 쓰던 엔지니어 폰", page: ep }];
+      },
+    );
+  });
+
+  // 이어받은 PC가 상담을 끝내면, 밀려난 폰도 (진행 상황을 묻다가) 끝난 상담 화면으로 바뀐다
+  await mockReset();
+  await useRig(browser, baseURL, async (rig) => {
+    const { ep, cp } = await connect(rig);
+    const pc = await rig.engineer({ pc: true });
+    await shot(
+      {
+        section: "end",
+        ids: ["CALL-13", "ROOM-11"],
+        title: "이어받은 PC에서 끝냄 → 밀려난 폰은 끝난 상담 화면",
+        note: "밀려난 폰도 3초마다 상담 상태를 묻는다. '여기서 다시 받기'를 누르기 전에 바뀐다(눌러도 같은 화면, '통화 권한' 안내는 안 뜬다)",
+      },
+      async () => {
+        await engineerReady(pc);
+        await expect(ep.getByTestId("eng-take-back")).toBeVisible({ timeout: 20_000 });
+        await expect(pc.getByTestId("eng-call-status")).toContainText("통화 중", { timeout: 30_000 });
+        await pc.getByRole("button", { name: "통화 종료" }).click();
+        await pc.waitForTimeout(ARM_MS);
+        await pc.getByTestId("eng-end-sheet").getByRole("button", { name: "통화 끝내기" }).click();
+        await expect(cp.getByTestId("cust-ended")).toBeVisible({ timeout: 10_000 });
+        await expect(ep.getByTestId("room-closed")).toHaveAttribute("data-state", "ended", { timeout: 20_000 });
+        return [{ label: "밀려난 엔지니어 폰", page: ep }, cust(cp)];
+      },
+    );
+  });
+
+  // 통화 권한 거부(CALL-12)에서 '다시 로그인'을 누르면 찍은 사진부터 묻는다.
+  // 통화 중 로그인이 풀리는 순간은 만들 수 없어서, 밀려난 폰이 '여기서 다시 받기'를 누를 때 채널이 거부하게 한다
+  await mockReset();
+  await useRig(browser, baseURL, async (rig) => {
+    const { ep } = await connect(rig);
+    const pc = await rig.engineer({ pc: true });
+    await shot(
+      {
+        section: "end",
+        ids: ["CALL-12", "CALL-16"],
+        title: "통화 권한 거부 → '다시 로그인' 전에 찍은 사진 저장",
+        note: "통화 중 로그인이 풀린 척(밀려난 폰이 다시 받을 때 채널이 거부). 저장하거나 '저장 안 하고 나가기'를 누르면 로그인 화면",
+      },
+      async () => {
+        await ep.getByTestId("eng-photo").click();
+        await expect(ep.getByTestId("eng-photo-count")).toHaveText("1", { timeout: 15_000 });
+        await engineerReady(pc);
+        await expect(ep.getByTestId("eng-take-back")).toBeVisible({ timeout: 20_000 });
+        rig.hub.denyTrack = (topic) => topic.endsWith(":e");
+        await ep.getByTestId("eng-take-back").click();
+        await expect(ep.getByText("통화 권한을 확인하지 못했어요")).toBeVisible({ timeout: 20_000 });
+        await ep.getByTestId("eng-relogin").click();
+        await expect(ep.getByTestId("eng-photo-save")).toHaveAttribute("data-notice", "relogin-call", { timeout: 10_000 });
+        await expect(ep.getByTestId("eng-photo-notice")).toContainText("로그인이 풀려서 통화가 끊겼어요");
+        return [eng(ep)];
+      },
+    );
   });
 
   await mockReset();

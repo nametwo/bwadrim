@@ -39,7 +39,8 @@ export async function endRoom(roomId: string, connected: boolean): Promise<EndRo
 
   if (data) {
     const durationSec = Math.round((Date.now() - new Date(data.created_at).getTime()) / 1000);
-    await logEvent(roomId, "engineer", "ended", { duration_sec: durationSec, connected });
+    // 클라이언트가 보낸 값은 참·거짓만 남긴다 (서버 액션은 아무 값으로나 부를 수 있다)
+    await logEvent(roomId, "engineer", "ended", { duration_sec: durationSec, connected: connected === true });
   }
 
   return { ok: true };
@@ -68,6 +69,9 @@ export type JoinProgress = {
   camera: "granted" | "denied" | null;
   // 거부 원인(JOIN-05의 reason: NotAllowedError 등)
   deniedReason: string | null;
+  // 마지막 카메라 허용 기록이 몇 초 전인지(서버 시각 기준). 허용 기록이 없거나 시각을 못 읽으면 null.
+  // 고객이 나가도 기록은 남으므로, 대기 화면은 오래된 허용을 '곧 연결돼요'로 보지 않는다(wait-status.ts)
+  cameraAgoSec: number | null;
   // 카톡 카드가 어느 방에든 간 적이 있는지(카카오 알림 kakao_sent, ROOM-15). 새로고침해도 '보낸 뒤' 화면으로
   kakaoSent: boolean;
   // 받는 분 이름표 (ROOM-16). label이 null이면 아직 이름이 없음 → 보낸 뒤 화면이 이름을 묻는다.
@@ -75,13 +79,15 @@ export type JoinProgress = {
   // key는 그 방(없으면 'room') — 카톡 알림이 와서 방이 바뀌면 화면이 카드를 새로 그린다.
   // undefined = 이번에 읽지 못함(화면은 하던 대로 둔다)
   recipient?: { key: string; label: string | null; auto: boolean };
+  // 상담이 닫혔거나(다른 기기에서 끝냄) 24시간이 지나 만료됐다 (ROOM-11). 열려 있거나 읽지 못하면 undefined
+  roomGone?: "ended" | "expired";
 };
 
 export async function getJoinProgress(roomId: string): Promise<JoinProgress | null> {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("events")
-    .select("id, name, props")
+    .select("id, name, props, created_at")
     .eq("room_id", roomId)
     .in("name", ["link_opened", "camera_granted", "camera_denied", "kakao_sent"])
     .order("id", { ascending: true });
@@ -91,29 +97,44 @@ export async function getJoinProgress(roomId: string): Promise<JoinProgress | nu
   let camera: JoinProgress["camera"] = null;
   let deniedReason: string | null = null;
   let kakaoSent = false;
-  for (const e of data as { name: string; props: Record<string, unknown> | null }[]) {
+  let grantedAt: string | null = null;
+  for (const e of data as { name: string; props: Record<string, unknown> | null; created_at?: string | null }[]) {
     if (e.name === "kakao_sent") kakaoSent = true;
     if (e.name === "link_opened") linkOpened = true;
     if (e.name === "camera_granted") {
       camera = "granted";
       deniedReason = null;
+      grantedAt = e.created_at ?? null;
     }
     if (e.name === "camera_denied") {
       camera = "denied";
       deniedReason = typeof e.props?.reason === "string" ? e.props.reason : null;
     }
   }
+  const grantedMs = camera === "granted" && grantedAt ? Date.parse(grantedAt) : NaN;
+  const [recipient, roomGone] = await Promise.all([getRecipient(supabase, roomId), getRoomGone(supabase, roomId)]);
   // 카메라를 켰다면 링크는 연 것이다 (link_opened 기록이 실패했어도)
   return {
     linkOpened: linkOpened || camera !== null,
     camera,
     deniedReason,
+    cameraAgoSec: Number.isNaN(grantedMs) ? null : Math.round((Date.now() - grantedMs) / 1000),
     kakaoSent,
-    recipient: await getRecipient(supabase, roomId),
+    recipient,
+    roomGone,
   };
 }
 
 type Supabase = Awaited<ReturnType<typeof createClient>>;
+
+// 상담이 닫혔거나 만료됐는지 (ROOM-11). 받는 분 조회와 따로 읽는다 — 한쪽이 실패해도 다른 쪽은 쓴다. 못 읽으면 undefined
+async function getRoomGone(supabase: Supabase, roomId: string): Promise<JoinProgress["roomGone"]> {
+  const { data: room, error } = await supabase.from("rooms").select("status, expires_at").eq("id", roomId).maybeSingle();
+  if (error || !room) return undefined;
+  if (room.status === "ended") return "ended";
+  const expiresAt = Date.parse(room.expires_at as string);
+  return !Number.isNaN(expiresAt) && expiresAt < Date.now() ? "expired" : undefined;
+}
 
 // 이 상담의 받는 분 이름표 (ROOM-16). 칸이 아직 없거나(DB 준비 전) 읽지 못하면 undefined
 async function getRecipient(supabase: Supabase, roomId: string): Promise<JoinProgress["recipient"]> {
@@ -239,11 +260,16 @@ export async function nameRecipient(roomId: string, raw: string): Promise<NameRe
   return linkError ? { ok: false, reason: "db" } : { ok: true, label };
 }
 
-// 레이저 포인터·화면 멈춤·AR 핀·방향 지시 첫 사용 기록 (세션 화면을 열 때마다 1번씩). 자기 방인지는 RLS로 확인
+// 도구 첫 사용 기록으로 받는 이벤트 이름. 타입은 실행할 때 사라지므로 서버에서 다시 거른다
+// (logEvent는 service role로 쓰므로, 거르지 않으면 'ended'·'connected' 같은 기록을 아무나 넣을 수 있다)
+const TOOL_EVENTS = new Set(["pointer_used", "freeze_used", "anchor_used", "guide_used", "photo_taken"]);
+
+// 레이저 포인터·화면 멈춤·AR 핀·방향 지시·사진 첫 사용 기록 (세션 화면을 열 때마다 1번씩). 자기 방인지는 RLS로 확인
 export async function logToolUsed(
   roomId: string,
   name: "pointer_used" | "freeze_used" | "anchor_used" | "guide_used" | "photo_taken",
 ) {
+  if (!TOOL_EVENTS.has(name)) return;
   const supabase = await createClient();
   const {
     data: { user },

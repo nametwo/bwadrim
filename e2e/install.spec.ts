@@ -9,7 +9,7 @@ import { fireInstallPrompt } from "./screens/browser-hooks";
 //  - 홈 화면 아이콘으로 연 앱(standalone)·PC에는 뜨지 않는다
 //  - 앱 설정(manifest)은 엔지니어 화면에만 붙고 고객 링크(/join)에는 없다 → 고객 폰에 '앱 설치'가 뜨지 않는다
 //  - 삼성 인터넷은 앱으로 설치시키지 않는다(BUG-24): 설치되지 않는 설정(display: browser), 설치 버튼 없음, 서비스 워커 없음.
-//    메뉴로 바로가기를 만드는 세 단계, 바로가기로 열면(from=home) 안 뜬다
+//    메뉴로 바로가기를 만드는 세 단계, 바로가기로 열면(from=home) 안 뜬다. 로그인 화면을 거쳐도 표시가 남는다
 
 const PHONE: BrowserContextOptions = {
   viewport: { width: 390, height: 844 },
@@ -160,6 +160,29 @@ test("삼성 인터넷: 홈 화면 바로가기로 열면 설치 화면 없이 �
     await expect(page.getByTestId("install-prompt")).toHaveCount(0);
     await page.goto("/stats");
     await page.goto("/dashboard");
+    await page.waitForLoadState("networkidle");
+    await page.waitForTimeout(500);
+    await expect(page.getByTestId("install-prompt")).toHaveCount(0);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("삼성 인터넷: 로그아웃된 채 바로가기로 열어도 로그인 뒤 설치 화면이 안 뜬다 (AUTH-04)", async ({ browser, baseURL }) => {
+  // 다른 기기에서 로그아웃하면(AUTH-06) 바로가기가 로그인 화면으로 간다. 그때 ?from=home이 빠지면 안내가 다시 뜬다
+  const ctx = await browser.newContext({ ...PHONE, userAgent: UA.samsung });
+  try {
+    const page = await ctx.newPage();
+    await page.goto("/dashboard?from=home");
+    await expect(page).toHaveURL(/\/login\?next=%2Fdashboard%3Ffrom%3Dhome$/);
+    const next = await page.locator('input[type="hidden"][name="next"]').inputValue();
+    expect(next).toBe("/dashboard?from=home");
+
+    // 가짜 Supabase는 비밀번호 로그인을 하지 않는다. 로그인이 남기는 세션 쿠키를 넣고,
+    // 로그인 액션처럼 폼의 next(쿼리 포함)로 간다
+    await ctx.addCookies([engineerCookie(baseURL!)]);
+    await page.goto(next);
+    await expect(page).toHaveURL(/\/dashboard\?from=home$/);
     await page.waitForLoadState("networkidle");
     await page.waitForTimeout(500);
     await expect(page.getByTestId("install-prompt")).toHaveCount(0);

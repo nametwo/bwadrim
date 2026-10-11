@@ -3,9 +3,15 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { isJoinToken } from "@/lib/join-token";
 
 // ICE 서버 목록 발급. TURN 자격증명은 서버에서만 다루고
-// 클라이언트엔 단기(2h) 토큰만 내려준다.
+// 클라이언트엔 단기 토큰만 내려준다. 유효시간은 상담이 만료되는 때까지(최대 2시간).
+// 만료 직전에 시작한 통화도 30분은 쓸 수 있게 30분보다 짧게 주지는 않는다. 발급 횟수 제한은 아직 없다(BUG-15)
 // 응답의 turnError가 있으면 TURN 없이 STUN만 내려간 것 — 모바일망끼리는 연결이 실패할 수 있다.
 const STUN: RTCIceServer = { urls: "stun:stun.l.google.com:19302" };
+
+const TTL_MAX = 7200;
+const TTL_MIN = 1800;
+// Cloudflare가 응답하지 않으면 고객 화면이 '카메라 켜는 중…'에서 멈춘다. 이 안에 못 받으면 STUN만 준다
+const CLOUDFLARE_TIMEOUT_MS = 5000;
 
 type TurnResponse = { iceServers: RTCIceServer[]; turnError: string | null };
 
@@ -58,6 +64,9 @@ export async function GET(request: Request) {
     return stunOnly("CLOUDFLARE_TURN_KEY_ID / CLOUDFLARE_TURN_API_TOKEN 미설정");
   }
 
+  const untilExpiry = Math.floor((Date.parse(room.expires_at) - Date.now()) / 1000);
+  const ttl = Number.isFinite(untilExpiry) ? Math.min(TTL_MAX, Math.max(TTL_MIN, untilExpiry)) : TTL_MAX;
+
   try {
     const res = await fetch(
       `https://rtc.live.cloudflare.com/v1/turn/keys/${keyId}/credentials/generate-ice-servers`,
@@ -67,8 +76,10 @@ export async function GET(request: Request) {
           Authorization: `Bearer ${apiToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ ttl: 7200 }),
+        body: JSON.stringify({ ttl }),
         cache: "no-store",
+        // 시간이 지나면 TimeoutError로 아래 catch에 걸려 STUN만 내려간다
+        signal: AbortSignal.timeout(CLOUDFLARE_TIMEOUT_MS),
       },
     );
     if (!res.ok) {

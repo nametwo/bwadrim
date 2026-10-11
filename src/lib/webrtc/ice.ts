@@ -17,13 +17,20 @@ function clockOffset(res: Response, sentAt: number): number {
 
 const STUN_ONLY: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
 
+// 응답이 이보다 늦으면 기다리지 않고 STUN만으로 연결을 시작한다 — 고객은 그동안 '기다리는 중'에 머문다
+export const ICE_FETCH_TIMEOUT_MS = 8000;
+
 // 클라이언트에서 ICE 서버 목록을 받아온다 (TURN 단기 자격증명 포함)
 // joinToken: 고객 링크의 토큰. 유효한(종료·만료 전) 세션에만 발급된다
 export async function fetchIceServers(joinToken: string): Promise<IceConfig> {
+  // AbortSignal.timeout은 옛 iOS 사파리에 없어서 직접 건다
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ICE_FETCH_TIMEOUT_MS);
   try {
     const sentAt = Date.now();
     const res = await fetch(`/api/turn?t=${encodeURIComponent(joinToken)}`, {
       cache: "no-store",
+      signal: ctrl.signal,
     });
     const clockOffsetMs = clockOffset(res, sentAt);
     if (res.status === 404) {
@@ -39,10 +46,17 @@ export async function fetchIceServers(joinToken: string): Promise<IceConfig> {
     return { ...body, clockOffsetMs };
   } catch (e) {
     console.error("[ice] ICE 서버 조회 실패, STUN으로 폴백:", e);
+    const reason = ctrl.signal.aborted
+      ? `${ICE_FETCH_TIMEOUT_MS / 1000}초 안에 응답이 없어요`
+      : e instanceof Error
+        ? e.message
+        : String(e);
     return {
       iceServers: STUN_ONLY,
-      turnError: `ICE 서버 조회 실패: ${e instanceof Error ? e.message : e}`,
+      turnError: `ICE 서버 조회 실패: ${reason}`,
       clockOffsetMs: 0,
     };
+  } finally {
+    clearTimeout(timer);
   }
 }
