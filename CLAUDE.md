@@ -81,6 +81,7 @@ AR 핀(CALL-14)은 전용 DataChannel `anchor`(고객이 offer에 포함). 기�
 - 화면이나 상태를 새로 만들면 `e2e/screens/catalog.screens.ts`에 `shot()`을 하나 더한다. 못 가는 상태는 `unreachable()`로 이유를 남긴다
 - 카탈로그는 버튼·상태를 `data-testid`와 역할(role)로 찾는다. 새 화면·상태에는 `data-testid`를 붙여 둘 것 — 문구·디자인만 바뀌면 카탈로그를 고칠 일이 없다
 - 찾던 버튼이 없어지는 등 한 장면이 막히면 그 장면만 '못 찍은 상태'(이유 포함)로 남고 나머지는 계속 찍힌다
+- README 움짤은 `npm run readme:media`(e2e/readme/*.media.ts가 두 폰 화면을 녹화) → `scripts/readme-media/make-gif.py`로 합쳐 `docs/media`에 둔다. 정지 화면 묶음은 `make-strip.py`가 카탈로그 캡처로 만든다
 - `next dev`는 폴더당 하나만 뜬다. 개발 서버가 켜져 있으면 끄거나, 다른 폴더(git worktree)에서 돌릴 것
 
 ## 디자인 토큰

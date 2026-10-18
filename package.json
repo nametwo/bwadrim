@@ -10,7 +10,8 @@
     "test": "vitest run",
     "bench:tracking": "tsx scripts/tracking-bench/run.ts",
     "e2e": "playwright test",
-    "screens": "playwright test -c playwright.screens.config.ts"
+    "screens": "playwright test -c playwright.screens.config.ts",
+    "readme:media": "playwright test -c playwright.readme.config.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",
