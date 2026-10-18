@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { BusinessFooter } from "@/components/business-footer";
 import { Brand } from "@/components/ui/brand";
 import { LoginForm } from "./login-form";
 
@@ -25,6 +26,8 @@ export default async function LoginPage({
       </h1>
 
       <LoginForm next={typeof next === "string" ? next : ""} />
+      {/* '로그인'은 화면 아래에 붙어 있고, 사업자 정보는 내려야 보인다 */}
+      <BusinessFooter />
     </main>
   );
 }

@@ -119,6 +119,14 @@ test("첫 화면·로그인·404", async ({ browser, baseURL }) => {
       return [{ label: "폰", page: p }, { label: "PC", page: pc }];
     });
 
+    await shot({ section: "home", ids: ["NFR-10"], title: "개인정보 처리방침", note: "로그인 화면 맨 아래 '개인정보 처리방침'을 누르면 온다. 로그인 없이 열린다" }, async () => {
+      await open(p, "/login");
+      await p.getByTestId("business-footer").getByRole("link", { name: "개인정보 처리방침" }).click();
+      await expect(p).toHaveURL(/\/privacy$/);
+      await expect(p.getByRole("heading", { name: "개인정보 처리방침", level: 1 })).toBeVisible();
+      return [{ label: "폰", page: p }];
+    });
+
     const release = await holdPosts(p, "/login");
     await shot({ section: "home", ids: ["AUTH-02"], title: "로그인 중…" }, async () => {
       await p.getByLabel("이메일").fill("engineer@example.com");

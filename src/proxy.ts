@@ -75,5 +75,6 @@ export const config = {
   // 정적 파일·이미지 최적화는 제외. 세션 갱신을 위해 나머지 페이지는 통과시킨다.
   // 추적 실험실(/lab/*, CALL-14)은 로그인·Supabase가 필요 없어 제외한다 —
   // Supabase 환경 변수가 없는 Preview 배포에서도 폰으로 열 수 있게.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|lab(?:/|$)|.*\\.(?:svg|png|jpg|jpeg|webp|ico|webmanifest)$|sw\\.js$).*)"],
+  // 앱 연결 파일(/.well-known/assetlinks.json, OPS-08)도 제외한다 — 로그인과 상관없고, 세션 확인으로 늦어질 이유가 없다
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|lab(?:/|$)|\\.well-known/|.*\\.(?:svg|png|jpg|jpeg|webp|ico|webmanifest)$|sw\\.js$).*)"],
 };

@@ -29,6 +29,7 @@
 src/proxy.ts                                     # 세션 갱신 + 엔지니어 라우트 보호 (Next 16: middleware → proxy)
 src/app/
   (engineer)/login, /dashboard, /room/[id], /stats  # 로그인 필요. 방 생성·종료는 서버 액션. stats = 핵심 지표(DATA-06). layout = 앱 안 브라우저면 인터넷 앱으로(AUTH-09), 홈 화면 앱 설정(manifest)·설치 신호 받기(NFR-09)
+  privacy                                        # 개인정보 처리방침, 공개(NFR-10). 사업자 정보 값은 lib/business-info.ts
   join/[token]                                   # 고객 진입, 공개. 32자리 링크 토큰(ROOM-12). start-screen(시작), camera-help(거부 원인별 안내), camera-start(통화), owner-notice(그 상담 엔지니어가 로그인한 채로 열면, JOIN-13)
   api/turn                                       # 링크 토큰 검증 후 Cloudflare TURN 단기 자격증명 발급
   api/events                                     # 고객(비로그인) 쪽 지표 이벤트 수집
@@ -42,6 +43,7 @@ src/lib/
   kakao-webhook.ts                               # 카톡 공유 웹훅 키 확인·상담 id 서명 (ROOM-15)
   recipients.ts                                  # 받는 분 이름표: 웹훅이 온 카톡 1:1 방을 상담에 잇기 (서버 전용, ROOM-16). 글자 다듬기는 recipient-label.ts
   photo-save.ts                                  # 통화 중 찍은 사진 저장 (폰 공유 창·다운로드, CALL-16)
+  business-info.ts                               # 운영 사업자 정보(상호·대표·주소·문의 메일). 로그인 화면 아래(components/business-footer.tsx, AUTH-02)와 처리방침(NFR-10). 빈 값은 아직 안 정한 것
   format.ts                                      # 화면 시각·시간 글자 ('오늘 오후 5:03', 한국 시간 고정)
   customer-event.ts                              # 고객 지표 이벤트 검사: 이벤트마다 정한 부가정보만 남김 (api/events, DATA-04)
   pointer-color.ts                               # 가리키기 빨강을 캔버스용으로 옮겨 적은 값 (globals.css --color-pointer-live와 같이 고칠 것)
