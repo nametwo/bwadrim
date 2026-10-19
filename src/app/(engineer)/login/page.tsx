@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 export default async function LoginPage({
   searchParams,
 }: PageProps<"/login">) {
-  const { next } = await searchParams;
+  const { next, error, deleted } = await searchParams;
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pt-[max(12px,env(safe-area-inset-top))]">
@@ -19,13 +19,7 @@ export default async function LoginPage({
         <Brand />
       </header>
 
-      <h1 className="pt-8 pb-8 text-title-l text-text-primary">
-        엔지니어 계정으로
-        <br />
-        로그인해 주세요
-      </h1>
-
-      <LoginForm next={typeof next === "string" ? next : ""} />
+      <LoginForm next={typeof next === "string" ? next : ""} kakaoFailed={error === "kakao"} deleted={deleted === "1"} />
       {/* '로그인'은 화면 아래에 붙어 있고, 사업자 정보는 내려야 보인다 */}
       <BusinessFooter />
     </main>

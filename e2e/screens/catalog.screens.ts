@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { CLIPS, FIXTURE, fakeCamera, mockReset, postKakaoWebhook } from "../helpers";
+import { CLIPS, FIXTURE, fakeCamera, mockReset, postKakaoWebhook, SUPABASE_URL } from "../helpers";
 import { failGum, holdGum, releaseGum, removeCamera, setFlip, setPeerState } from "./browser-hooks";
 import {
   EXPIRED,
@@ -111,7 +111,7 @@ test("첫 화면·로그인·404", async ({ browser, baseURL }) => {
     const p = await rig.visitor();
     const pc = await rig.visitor(true);
 
-    await shot({ section: "home", ids: ["AUTH-01", "AUTH-02", "AUTH-04"], title: "로그인", note: "사이트 주소(/)를 열어도, 로그인 안 하고 대시보드·세션·통계를 열어도 이 화면으로 온다" }, async () => {
+    await shot({ section: "home", ids: ["AUTH-01", "AUTH-02", "AUTH-04", "AUTH-10"], title: "로그인 — 카카오로 시작하기", note: "사이트 주소(/)를 열어도, 로그인 안 하고 대시보드·세션·통계·내 계정을 열어도 이 화면으로 온다. 처음이면 카카오로 바로 가입" }, async () => {
       await open(p, "/");
       await expect(p).toHaveURL(/\/login$/);
       await open(pc, "/dashboard");
@@ -124,6 +124,25 @@ test("첫 화면·로그인·404", async ({ browser, baseURL }) => {
       await p.getByTestId("business-footer").getByRole("link", { name: "개인정보 처리방침" }).click();
       await expect(p).toHaveURL(/\/privacy$/);
       await expect(p.getByRole("heading", { name: "개인정보 처리방침", level: 1 })).toBeVisible();
+      return [{ label: "폰", page: p }];
+    });
+
+    await shot({ section: "home", ids: ["AUTH-10"], title: "로그인 — 카카오 로그인을 마치지 못했을 때", note: "카카오 동의 화면에서 취소했거나 돌아온 코드가 틀릴 때" }, async () => {
+      await open(p, "/login?error=kakao");
+      await expect(p.getByText("카카오 로그인을 마치지 못했어요. 다시 눌러 주세요.")).toBeVisible();
+      return [{ label: "폰", page: p }];
+    });
+
+    await shot({ section: "home", ids: ["AUTH-11"], title: "로그인 — 탈퇴한 뒤", note: "내 계정 → 회원 탈퇴를 마치면 온다" }, async () => {
+      await open(p, "/login?deleted=1");
+      await expect(p.getByTestId("account-deleted")).toBeVisible();
+      return [{ label: "폰", page: p }];
+    });
+
+    await shot({ section: "home", ids: ["AUTH-02"], title: "로그인 — 이메일", note: "로그인 화면 아래 '이메일로 로그인'. 관리자가 만든 계정과 앱 심사용 계정" }, async () => {
+      await open(p, "/login");
+      await p.getByTestId("email-login-open").click();
+      await expect(p.getByLabel("이메일")).toBeVisible();
       return [{ label: "폰", page: p }];
     });
 
@@ -147,6 +166,7 @@ test("첫 화면·로그인·404", async ({ browser, baseURL }) => {
       { section: "home", ids: ["AUTH-02"], title: "로그인 — 키보드가 올라와 화면이 낮을 때", note: "안드로이드 카톡 같은 앱 안 브라우저는 키보드만큼 화면이 줄어든다. 글을 치는 동안은 '로그인'이 입력칸 아래로 내려가 가리지 않는다(BUG-21)" },
       async () => {
         await open(kb, "/login");
+        await kb.getByTestId("email-login-open").click();
         await kb.getByLabel("이메일").focus();
         await kb.setViewportSize({ width: 390, height: 360 });
         // 폰은 키보드가 올라오면 커서가 있는 입력칸이 보이게 스크롤한다
@@ -236,6 +256,7 @@ test("대시보드·통계", async ({ browser, baseURL }) => {
       "가짜 Supabase에 한도를 넘는 이벤트를 심어야 한다. 카탈로그 데이터로는 한도에 닿지 않는다",
     );
 
+    await mock("/__faults", { failRoomInsert: true });
     await shot({ section: "dashboard", ids: ["ROOM-01"], title: "새 A/S 만드는 중…" }, async () => {
       await ep.getByRole("button", { name: /새 A\/S 시작/ }).click();
       await expect(ep.getByRole("button", { name: /만드는 중/ })).toBeVisible();
@@ -249,6 +270,35 @@ test("대시보드·통계", async ({ browser, baseURL }) => {
         return [eng(ep)];
       },
     );
+    await mock("/__faults", { failRoomInsert: false });
+
+    // 한 달 상담 한도 (ROOM-17): 심어 둔 상담 수만큼으로 한도를 낮춰 다 쓴 상태를 만든다
+    // 대시보드처럼 한국 시간 이번 달 1일 0시부터 만든 상담만 센다
+    const kst = new Date(Date.now() + 9 * 3600_000);
+    const monthStart = Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth(), 1, -9);
+    const seeded = (await (await fetch(`${SUPABASE_URL}/__rooms`)).json()) as { created_at: string }[];
+    const used = seeded.filter((r) => new Date(r.created_at).getTime() >= monthStart).length;
+    await mock("/__faults", { roomLimit: used });
+    await shot(
+      { section: "dashboard", ids: ["ROOM-17", "ROOM-04"], title: "대시보드 — 이번 달 상담을 다 썼을 때", note: "기본 한도는 한 달 30건. 카탈로그는 심어 둔 상담 수로 한도를 낮춰 띄움. '새 A/S 시작' 대신 안내" },
+      async () => {
+        await open(ep, "/dashboard");
+        await expect(ep.getByTestId("room-limit")).toBeVisible({ timeout: 30_000 });
+        return [eng(ep)];
+      },
+    );
+    await mock("/__faults", { roomLimit: null });
+
+    await shot({ section: "dashboard", ids: ["AUTH-06", "AUTH-11", "ROOM-17"], title: "내 계정", note: "대시보드 위쪽 '내 계정'. 로그인 방법, 이번 달 상담 수와 한도, 로그아웃, 회원 탈퇴" }, async () => {
+      await open(ep, "/account");
+      await expect(ep.getByTestId("account-info")).toBeVisible({ timeout: 30_000 });
+      return [eng(ep)];
+    });
+    await shot({ section: "dashboard", ids: ["AUTH-11"], title: "회원 탈퇴 확인 창" }, async () => {
+      await ep.getByTestId("delete-open").click();
+      await expect(ep.getByTestId("delete-sheet")).toBeVisible();
+      return [eng(ep)];
+    });
   });
 });
 

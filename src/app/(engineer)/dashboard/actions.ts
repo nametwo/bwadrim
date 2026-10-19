@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { logEvent } from "@/lib/events";
+import { isRoomLimitError } from "@/lib/room-quota";
 
 export async function createRoom() {
   const supabase = await createClient();
@@ -17,6 +18,8 @@ export async function createRoom() {
     .insert({ engineer_id: user.id })
     .select("id")
     .single();
+  // 이번 달 상담을 다 썼으면 DB가 막는다 (ROOM-17). 대시보드가 '이번 달 상담을 다 썼어요'를 보여 준다
+  if (isRoomLimitError(error)) redirect("/dashboard");
   if (error || !data) throw new Error(`방 생성 실패: ${error?.message}`);
   const roomId = data.id;
 

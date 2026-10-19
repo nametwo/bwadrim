@@ -172,3 +172,59 @@ revoke all on function public.expire_recipients() from public, anon, authenticat
 create extension if not exists pg_cron with schema pg_catalog;
 -- 같은 이름으로 다시 부르면 일정만 바뀐다(여러 번 실행해도 잡은 하나)
 select cron.schedule('bwadrim-expire-recipients', '0 18 * * *', 'select public.expire_recipients()');
+
+-- ─── 한 달 상담 한도 (ROOM-17) ───
+-- 엔지니어가 한 달(한국 시간 1일 0시부터) 새로 만들 수 있는 상담 수. 줄이 없으면 기본 30건.
+-- 늘려 줄 때는 SQL 편집기에서: insert into engineer_plans (engineer_id, monthly_room_limit) values ('<사용자 id>', 100)
+--   on conflict (engineer_id) do update set monthly_room_limit = excluded.monthly_room_limit, updated_at = now();
+create table if not exists engineer_plans (
+  engineer_id        uuid primary key references auth.users(id) on delete cascade,
+  monthly_room_limit int not null check (monthly_room_limit >= 0),
+  updated_at         timestamptz not null default now()
+);
+alter table engineer_plans enable row level security;
+-- 엔지니어는 자기 한도를 읽기만 한다(고치는 것은 관리자)
+drop policy if exists "engineer reads own plan" on engineer_plans;
+create policy "engineer reads own plan" on engineer_plans
+  for select using ((select auth.uid()) = engineer_id);
+
+create or replace function private.room_limit_of(uid uuid)
+returns int
+language sql stable security definer set search_path = ''
+as $$
+  select coalesce((select p.monthly_room_limit from public.engineer_plans p where p.engineer_id = uid), 30);
+$$;
+revoke all on function private.room_limit_of(uuid) from public, anon, authenticated;
+
+-- 대시보드·내 계정 화면이 '12 / 30건'을 보여 줄 때 (로그인한 본인 것만)
+create or replace function public.my_room_limit()
+returns int
+language sql stable security definer set search_path = ''
+as $$
+  select private.room_limit_of((select auth.uid()));
+$$;
+revoke all on function public.my_room_limit() from public, anon;
+grant execute on function public.my_room_limit() to authenticated;
+
+-- 상담을 만들 때 이번 달 수가 한도에 닿았으면 막는다. 화면이 'room_limit'을 보고 안내한다.
+-- 같은 엔지니어가 동시에 두 번 눌러도 한도를 넘지 않게 엔지니어마다 줄을 세운다
+create or replace function private.enforce_room_limit()
+returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  month_start timestamptz := date_trunc('month', now() at time zone 'Asia/Seoul') at time zone 'Asia/Seoul';
+  used int;
+begin
+  perform pg_advisory_xact_lock(hashtextextended('room_limit:' || new.engineer_id::text, 0));
+  select count(*) into used from public.rooms r
+   where r.engineer_id = new.engineer_id and r.created_at >= month_start;
+  if used >= private.room_limit_of(new.engineer_id) then
+    raise exception 'room_limit' using errcode = 'P0001';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists rooms_enforce_limit on rooms;
+create trigger rooms_enforce_limit before insert on rooms
+  for each row execute function private.enforce_room_limit();

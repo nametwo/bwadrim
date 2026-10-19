@@ -28,9 +28,10 @@
 ```
 src/proxy.ts                                     # 세션 갱신 + 엔지니어 라우트 보호 (Next 16: middleware → proxy)
 src/app/
-  (engineer)/login, /dashboard, /room/[id], /stats  # 로그인 필요. 방 생성·종료는 서버 액션. stats = 핵심 지표(DATA-06). layout = 앱 안 브라우저면 인터넷 앱으로(AUTH-09), 웹 앱 설정(manifest, 플레이 앱용 OPS-08)·크롬 설치 띠 막기
+  (engineer)/login, /dashboard, /room/[id], /stats, /account  # 로그인 필요(login 빼고). login = 카카오로 시작하기(AUTH-10)·숨긴 이메일 로그인. account = 내 계정·로그아웃·회원 탈퇴(AUTH-11). 방 생성·종료는 서버 액션. stats = 핵심 지표(DATA-06). layout = 앱 안 브라우저면 인터넷 앱으로(AUTH-09), 웹 앱 설정(manifest, 플레이 앱용 OPS-08)·크롬 설치 띠 막기
   privacy                                        # 개인정보 처리방침, 공개(NFR-10). 사업자 정보 값은 lib/business-info.ts
   join/[token]                                   # 고객 진입, 공개. 32자리 링크 토큰(ROOM-12). start-screen(시작), camera-help(거부 원인별 안내), camera-start(통화), owner-notice(그 상담 엔지니어가 로그인한 채로 열면, JOIN-13)
+  auth/callback                                  # 카카오 동의 화면에서 돌아오는 곳: 코드 → 로그인 쿠키, 원래 가려던 화면으로 (AUTH-10)
   api/turn                                       # 링크 토큰 검증 후 Cloudflare TURN 단기 자격증명 발급
   api/events                                     # 고객(비로그인) 쪽 지표 이벤트 수집
   api/kakao/share-webhook                        # 카카오톡 공유 전송 성공 웹훅 → kakao_sent(채팅방 종류·해시, ROOM-15), 서명된 상담 id만 믿음, 받는 분 이름표에 잇기(ROOM-16)
@@ -38,6 +39,8 @@ src/lib/
   supabase/{client,server,admin}.ts              # admin = service role, 서버 전용
   webrtc/                                        # peer 연결, ICE 설정, 시그널링, 포인터 좌표(pointer.ts), 화면 멈춤·그리기(draw.ts), 카메라 전환·손전등(camera.ts), DataChannel 래퍼(data-link.ts), 방향 지시 메시지(guide.ts), 사진 찍기·주고받기(photo.ts, CALL-16), 대시보드 탭에서 마이크 미리 받기(mic-ahead.ts, CALL-01)
   tracking/                                      # 평면 앵커 추적(AR 핀, CALL-14). 설계는 tracking/README.md, 벤치는 scripts/tracking-bench
+  safe-next.ts                                   # 로그인 뒤 갈 주소 검사(같은 사이트 경로만, BUG-08)
+  room-quota.ts                                  # 한 달 상담 한도 읽기(ROOM-17). 막는 것은 DB 트리거(schema.sql enforce_room_limit), 기본 30건, 엔지니어별은 engineer_plans
   join-token.ts                                  # 고객 링크 토큰 형식 검사
   engineer-name.ts                               # 엔지니어 표시 이름 (user_metadata.name, OPS-03). 고객 시작 화면 기사님 카드
   kakao-webhook.ts                               # 카톡 공유 웹훅 키 확인·상담 id 서명 (ROOM-15)
