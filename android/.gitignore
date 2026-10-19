@@ -1,0 +1,5 @@
+# Bubblewrap이 twa-manifest.json으로 만드는 안드로이드 프로젝트와 빌드 결과는 올리지 않는다 (README.md)
+/*
+!/.gitignore
+!/README.md
+!/twa-manifest.json

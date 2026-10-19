@@ -2,14 +2,13 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { detectInApp, IN_APP_LABEL } from "@/lib/in-app-browser";
 import { OpenInBrowser } from "@/components/open-in-browser";
-import { InstallCatcher } from "@/components/install-prompt";
-import { manifestHref } from "@/lib/install-guide";
+import { manifestHref } from "@/lib/browser-kind";
 
-// 엔지니어 화면만 홈 화면 앱으로 설치된다 (NFR-09). 고객 링크(/join)에는 앱 설정을 걸지 않아
-// 고객 폰에 '앱 설치' 안내가 뜨지 않는다
-// 크롬은 페이지를 불러오자마자 '설치할 수 있어요'(beforeinstallprompt)를 한 번만 보낸다. 리액트가 뜨기 전에 받아 두려고
-// HTML에 바로 실행되는 짧은 스크립트를 둔다. 화면(install-prompt.tsx)이 뜨면 여기 담아 둔 것을 가져간다
-const CATCH_INSTALL = `(function(w){if(w.__bwInstallHooked)return;w.__bwInstallHooked=1;w.addEventListener('beforeinstallprompt',function(e){e.preventDefault();w.__bwInstall=e;});w.addEventListener('appinstalled',function(){w.__bwInstalled=1;w.__bwInstall=null;});})(window);`;
+// 엔지니어 화면에만 웹 앱 설정을 붙인다. 플레이 스토어 앱(TWA, OPS-08)이 이름·아이콘·색을 여기서 가져간다.
+// 고객 링크(/join)에는 걸지 않아 고객 폰에 '앱 설치'가 뜨지 않는다.
+// 홈 화면에 추가하라고 권하지 않는다(2026-10-19 NFR-09 폐기). 크롬이 스스로 띄우는 작은 '앱 설치' 띠도 막는다.
+// 예전에 삼성 인터넷에만 등록하던 서비스 워커(/sw.js)는 열 때 지운다 (BUG-24). 리액트보다 먼저 돌아야 해서 HTML에 바로 둔다
+const PAGE_SETUP = `(function(w){w.addEventListener('beforeinstallprompt',function(e){e.preventDefault();});var sw=navigator.serviceWorker;sw&&sw.getRegistrations().then(function(rs){rs.forEach(function(r){var u=(r.active||r.waiting||r.installing||{}).scriptURL||'';if(u.slice(-6)==='/sw.js')r.unregister();});}).catch(function(){});})(window);`;
 
 // 웹 앱 설정(manifest)은 브라우저마다 다르게 아래에서 붙인다 — 삼성 인터넷은 앱으로 설치되지 않는 설정 (BUG-24)
 export const metadata: Metadata = {
@@ -34,8 +33,7 @@ export default async function EngineerLayout({ children }: LayoutProps<"/">) {
     return (
       <>
         {manifest}
-        <script dangerouslySetInnerHTML={{ __html: CATCH_INSTALL }} />
-        <InstallCatcher />
+        <script dangerouslySetInnerHTML={{ __html: PAGE_SETUP }} />
         {children}
       </>
     );
