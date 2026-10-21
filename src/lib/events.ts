@@ -15,6 +15,7 @@ export type EventName =
   | "guide_used"
   | "photo_taken"
   | "kakao_sent"
+  | "turn_issued"
   | "ended";
 
 export type EventActor = "engineer" | "customer" | "system";

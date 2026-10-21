@@ -145,7 +145,63 @@ test("고객 채널로 온 가짜 종료(bye)로는 연결된 상담이 닫히�
   });
 });
 
-test("엔지니어 소켓이 끊겼다 붙으면 고객이 같은 인증서로 다시 연결한다 ('기기가 바뀌었어요' 없음)", async ({ browser, baseURL }) => {
+test("고객 소켓이 유예(8초)보다 오래 끊겼다 같은 폰으로 돌아오면 엔지니어가 다시 맺자고 알려(reoffer) 저절로 이어진다 (CALL-05)", async ({ browser, baseURL }) => {
+  test.setTimeout(150_000);
+  await useRig(browser, baseURL, async (rig) => {
+    const { ep, cp, logs } = await start(rig);
+    try {
+      const customer = deviceId(rig, C_LANE);
+      await watch(ep);
+
+      // 고객 소켓을 끊고 12초 동안 다시 못 붙게 한다 (realtime-js는 1·2·5·10초 간격으로 다시 시도 → 약 18초 뒤 복귀)
+      expect(rig.hub.disconnect((t) => t === C_LANE, 12_000)).toBe(1);
+      // 엔지니어는 8초 뒤 연결을 버리고 대기 화면('고객님을 다시 기다리고 있어요')으로 간다
+      await expect(ep.getByTestId("eng-waiting")).toBeVisible({ timeout: 20_000 });
+      expect(rig.hub.presence(C_LANE)).toEqual([]);
+
+      // 같은 기기 id로 돌아온다 → 엔지니어가 reoffer → 고객이 새 offer → 다시 통화 중. 아무도 버튼을 누르지 않는다
+      await expect.poll(() => rig.hub.presence(C_LANE).map((m) => m.id), { timeout: 40_000 }).toEqual([customer]);
+      await expect.poll(() => rig.hub.broadcasts.filter((b) => b.event === "reoffer" && b.topic.endsWith(":e")).length, { timeout: 10_000 }).toBe(1);
+      await expect(ep.getByTestId("eng-call-status")).toContainText("통화 중", { timeout: 30_000 });
+      await expect(cp.getByTestId("cust-status")).toHaveText("기사님이 보고 있어요", { timeout: 30_000 });
+      await expect(cp.getByRole("button", { name: /다시 연결/ })).toHaveCount(0);
+      expect(offers(rig)).toBe(2);
+      // 같은 기기라 '기기가 바뀌었어요'는 없다
+      expect((await seen(ep)).peerChanged).toBe(false);
+      expect(logs).toEqual([]);
+    } finally {
+      dumpOnFail(rig, logs);
+    }
+  });
+});
+
+test("offer가 유실되면(상대 소켓이 재접속 중) 고객이 10초 뒤 다시 청해 연결된다 (CALL-03)", async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  await useRig(browser, baseURL, async (rig) => {
+    const ep = await rig.engineer();
+    const cp = await rig.customer();
+    const logs: string[] = [];
+    for (const [who, p] of [["eng", ep], ["cust", cp]] as const) p.on("pageerror", (e) => logs.push(`[${who}] ${e.message}`));
+    try {
+      await engineerReady(ep, ROOM.id);
+      rig.hub.drop.add("offer"); // 첫 offer는 사라진다
+      await customerJoin(cp, ROOM.join_token);
+      await expect.poll(() => offers(rig), { timeout: 20_000 }).toBe(1);
+      await expect(cp.getByTestId("cust-status")).toHaveText("기사님과 연결하는 중…");
+      rig.hub.drop.delete("offer");
+      // 10초가 지나면 두 번째 offer가 가고, 이번엔 answer가 와서 연결된다
+      await expect.poll(() => offers(rig), { timeout: 20_000 }).toBe(2);
+      await connected(ep, cp);
+      await expect(ep.getByTestId("eng-call-status")).toContainText("통화 중");
+      await expect(cp.getByRole("button", { name: /다시 연결/ })).toHaveCount(0);
+      expect(logs).toEqual([]);
+    } finally {
+      dumpOnFail(rig, logs);
+    }
+  });
+});
+
+test("엔지니어 소켓만 잠깐 끊겨도 통화는 그대로 (고객은 다시 연결하지 않음, '기기가 바뀌었어요' 없음)", async ({ browser, baseURL }) => {
   test.setTimeout(120_000);
   await useRig(browser, baseURL, async (rig) => {
     const { ep, cp, logs } = await start(rig);
@@ -153,10 +209,14 @@ test("엔지니어 소켓이 끊겼다 붙으면 고객이 같은 인증서로 �
       await watch(ep);
       expect(offers(rig)).toBe(1);
       expect(rig.hub.disconnect((t) => t === E_LANE)).toBe(1);
-      // 고객은 엔지니어가 사라진 것을 보고 연결을 정리했다가, 엔지니어가 돌아오면 다시 offer한다
-      await expect.poll(() => offers(rig), { timeout: 20_000 }).toBe(2);
-      await expect(cp.getByTestId("cust-status")).toHaveText("기사님이 보고 있어요", { timeout: 30_000 });
-      await expect(ep.getByTestId("eng-call-status")).toContainText("통화 중", { timeout: 30_000 });
+      // 고객은 엔지니어 presence가 사라져도 통화가 살아 있으면 8초 기다린다(CALL-05). 그 안에 같은 기기가 돌아오면
+      // 연결을 그대로 둔다 — 새 offer 없음, 고객 화면은 계속 '기사님이 보고 있어요'
+      expect(rig.hub.presence(E_LANE).length).toBe(0);
+      await expect.poll(() => rig.hub.presence(E_LANE).length, { timeout: 20_000 }).toBe(1);
+      await cp.waitForTimeout(3_000);
+      expect(offers(rig)).toBe(1);
+      await expect(cp.getByTestId("cust-status")).toHaveText("기사님이 보고 있어요");
+      await expect(ep.getByTestId("eng-call-status")).toContainText("통화 중");
       expect((await seen(ep)).peerChanged).toBe(false);
       expect(logs).toEqual([]);
     } finally {

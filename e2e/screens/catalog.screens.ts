@@ -202,12 +202,13 @@ test("대시보드·통계", async ({ browser, baseURL }) => {
         section: "dashboard",
         ids: ["ROOM-04", "ROOM-03"],
         title: "대시보드 — 상태별 상담 (E02)",
-        note: "맨 위는 이번 달 상담 수(누르면 통계). 진행 중(기다리는 중·끝내지 않은 상담) · 끝남 · 연결 안 됨 · 만료. 걸린 시간은 연결됐다 끝난 상담만",
+        note: "진행 중(기다리는 중·끝내지 않은 상담)이 먼저, 그다음 최근 상담 — 끝남 · 연결 안 됨 · 만료. 걸린 시간은 연결됐다 끝난 상담만. 이번 달 상담 수 카드는 2026-10-21에 뺐다(숫자는 '통계'에)",
       },
       async () => {
         await open(ep, "/dashboard");
         await open(epc, "/dashboard");
-        await expect(ep.getByTestId("month-card")).toBeVisible();
+        await expect(ep.getByText("진행 중", { exact: false }).first()).toBeVisible();
+        await expect(ep.getByTestId("month-card")).toHaveCount(0);
         // 칩·걸린 시간: 3·4(지금 기록)·7(예전 기록)은 끝남, 5는 연결 안 됨, 6은 만료. 걸린 시간은 끝남만
         await expect(ep.getByText("끝남", { exact: true })).toHaveCount(3);
         await expect(ep.getByText("연결 안 됨", { exact: true })).toHaveCount(1);

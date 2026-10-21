@@ -96,28 +96,59 @@ const STEPS: Record<Exclude<Platform, "ios-app">, React.ReactNode[]> = {
   ],
 };
 
-export function CameraHelp({ failure: reported, onRetry }: { failure: CameraFailure; onRetry: () => void }) {
+export function CameraHelp({
+  failure: reported,
+  retried = false,
+  onRetry,
+}: {
+  failure: CameraFailure;
+  /** '다시 시도하기'를 눌렀는데 또 못 켰다 — 같은 화면이 다시 그려질 뿐이라 '아직 막혀 있어요'를 보인다 */
+  retried?: boolean;
+  onRetry: () => void;
+}) {
   const [copied, setCopied] = useState(false);
   const ua = navigator.userAgent;
   const platform = platformOf(ua, navigator.maxTouchPoints);
   const failure: CameraFailure = reported === "blocked" && detectWebView(ua) ? "unsupported" : reported;
   const steps = platform === "ios-app" ? iosAppSteps(iosBrowserApp(ua) ?? "") : STEPS[platform];
+  // 단계 ④가 부르는 버튼이 파란 큰 버튼이어야 한다 (한 화면에 파랑 하나, NFR-08):
+  // 아이폰은 설정을 바꾼 뒤 '다시 시도하기'로 되고, 안드로이드·PC는 권한을 바꾸면 '새로고침'해야 반영된다
+  const reloadIsMain = platform === "android" || platform === "other";
 
   const retry = (
-    <Button size="xl" block onClick={onRetry} icon={<RefreshIcon className="size-6" />}>
+    <Button size="xl" variant={reloadIsMain ? "secondary" : "primary"} block onClick={onRetry} icon={<RefreshIcon className="size-6" />}>
       다시 시도하기
     </Button>
   );
   const reload = (
     <Button
       size="xl"
-      variant="secondary"
+      variant={reloadIsMain ? "primary" : "secondary"}
       block
       onClick={() => window.location.reload()}
       icon={<RefreshIcon className="size-6" />}
     >
       새로고침
     </Button>
+  );
+
+  // 다른 앱 사용 중·카메라 없음 화면의 버튼은 '다시 시도하기' 하나라 늘 파랑
+  const retryMain = (
+    <Button size="xl" block onClick={onRetry} icon={<RefreshIcon className="size-6" />}>
+      다시 시도하기
+    </Button>
+  );
+  // 다시 눌렀는데 또 못 켰다 — 화면이 바뀌지 않아 눌린 줄 모를 수 있다. 문구는 그 화면의 원인을 따른다
+  const STILL: Record<CameraFailure, string | null> = {
+    blocked: "아직 카메라가 막혀 있어요.",
+    busy: "아직 다른 앱이 카메라를 쓰고 있어요.",
+    missing: "아직 카메라를 찾지 못했어요.",
+    unsupported: null,
+  };
+  const stillBlocked = retried && STILL[failure] && (
+    <p role="alert" className="text-body-l font-semibold text-text-danger" data-testid="cust-camera-still-blocked">
+      {STILL[failure]}
+    </p>
   );
 
   if (failure === "busy") {
@@ -127,8 +158,9 @@ export function CameraHelp({ failure: reported, onRetry }: { failure: CameraFail
         tone="warning"
         icon={<CameraIcon className="size-10" />}
         title="다른 앱이 카메라를 쓰고 있어요"
-        actions={retry}
+        actions={retryMain}
       >
+        {stillBlocked}
         카메라나 영상통화 앱을 닫고
         <br />
         ‘다시 시도하기’를 눌러 주세요.
@@ -143,8 +175,9 @@ export function CameraHelp({ failure: reported, onRetry }: { failure: CameraFail
         tone="warning"
         icon={<PhoneIcon className="size-10" />}
         title="카메라를 찾지 못했어요"
-        actions={retry}
+        actions={retryMain}
       >
+        {stillBlocked}
         카메라가 있는 폰에서
         <br />
         문자나 카톡으로 받으신 링크를 열어 주세요.
@@ -199,12 +232,20 @@ export function CameraHelp({ failure: reported, onRetry }: { failure: CameraFail
       icon={<CameraIcon className="size-10" />}
       title="카메라가 꺼져 있어요"
       actions={
-        <>
-          {retry}
-          {reload}
-        </>
+        reloadIsMain ? (
+          <>
+            {reload}
+            {retry}
+          </>
+        ) : (
+          <>
+            {retry}
+            {reload}
+          </>
+        )
       }
     >
+      {stillBlocked}
       <p>아래 순서대로 켜 주세요.</p>
       <ol className="mt-6 flex flex-col gap-4 rounded-3xl bg-bg-subtle p-5 text-left text-text-primary">
         {steps.map((step, i) => (

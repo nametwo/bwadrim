@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import Link from "next/link";
 import { Brand } from "@/components/ui/brand";
 import { BUSINESS, isBlank } from "@/lib/business-info";
 
@@ -42,10 +41,10 @@ export default function PrivacyPage() {
   const officer = BUSINESS.privacyOfficer;
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-2xl flex-col px-5 pt-[max(12px,env(safe-area-inset-top))] pb-12">
+      {/* 로고는 누르는 곳이 아니다 — 사이트 주소(/)는 엔지니어 로그인 화면이라(AUTH-01) 고객 화면에서 온 사장님을 그리로 보내지 않는다.
+          돌아갈 곳은 브라우저 뒤로가기(로그인 화면·고객 시작 화면)다 */}
       <header className="flex h-12 items-center">
-        <Link href="/" aria-label="봐드림 처음으로">
-          <Brand />
-        </Link>
+        <Brand />
       </header>
 
       <h1 className="pt-8 text-title-l text-text-primary">개인정보 처리방침</h1>
@@ -57,7 +56,7 @@ export default function PrivacyPage() {
         <Section n={1} title="받는 개인정보와 쓰는 곳">
           <Card title="엔지니어 (봐드림으로 A/S 하는 기사님)">
             <p>이메일, 비밀번호, 이름을 받아요. 로그인하고, 고객 화면에 기사님 이름을 보여 주는 데 써요. 비밀번호는 암호화해서 저장해요.</p>
-            <p>상담을 만든 시각, 끝난 시각, 연결됐는지를 남겨요. 상담 목록과 통계에 써요.</p>
+            <p>상담을 만든 시각, 끝난 시각, 연결됐는지, 통화 중에 가리키기나 화면 멈춤 같은 도구를 썼는지를 남겨요. 상담 목록과 통계에 써요.</p>
           </Card>
           <Card title="받는 분 이름표">
             <p>엔지니어가 링크를 보낸 뒤 직접 적은 받는 분 이름(30자까지)과, 카카오톡으로 보냈을 때 카카오가 알려 주는 채팅방 구분 값(해시)을 저장해요. 지난 상담을 누구와 했는지 알아보는 데 써요.</p>
@@ -78,7 +77,7 @@ export default function PrivacyPage() {
         <Section n={2} title="보관 기간과 지우는 방법">
           <p>엔지니어 계정과 상담 기록은 계정을 지울 때까지 보관하고, 계정을 지우면 그 계정의 상담 기록과 이름표도 함께 지워요.</p>
           <p>받는 분 이름표는 그분께 마지막으로 링크를 보낸 날부터 1년이 지나면 자동으로 지워요. 1년이 지난 상담에 남은 카카오톡 채팅방 구분 값도 함께 지워요.</p>
-          <p>고객 쪽 기록(브라우저 정보, 카메라, 연결)은 그 상담 기록과 함께 보관하고, 상담 기록을 지울 때 함께 지워요.</p>
+          <p>카메라를 허용했는지와 영상이 어떤 길로 연결됐는지는 그 상담 기록과 함께 두고, 상담 기록을 지울 때 같이 지워요. 브라우저와 기기 종류는 그보다 먼저, 링크를 연 날부터 1년이 지나면 지워요.</p>
           <p>지울 때는 데이터베이스에서 되살릴 수 없게 지워요.</p>
         </Section>
 

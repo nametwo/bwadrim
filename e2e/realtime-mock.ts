@@ -3,7 +3,7 @@ import type { BrowserContext, Route, WebSocketRoute } from "@playwright/test";
 // Supabase Realtime 가짜 (브라우저 WebSocket을 Playwright가 가로챔 — 서버 없음).
 // 통화 시그널링(src/lib/webrtc/call.ts)이 쓰는 만큼만: phx_join · heartbeat · presence(track) · broadcast(offer/answer/ice/bye),
 // 그리고 소켓 없이 REST로 보내는 broadcast(세션 없이 보내는 종료 알림 sendBye: /realtime/v1/api/broadcast).
-// 테스트 손잡이: disconnect(소켓만 끊긴 척) · presence(지금 올라 있는 기기) · inject(제3자가 보낸 신호 흉내).
+// 테스트 손잡이: disconnect(소켓만 끊긴 척, holdMs 동안 다시 못 붙게) · presence(지금 올라 있는 기기) · inject(제3자가 보낸 신호 흉내).
 // 프로토콜: Phoenix vsn 2.0.0 — 텍스트는 JSON 배열 [join_ref, ref, topic, event, payload],
 // 사용자 broadcast는 바이너리 (보냄: kind 3 userBroadcastPush / 받음: kind 4 userBroadcast, realtime-js serializer.js).
 // 여러 페이지(엔지니어·고객, 다른 컨텍스트여도 됨)의 소켓을 이 허브 하나가 이어 준다.
@@ -18,6 +18,7 @@ interface Client {
   id: number;
   ws: WebSocketRoute;
   topics: Map<string, Joined>;
+  context: BrowserContext;
 }
 
 interface PresenceEntry {
@@ -38,9 +39,11 @@ export class RealtimeHub {
   readonly drop = new Set<string>();
   /** true를 돌려주는 topic은 presence track을 거부한다 — 채널 권한 거부(CALL-12) 흉내 */
   denyTrack: (topic: string) => boolean = () => false;
+  /** disconnect(…, holdMs)로 끊은 브라우저(컨텍스트)는 이 시각까지 새 소켓을 바로 닫는다 — 오래 끊긴 척 */
+  private readonly heldUntil = new Map<BrowserContext, number>();
 
   async attach(context: BrowserContext): Promise<void> {
-    await context.routeWebSocket(/\/realtime\/v1\/websocket/, (ws) => this.connect(ws));
+    await context.routeWebSocket(/\/realtime\/v1\/websocket/, (ws) => this.connect(ws, context));
     await context.route(/\/realtime\/v1\/api\/broadcast/, (route) => this.onRest(route));
   }
 
@@ -77,8 +80,13 @@ export class RealtimeHub {
     return route.fulfill({ status: 202, headers: cors, body: "" });
   }
 
-  private connect(ws: WebSocketRoute) {
-    const c: Client = { id: ++this.seq, ws, topics: new Map() };
+  private connect(ws: WebSocketRoute, context: BrowserContext) {
+    if ((this.heldUntil.get(context) ?? 0) > Date.now()) {
+      // 아직 붙을 수 없는 척 — realtime-js는 닫히면 1·2·5·10초 간격으로 다시 시도한다
+      ws.close({ code: 4000, reason: "e2e held" }).catch(() => {});
+      return;
+    }
+    const c: Client = { id: ++this.seq, ws, topics: new Map(), context };
     this.clients.add(c);
     ws.onMessage((m) => {
       try {
@@ -109,13 +117,15 @@ export class RealtimeHub {
    * 시그널링 소켓만 잠깐 끊긴 척 (앱 전환·망 전환, CALL-05). match에 맞는 채널에 자기 presence를 올린 클라이언트
    * (= 그 채널로 보내는 쪽)의 소켓을 닫는다. 그 채널을 듣기만 하는 상대 쪽 소켓은 그대로다.
    * 서버가 끊긴 것을 알아챈 것처럼 구성원에게 presence leave가 가고, realtime-js가 스스로 다시 붙어 같은 id로 다시 track한다.
-   * match는 'realtime:'을 뺀 이름(room:{id}:c)을 받는다. 돌려주는 값 = 닫은 소켓 수
+   * match는 'realtime:'을 뺀 이름(room:{id}:c)을 받는다. 돌려주는 값 = 닫은 소켓 수.
+   * holdMs: 그 브라우저가 이만큼은 다시 못 붙게 한다(소켓을 여는 족족 닫는다) — 상대 쪽 유예(8초)가 끝난 뒤 돌아오는 경우 (CALL-05)
    */
-  disconnect(match: (topic: string) => boolean): number {
+  disconnect(match: (topic: string) => boolean, holdMs = 0): number {
     const targets = [...this.clients].filter((c) =>
       [...this.presences].some(([topic, map]) => map.has(c) && match(RealtimeHub.shortTopic(topic))),
     );
     for (const c of targets) {
+      if (holdMs > 0) this.heldUntil.set(c.context, Date.now() + holdMs);
       this.removeClient(c);
       // 'Unauthorized' 같은 말을 넣지 말 것 — 통화 세션이 권한 거부로 본다
       c.ws.close({ code: 4000, reason: "e2e dropped" }).catch(() => {});

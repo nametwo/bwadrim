@@ -11,6 +11,7 @@ import { CheckIcon, ChevronLeftIcon, ClockIcon } from "@/components/ui/icons";
 import { NewRoomButton } from "../../dashboard/new-room-button";
 import { createRoom } from "../../dashboard/actions";
 import { kakaoShareArgs } from "@/lib/kakao-webhook";
+import { SITE_URL } from "@/lib/site-url";
 import { CallPanel } from "./call-panel";
 import { RecipientCard } from "./recipient-card";
 
@@ -132,10 +133,11 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
     );
   }
 
+  // 고객 링크는 운영 주소(NEXT_PUBLIC_SITE_URL, OPS-07)로, 안 정했으면 엔지니어가 지금 연 주소로 만든다
   const h = await headers();
   const host = h.get("host") ?? "localhost:3000";
   const proto = h.get("x-forwarded-proto") ?? "http";
-  const joinUrl = `${proto}://${host}/join/${room.join_token}`;
+  const joinUrl = `${SITE_URL ?? `${proto}://${host}`}/join/${room.join_token}`;
 
   return (
     <CallPanel

@@ -219,14 +219,22 @@ test("새로고침 뒤 '다시 연결할까요?'에서 '통화 종료' → '끝�
   }
 });
 
-test("연결 없이 '상담 닫기' → '닫기' (ended connected:false)", async ({ browser, baseURL }) => {
+test("연결 없이 '상담 닫기' → '닫기' (ended connected:false) · 기다리던 고객은 '상담이 끝났어요'(링크가 죽었으니 '카메라를 껐어요'가 아님)", async ({ browser, baseURL }) => {
   test.setTimeout(60_000);
   const hub = new RealtimeHub();
   const engCtx = await open(hub, browser, baseURL!, true);
+  const custCtx = await open(hub, browser, baseURL!, false);
   const ep = await engCtx.newPage();
-  const logs = collectErrors([["eng", ep]]);
+  const cp = await custCtx.newPage();
+  const logs = collectErrors([["eng", ep], ["cust", cp]]);
 
   try {
+    // 고객은 카메라를 켜고 기다리는 중. 고객이 청하는 offer는 닿지 않게 해 '연결되기 전' 상태를 유지한다
+    hub.drop.add("offer");
+    await cp.goto(`/join/${ROOM.join_token}`);
+    await cp.getByRole("button", { name: /카메라 켜고 시작하기/ }).click();
+    await expect(cp.getByTestId("cust-status")).toHaveText("기사님을 기다리는 중…", { timeout: 15_000 });
+
     await ep.goto(`/room/${ROOM.id}`);
     await ep.getByRole("button", { name: /연결 준비/ }).click();
     await expect(ep.getByTestId("eng-waiting")).toBeVisible();
@@ -239,9 +247,16 @@ test("연결 없이 '상담 닫기' → '닫기' (ended connected:false)", async
     const rec = await roomRecord();
     expect(rec.status).toBe("ended");
     expect(rec.ended).toEqual([{ duration_sec: expect.any(Number), connected: false }]);
+
+    const ended = cp.getByTestId("cust-ended");
+    await expect(ended).toBeVisible({ timeout: 15_000 });
+    await expect(ended).toContainText("상담이 끝났어요");
+    await expect(ended).toContainText("이 창은 닫으셔도 돼요.");
+    await expect(ended).not.toContainText("카메라를 껐어요");
     expect(logs).toEqual([]);
   } finally {
     await engCtx.close();
+    await custCtx.close();
   }
 });
 

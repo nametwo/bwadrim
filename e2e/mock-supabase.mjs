@@ -6,7 +6,7 @@
 //   GET  /auth/v1/admin/users/:id      (서비스 키) 사용자 — 고객 화면의 기사님 이름
 //   GET  /rest/v1/rooms?code=eq.X      (eq·neq·in·gte·is 필터, select=…, count=exact·HEAD 지원) Accept가 vnd.pgrst.object+json이면 객체 1개
 //   PATCH /rest/v1/rooms?id=eq.X…      상태 갱신 (status=eq.X·neq.X, recipient_id=is.null 조건 지원). recipient_id는 있는 이름표만(FK, 없으면 409 23503)
-//   POST /rest/v1/events               기록 (본문 객체 또는 배열) · GET은 통계·대시보드용(같은 필터)
+//   POST /rest/v1/events               기록 (본문 객체 또는 배열) · GET은 통계·대시보드용(같은 필터, count=exact·HEAD 지원)
 //   GET·POST·PATCH /rest/v1/recipients  받는 분 이름표 (ROOM-16). 사용자 토큰이면 자기 것만(RLS), 서비스 키면 전부.
 //                                      eq·in·is 필터. POST는 본문 객체/배열, Prefer return=representation이면 넣은 줄을 돌려준다
 //                                      (insert().select().single() = POST + return=representation + Accept 객체).
@@ -361,14 +361,15 @@ const server = http.createServer(async (req, res) => {
     }
 
     // 통계 화면(/stats)·대시보드·대기 화면 고객 진행 상황용 읽기. eq·neq·in·gte 필터만 적용하고 자기 방 기록을 준다 (RLS 흉내)
-    if (p === "/rest/v1/events" && req.method === "GET") {
+    // HEAD = select(…, { count: "exact", head: true }): 개수만 (TURN 발급 횟수, NET-02)
+    if (p === "/rest/v1/events" && (req.method === "GET" || req.method === "HEAD")) {
       // 서비스 키면 전부(받는 분 잇기가 여러 명에게 보냈는지 볼 때, ROOM-16), 사용자 토큰이면 자기 방 것만
       const service = (req.headers.apikey ?? "") === FIXTURE.serviceKey;
-      if (!service && !authed(req)) return send(res, 200, []);
+      if (!service && !authed(req)) return send(res, 200, [], countHeader(req, 0));
       const mine = new Set(rooms.filter((r) => service || r.engineer_id === FIXTURE.user.id).map((r) => r.id));
       const select = url.searchParams.get("select");
       const rows = sortRows(filterRows(events.filter((e) => mine.has(e.room_id)), url.searchParams), url.searchParams.get("order"));
-      return send(res, 200, rows.map((e, i) => project({ id: i + 1, ...e }, select)));
+      return send(res, 200, rows.map((e, i) => project({ id: i + 1, ...e }, select)), countHeader(req, rows.length));
     }
 
     if (p === "/rest/v1/events" && req.method === "POST") {

@@ -978,7 +978,10 @@ export function CallPanel({
             <Brand tone="dark" />
           </span>
           <div className="flex min-w-0 flex-1 flex-col">
-            <span className="truncate text-label-l">원격 A/S · {createdLabel}</span>
+            {/* 누구와 통화 중인지 — 받는 분 이름표(ROOM-16)가 있으면 그 이름, 없으면 '원격 A/S'. 그다음 만든 시각 */}
+            <span className="truncate text-label-l" data-testid="eng-call-title">
+              {progress?.recipient?.label ?? "원격 A/S"} · {createdLabel}
+            </span>
             <span data-testid="eng-call-status" className="text-body-s text-call-text-secondary">
               {connected ? (
                 <>통화 중 · {connectedAt && <CallTimer since={connectedAt} />}</>
@@ -1085,6 +1088,11 @@ export function CallPanel({
                   고객 폰에서 바꾸지 못했어요
                 </Banner>
               )}
+              {connected && camState?.error === "lost" && (
+                <Banner tone="error" role="alert" sub="화면의 &lsquo;카메라 다시 켜기&rsquo;를 눌러 달라고 말씀해 주세요" testId="eng-cam-lost">
+                  고객 폰 카메라가 꺼졌어요
+                </Banner>
+              )}
               {!micOn && (
                 <Banner tone="warning" icon={<MicOffIcon className="size-[22px]" />} sub="고객님은 기사님 목소리를 못 들어요">
                   마이크가 꺼져 있어요
@@ -1114,7 +1122,8 @@ export function CallPanel({
                 className="pointer-events-none absolute inset-0 z-10 animate-[fade-in_0.35s_ease-out_reverse_both] bg-gray-0/70"
               />
             )}
-            {/* 사진 찍기 (CALL-16): 영상 오른쪽 아래, 카메라 셔터처럼. 찍은 장수 표시 */}
+            {/* 사진 찍기 (CALL-16): 영상 오른쪽 아래, 카메라 셔터처럼. 다른 도구처럼 이름('사진')을 붙여
+                바로 아래 '카메라 바꾸기'와 헷갈리지 않게. 찍은 장수 표시 */}
             {connected && !frozen && (
               <button
                 type="button"
@@ -1124,17 +1133,20 @@ export function CallPanel({
                 onPointerDown={(e) => e.stopPropagation()}
                 onPointerUp={(e) => e.stopPropagation()}
                 disabled={photoBusy || unstable}
-                className="absolute right-3 bottom-3 z-20 grid size-14 place-items-center rounded-full bg-bg-page text-icon shadow-float active:scale-95 disabled:opacity-60"
+                className="group absolute right-3 bottom-2 z-20 flex flex-col items-center gap-1 disabled:opacity-60"
               >
-                {photoBusy ? <Spinner className="size-6" /> : <CameraIcon className="size-7" />}
-                {photos.length > 0 && (
-                  <span
-                    data-testid="eng-photo-count"
-                    className="absolute -top-1 -right-1 grid h-6 min-w-6 place-items-center rounded-full bg-call-bg px-1.5 text-label-s text-call-text ring-2 ring-bg-page"
-                  >
-                    {photos.length}
-                  </span>
-                )}
+                <span className="relative grid size-14 place-items-center rounded-full bg-bg-page text-icon shadow-float transition-transform group-active:scale-95">
+                  {photoBusy ? <Spinner className="size-6" /> : <CameraIcon className="size-7" />}
+                  {photos.length > 0 && (
+                    <span
+                      data-testid="eng-photo-count"
+                      className="absolute -top-1 -right-1 grid h-6 min-w-6 place-items-center rounded-full bg-call-bg px-1.5 text-label-s text-call-text ring-2 ring-bg-page"
+                    >
+                      {photos.length}
+                    </span>
+                  )}
+                </span>
+                <span className="rounded-full bg-black-80 px-2 py-0.5 text-caption text-call-text">사진</span>
               </button>
             )}
             {/* 아래: 처음 쓸 때만 제스처 안내, 그리고 지금 고객 화면에 뜬 방향 지시 (PC는 오른쪽 패널에) */}
@@ -1236,7 +1248,6 @@ export function CallPanel({
       joinUrl={joinUrl}
       roomId={roomId}
       kakaoArgs={kakaoArgs}
-      createdLabel={createdLabel}
       micOn={state.phase === "call" ? micOn : null}
       sentVia={sentVia}
       onSent={setSentVia}

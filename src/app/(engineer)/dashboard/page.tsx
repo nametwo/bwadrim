@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { formatDuration, formatKstDateTime, formatKstRange, kstMonthStartIso } from "@/lib/format";
+import { formatDuration, formatKstDateTime, formatKstRange, formatTimeLeft } from "@/lib/format";
 import { endedConnected } from "@/lib/metrics";
 import { engineerNameOf } from "@/lib/engineer-name";
 import { BottomCta } from "@/components/ui/bottom-cta";
@@ -44,8 +44,10 @@ function durationSec(room: { created_at: string; ended_at: string | null }) {
   return room.ended_at ? (new Date(room.ended_at).getTime() - new Date(room.created_at).getTime()) / 1000 : null;
 }
 
-// 대시보드 (피그마 E02). 회색 바탕에 흰 카드 세 장 — 이번 달(상담 수 한 숫자, 누르면 통계),
-// 진행 중(내가 이어서 할 일), 최근 상담. 파란 버튼은 '새 A/S 시작' 하나, 한 손으로 누르게 화면 아래에 붙인다.
+// 대시보드 (피그마 E02). 기사님이 아침에 열어 "이어서 할 상담이 있나, 없으면 새로 시작"을 정하는 곳.
+// 회색 바탕에 흰 카드 — 진행 중(내가 이어서 할 일)이 먼저, 그다음 최근 상담. 파란 버튼은 '새 A/S 시작' 하나, 한 손으로 누르게 화면 아래에 붙인다.
+// 이번 달 상담 수 카드는 2026-10-21에 뺐다: 기사님이 누르거나 보고 움직이는 숫자가 아니라서 가장 급한 '진행 중'을 아래로 밀기만 했다.
+// 숫자는 오른쪽 위 '통계'(상담 N건)에 그대로 있다 (ROOM-04)
 export default async function DashboardPage() {
   const supabase = await createClient();
   const {
@@ -55,24 +57,17 @@ export default async function DashboardPage() {
   // proxy가 1차로 막지만, 데이터 접근 지점에서 한 번 더 확인
   if (!user) redirect("/login");
 
-  const [{ data: rooms, error: roomsError }, month] = await Promise.all([
-    supabase
-      .from("rooms")
-      .select("id, status, resolved_remotely, created_at, expires_at, ended_at")
-      .order("created_at", { ascending: false })
-      .limit(20),
-    // 이번 달(한국 시간) 만든 상담 수. 줄은 받지 않고 개수만(HEAD)
-    supabase.from("rooms").select("id", { count: "exact", head: true }).gte("created_at", kstMonthStartIso()),
-  ]);
+  const { data: rooms, error: roomsError } = await supabase
+    .from("rooms")
+    .select("id, status, resolved_remotely, created_at, expires_at, ended_at")
+    .order("created_at", { ascending: false })
+    .limit(20);
 
   const now = new Date();
   const name = engineerNameOf(user);
   const list = (rooms ?? []) as Room[];
   const open = list.filter((r) => isOpen(r, now));
   const past = list.filter((r) => !isOpen(r, now));
-  // 읽기에 실패했으면 0건으로 보이지 않게 — 숫자 자리에 '—'
-  const monthCount = month.error || month.count === null ? null : month.count;
-
   // 끝난 상담이 고객과 연결됐었는지 (metrics.endedConnected와 같은 판정).
   // 예전 상담은 방에 남은 해결 여부로, 그 밖에는 'ended' 기록으로 가린다. 목록에 보이는 방 것만 한 번에 읽는다(RLS로 자기 방만)
   const connectedIds = new Set(
@@ -123,20 +118,6 @@ export default async function DashboardPage() {
         <h1 className="pt-3 pb-5 text-title-l">{name ? `${name}님, 안녕하세요` : "안녕하세요"}</h1>
 
         <div className="flex flex-col gap-3">
-          {/* 이번 달 상담 수 한 숫자. 누르면 통계 (DATA-06) */}
-          <Link
-            href="/stats"
-            data-testid="month-card"
-            aria-label={monthCount === null ? "이번 달 상담 수를 불러오지 못했어요, 통계 보기" : `이번 달 상담 ${monthCount}건, 통계 보기`}
-            className="flex flex-col rounded-3xl bg-bg-page p-5 transition-colors active:bg-bg-subtle"
-          >
-            <span className="flex items-center justify-between text-label-m text-text-secondary">
-              이번 달 상담
-              <ChevronRightIcon className="size-5 text-icon-secondary" />
-            </span>
-            <span className="mt-1 text-display-l text-text-primary">{monthCount === null ? "—" : `${monthCount}건`}</span>
-          </Link>
-
           {open.length > 0 && (
             <section className="rounded-3xl bg-bg-page py-2">
               <h2 className="px-5 pt-3 pb-1 text-title-s">
@@ -145,10 +126,8 @@ export default async function DashboardPage() {
               <ul>
                 {open.map((room) => {
                   const waiting = room.status === "waiting";
-                  const hoursLeft = Math.max(
-                    1,
-                    Math.floor((new Date(room.expires_at).getTime() - now.getTime()) / 3_600_000),
-                  );
+                  // 1시간 미만은 분으로 — '1시간 남음'으로 올려 적으면 곧 만료될 링크를 다시 누르라고 하게 된다
+                  const left = formatTimeLeft(new Date(room.expires_at).getTime() - now.getTime());
                   return (
                     <li key={room.id}>
                       {/* 무엇을 이어서 할지(상태)가 먼저, 시각은 보조 */}
@@ -169,7 +148,7 @@ export default async function DashboardPage() {
                           <span className="text-label-l">{waiting ? "고객님 기다리는 중" : "끝내지 않은 상담"}</span>
                           <span className={`text-body-s text-text-secondary ${labels.has(room.id) ? "break-keep" : "truncate"}`}>
                             {labels.has(room.id) && `${labels.get(room.id)} · `}
-                            {formatKstDateTime(new Date(room.created_at), now)} · 링크 {hoursLeft}시간 남음
+                            {formatKstDateTime(new Date(room.created_at), now)} · 링크 {left}
                           </span>
                         </span>
                         <ChevronRightIcon aria-label="이어하기" className="size-5 flex-none text-icon-secondary" />
