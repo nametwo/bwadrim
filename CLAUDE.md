@@ -74,7 +74,7 @@ Supabase Realtime **비공개** broadcast 채널, 역할별 일방통행 두 개
 
 각자 자기 채널로 보내고 상대 채널만 듣는다. 고객은 `:e`에서 온 신호만 믿을 것 (엔지니어 사칭 차단). 공개 채널로 되돌리지 말 것.
 메시지 타입: `offer` / `answer` / `ice` / `pointer` / `cam` / `bye` / `reoffer`(엔지니어 → 고객: 유예가 끝나 버린 연결의 고객 기기가 돌아왔으니 다시 청하라, CALL-05). 고객 offer에는 번호 `n`이 붙고 엔지니어 answer가 그대로 돌려준다 — 10초 안에 answer가 없으면 고객이 다시 청한다(세 번, CALL-03).
-고객 종료는 연결돼 있으면 'draw' DataChannel의 `{t:'bye'}`로 먼저 보낸다. `:c`는 누구나 쓸 수 있어서, 엔지니어는 연결된 동안 시그널링 `bye`만 오면 그 기기가 채널에서 정말 나갈 때까지 기다렸다 따른다(CALL-12). 고객 presence가 사라져도 통화가 살아 있으면 8초 기다린 뒤 정리한다(CALL-05, 소켓만 잠깐 끊긴 경우).
+고객 종료는 연결돼 있으면 'draw' DataChannel의 `{t:'bye'}`로 먼저 보낸다. `:c`는 누구나 쓸 수 있어서, 엔지니어는 연결된 동안 시그널링 `bye`만 오면 그 기기가 채널에서 정말 나갈 때까지 기다렸다 따른다(CALL-12). 양쪽 다 상대 presence가 사라져도 통화(P2P)가 살아 있으면 8초 기다린 뒤 정리한다(CALL-05, 소켓만 잠깐 끊긴 경우). 유예가 끝나 연결을 버린 뒤 같은 고객 기기가 돌아오면 엔지니어가 `reoffer`를 보내 고객이 다시 청한다.
 AR 핀(CALL-14)은 전용 DataChannel `anchor`(고객이 offer에 포함). 기준 사진 조각이 'draw'의 포인터·그리기를 막지 않게 따로 연다. 엔지니어 영상 제스처: 짧게 탭 = 레이저 포인터(CALL-08), 0.5초 길게 누름 = AR 핀.
 포인터·드로잉은 연결 후 DataChannel로 옮길 것 (지연 최소화). 좌표는 0~1 정규화.
 방향 지시(CALL-15, `src/lib/webrtc/guide.ts`)는 전용 DataChannel `guide`(고객이 offer에 포함, `CallSession.guideLink`). 'draw'에 섞으면 정지 사진 조각 뒤에 막혀 1.5초가 지나 화살표가 저절로 사라진다(고객에겐 '멈춤'으로 보임). 엔지니어가 방향 링(`src/components/guide-dpad.tsx`, 상하좌우 네 조각 + 가운데 구멍 = 멈춤)이나 그 아래 '− 멀리 | 가까이 +' 알약을 누르는 동안 `hold`를 0.4초마다 재전송하고 떼면 `release`. 누른 자리 판정은 `src/components/guide-pad-geometry.ts`(단위 테스트 있음). 고객 쪽(`guide-overlay.tsx`)은 1.5초간 `hold`가 없으면 스스로 지운다. 고객 화면에 방향 지시가 떠 있는 동안은 AR 핀 층(`hidden`)과 상태 문구를 숨긴다. 실험실 `/lab/guide`는 통화 없이 흉내 낸다.

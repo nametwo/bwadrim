@@ -127,6 +127,7 @@ test("첫 화면·로그인·404", async ({ browser, baseURL }) => {
       return [{ label: "폰", page: p }];
     });
 
+    await open(p, "/login"); // 처리방침 장면이 p를 /privacy에 두고 끝난다
     const release = await holdPosts(p, "/login");
     await shot({ section: "home", ids: ["AUTH-02"], title: "로그인 중…" }, async () => {
       await p.getByLabel("이메일").fill("engineer@example.com");
@@ -168,8 +169,18 @@ test("첫 화면·로그인·404", async ({ browser, baseURL }) => {
       },
     );
 
+    await shot(
+      { section: "home", ids: ["AUTH-08"], title: "없는 주소 (404) — 로그인 안 한 사람", note: "사장님이 잘린 링크 등으로 올 수 있는 유일한 공용 화면. 엔지니어 로그인으로 보내는 버튼이 없다" },
+      async () => {
+        await open(p, "/no-such-page");
+        await expect(p.getByText("페이지를 찾을 수 없어요")).toBeVisible({ timeout: 30_000 });
+        await expect(p.getByText(/사장님은/)).toBeVisible();
+        return [cust(p)];
+      },
+    );
+
     const ep = await rig.engineer();
-    await shot({ section: "home", ids: ["AUTH-08"], title: "없는 주소·남의 상담 (404)" }, async () => {
+    await shot({ section: "home", ids: ["AUTH-08"], title: "없는 주소·남의 상담 (404) — 엔지니어" }, async () => {
       await open(ep, "/room/e2e00000-0000-4000-8000-00000000ffff");
       await expect(ep.getByText("페이지를 찾을 수 없어요")).toBeVisible({ timeout: 30_000 });
       return [eng(ep)];
@@ -617,6 +628,43 @@ test("고객 진입", async ({ browser, baseURL }) => {
         return b ? [cust(a, "안드로이드"), cust(b, "아이폰")] : [cust(a)];
       });
     }
+
+    const again = await rig.customer();
+    await shot(
+      { section: "join", ids: ["JOIN-05"], title: "다시 시도해도 막혀 있어요", note: "'다시 시도하기'를 눌렀는데 또 막힘. 화면이 그대로라 눌린 줄 모르지 않게 빨간 한 줄" },
+      async () => {
+        await open(again, `/join/${ROOM.join_token}`);
+        await failGum(again, { name: "NotAllowedError" });
+        await again.getByRole("button", { name: /카메라 켜고 시작하기/ }).click();
+        await expect(again.getByTestId("cust-camera-help")).toBeVisible();
+        await again.getByRole("button", { name: "다시 시도하기" }).click();
+        await expect(again.getByTestId("cust-camera-still-blocked")).toBeVisible({ timeout: 10_000 });
+        return [cust(again)];
+      },
+    );
+
+    // 연결되기 전에 '통화 종료' → 창 → '끝내기' (JOIN-08). 상담은 그대로 열려 있다
+    const early = await rig.customer();
+    await shot(
+      { section: "join", ids: ["JOIN-08"], title: "연결 전 '통화 종료' — 아직 기사님과 연결되지 않았어요", note: "끊길 연결이 없다. 끝내도 링크를 다시 누르면 들어올 수 있다고 미리 말한다" },
+      async () => {
+        await open(early, `/join/${ROOM_B.join_token}`);
+        await early.getByRole("button", { name: /카메라 켜고 시작하기/ }).click();
+        await expect(early.getByTestId("cust-status")).toHaveText("기사님을 기다리는 중…", { timeout: 30_000 });
+        await early.getByRole("button", { name: "통화 종료" }).click();
+        await expect(early.getByTestId("cust-end-sheet")).toContainText("아직 기사님과 연결되지 않았어요");
+        await early.waitForTimeout(700);
+        return [cust(early)];
+      },
+    );
+    await shot(
+      { section: "join", ids: ["JOIN-08"], title: "연결 전 끝냄 — 카메라를 껐어요", note: "사장님이 직접 끝낸 경우. 기사님이 상담을 닫은 경우는 '상담이 끝났어요'" },
+      async () => {
+        await early.getByTestId("cust-end-sheet").getByRole("button", { name: "끝내기", exact: true }).click();
+        await expect(early.getByTestId("cust-ended")).toContainText("카메라를 껐어요", { timeout: 10_000 });
+        return [cust(early)];
+      },
+    );
 
     const bad = await rig.customer();
     await shot({ section: "join", ids: ["JOIN-03", "ROOM-12"], title: "열 수 없는 링크", note: "없는 토큰·예전 6자리 링크" }, async () => {
@@ -1387,6 +1435,31 @@ test("실험실", async ({ browser, baseURL }) => {
         return [{ label: "폰", page: p }, { label: "PC", page: pc }];
       },
       () => pc.keyboard.up("ArrowRight"),
+    );
+  });
+});
+
+test("기사님이 나간 뒤 — 고객", async ({ browser, baseURL }) => {
+  test.setTimeout(180_000);
+  await useRig(browser, baseURL, async (rig) => {
+    const { ep, cp } = await connect(rig);
+    await shot(
+      { section: "end", ids: ["JOIN-06", "CALL-05"], title: "기사님이 나간 뒤 — 고객 (다시 기다리는 중)", note: "기사님 폰이 꺼지거나 탭이 닫힘. 8초 유예 뒤 '기사님을 다시 기다리는 중…'. 기사님이 돌아오면 저절로 이어진다" },
+      async () => {
+        await ep.close();
+        await expect(cp.getByTestId("cust-status")).toHaveText("기사님을 다시 기다리는 중…", { timeout: 30_000 });
+        await cp.waitForTimeout(500);
+        return [cust(cp)];
+      },
+    );
+    await shot(
+      { section: "end", ids: ["JOIN-08", "CALL-05"], title: "기사님이 나간 뒤 '통화 종료' — 고객", note: "끊길 연결이 없고 기사님이 돌아와도 이어지지 않는다는 것을 말한다" },
+      async () => {
+        await cp.getByRole("button", { name: "통화 종료" }).click();
+        await expect(cp.getByTestId("cust-end-sheet")).toContainText("기사님이 돌아와도 이어지지 않아요");
+        await cp.waitForTimeout(700);
+        return [cust(cp)];
+      },
     );
   });
 });
