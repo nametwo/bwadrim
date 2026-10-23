@@ -48,7 +48,8 @@ test("상담 한 번: 일반 채널에 링크·카메라·연결·끝남이 차�
     await expect(sheet).toBeVisible();
     await cp.waitForTimeout(ARM_WAIT_MS);
     await sheet.getByRole("button", { name: "끝내기", exact: true }).click();
-    await expect(ep.getByTestId("eng-customer-ended")).toBeVisible({ timeout: 15_000 });
+    // 사진이 있어서 '고객님이 통화를 끝냈어요' 안내 대신 사진 저장 화면(위에 같은 띠)이 뜬다 (CALL-16)
+    await expect(ep.getByTestId("eng-photo-save").or(ep.getByTestId("eng-customer-ended"))).toBeVisible({ timeout: 15_000 });
 
     await expect.poll(async () => (await discord("general")).some((m) => m.includes("상담을 끝냈어요")), { timeout: 15_000 }).toBe(true);
     const general = await discord("general");
