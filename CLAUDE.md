@@ -55,7 +55,10 @@ src/lib/
   install-guide.ts                               # 홈 화면 앱 설치 안내 글: 기기·브라우저별 세 단계 (NFR-09). 화면은 components/install-prompt.tsx
   preview-bot.ts                                 # 링크 미리보기 봇(카톡 스크랩·아이메시지 등) UA 감지 → link_opened 안 남김 (JOIN-12, 출처는 파일 주석)
   kakao-share.ts                                 # 카톡 보내기(카카오링크, ROOM-14). 카카오 키가 있을 때만. SDK는 링크 보내기 화면에서 미리 받는다
-  events.ts                                      # 지표 이벤트 기록
+  events.ts                                      # 지표 이벤트 기록. 기록 뒤 디스코드 일반 채널로(notify-room.ts), 기록 실패는 응급으로
+  notify.ts                                      # 디스코드 웹훅 보내기(OPS-09): 응급·일반 채널, 응답 뒤(after), 응급은 같은 일 10분에 한 번. 주소는 환경 변수로만
+  notify-events.ts                               # 지표 이벤트 → 디스코드 글(순수 함수). 응급 규칙 = README 핵심 지표가 깨지는 신호
+  notify-room.ts                                 # 글에 붙일 상담 정보(기사님 이름·받는 분·쓴 도구) 조회, 서버 전용
   metrics.ts                                     # 핵심 지표 계산 (통계 화면). endedConnected = 끝난 상담이 고객과 연결됐었는지 (대시보드 칩·끝난 상담 화면도 같이 씀)
 src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기). anchor/·anchor-overlay = AR 핀 층(CALL-14), guide-dpad(방향 링·가까이/멀리 알약)·guide-pad-geometry·guide-overlay(고객 노란 원 화살표·네 모서리)·guide-pill = 방향 지시(CALL-15), open-in-browser = 앱 안 브라우저 안내(고객 JOIN-10·엔지니어 AUTH-09), install-prompt = 엔지니어 홈 화면 앱 설치 화면(NFR-09)
   ui/                                            # 디자인 시스템 부품(NFR-08, 피그마 컴포넌트와 같은 이름): button(Button·ButtonLink·buttonClass), icons(선 아이콘), sheet(아래 확인 창, 고객용 `size="l"`), notice-screen(한 화면 한 안내), bottom-cta(아래에 붙는 버튼 자리), brand(로고), status-chip, step-item, banner(고객용 큰 글자 `size="l"`), call-control(통화 원형 버튼, 고객용 `size="xl"`), stat-card, engineer-card, call-timer, text-field(입력칸)
@@ -114,15 +117,15 @@ AR 핀(CALL-14)은 전용 DataChannel `anchor`(고객이 offer에 포함). 기�
 
 ## 이벤트 이름 (events 테이블)
 
-`room_created`, `link_opened`, `camera_granted`, `camera_denied`, `connected`, `relay_used`, `pointer_used`, `freeze_used`, `anchor_used`, `guide_used`, `photo_taken`, `kakao_sent`, `turn_issued`, `ended`
+`room_created`, `link_opened`, `camera_granted`, `camera_denied`, `connected`, `connect_failed`, `relay_used`, `pointer_used`, `freeze_used`, `anchor_used`, `guide_used`, `photo_taken`, `kakao_sent`, `turn_issued`, `ended`
 
-`turn_issued`는 `/api/turn`이 TURN 자격증명을 내줄 때마다 남기고, 그 개수로 상담당 발급 상한(40회)을 센다(NET-02)
+`turn_issued`는 `/api/turn`이 TURN 자격증명을 내줄 때마다 남기고, 그 개수로 상담당 발급 상한(40회)을 센다(NET-02). `connect_failed`는 고객 폰이 연결을 실패로 판정했을 때(`stage`: connecting·call) — 연결 실패율 실측, 디스코드 응급 알림(OPS-09)
 
 `resolved_remotely`('출장 없이 해결?')는 2026-10-03부터 남기지 않는다(예전 기록만 있음, DATA-01). `rooms.resolved_remotely` 칸도 지우지 않고 두되 새로 쓰지 않는다.
 
 ## 환경 변수
 
-`.env.example` 참고. TURN 자격증명은 서버에서만 다루고 클라이언트엔 단기 토큰만 내려줄 것. 보안 헤더는 `next.config.ts`(NFR-11) — 카메라·마이크를 막는 `Permissions-Policy`는 걸지 말 것.
+`.env.example` 참고. TURN 자격증명은 서버에서만 다루고 클라이언트엔 단기 토큰만 내려줄 것. 디스코드 웹훅 주소(`DISCORD_WEBHOOK_*`)는 환경 변수로만 받고 코드·문서·커밋에 적지 말 것. 보안 헤더는 `next.config.ts`(NFR-11) — 카메라·마이크를 막는 `Permissions-Policy`는 걸지 말 것.
 
 ## 하지 말 것
 

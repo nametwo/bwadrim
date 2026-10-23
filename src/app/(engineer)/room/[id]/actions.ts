@@ -3,6 +3,7 @@
 import { isAuthRetryableFetchError } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { logEvent } from "@/lib/events";
+import { notifyUrgent } from "@/lib/notify";
 import { cleanLabel } from "@/lib/recipient-label";
 
 export type EndRoomResult = { ok: true } | { ok: false; reason: "auth" | "db" };
@@ -19,10 +20,11 @@ export async function endRoom(roomId: string, connected: boolean): Promise<EndRo
   } = await supabase.auth.getUser();
   // 인증 서버 일시 장애는 로그인 풀림이 아니다 — 다시 시도하게 한다
   if (!user) {
-    return {
-      ok: false,
-      reason: isAuthRetryableFetchError(authError) ? "db" : "auth",
-    };
+    if (isAuthRetryableFetchError(authError)) {
+      notifyUrgent("auth-down", `🚨 Supabase 인증에 닿지 않아요 — 상담 ${roomId.slice(0, 8)} 닫기 실패: ${authError?.message ?? ""}`);
+      return { ok: false, reason: "db" };
+    }
+    return { ok: false, reason: "auth" };
   }
 
   // RLS로 자기 방만 갱신된다. 이미 종료된 방은 건드리지 않아 중복 기록을 막는다.
@@ -35,7 +37,11 @@ export async function endRoom(roomId: string, connected: boolean): Promise<EndRo
     .select("id, created_at")
     .maybeSingle();
 
-  if (error) return { ok: false, reason: "db" };
+  if (error) {
+    // 엔지니어 화면엔 '끝내지 못했어요'가 떠 있다 — 지금 봐야 할 일 (OPS-09)
+    notifyUrgent("end-room-db", `🚨 상담 닫기 실패 — 상담 ${roomId.slice(0, 8)}: ${error.message}. Supabase 쓰기가 안 되는지 봐 주세요`);
+    return { ok: false, reason: "db" };
+  }
 
   if (data) {
     const durationSec = Math.round((Date.now() - new Date(data.created_at).getTime()) / 1000);

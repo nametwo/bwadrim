@@ -17,6 +17,7 @@
 //   POST /__seed {rooms?, events?, recipients?}  목록 바꾸기 (화면 카탈로그: 대시보드·통계, 받는 분 이름표). ageMin = 몇 분 전
 //   POST /__patch-room {id, ...}       방 한 개 고치기 (링크를 연 뒤 세션이 닫힌 경우 등)
 //   POST /__faults {failJoinToken?, failRoomUpdate?, failAuth?}  일부러 실패시키기 (전체 reset하면 풀린다)
+//   POST /__discord/{channel}  디스코드 웹훅 흉내(OPS-09) — 서버가 보낸 {content}를 모은다 · GET /__discord 목록 · DELETE /__discord 비우기
 //
 // 고정 데이터는 e2e/fixtures.json과 같다 (테스트도 같은 파일을 읽는다).
 import crypto from "node:crypto";
@@ -35,6 +36,8 @@ let recipients = [];
 let faults = {};
 /** 마지막 로그아웃 요청 {scope, at} — 이 기기만(local)인지 본다 (AUTH-06) */
 let lastLogout = null;
+/** 디스코드 웹훅으로 온 글 [{channel, content, at}] (OPS-09) */
+let discord = [];
 
 function freshRoom(r, now) {
   return {
@@ -67,6 +70,7 @@ function reset(roomId) {
   recipients = [];
   faults = {};
   lastLogout = null;
+  discord = [];
 }
 reset();
 
@@ -283,6 +287,16 @@ const server = http.createServer(async (req, res) => {
     if (p === "/__rooms") return send(res, 200, rooms);
     if (p === "/__recipients") return send(res, 200, recipients);
     if (p === "/__last-logout") return send(res, 200, lastLogout);
+    if (p.startsWith("/__discord/") && req.method === "POST") {
+      const body = (await readBody(req)) ?? {};
+      discord.push({ channel: p.slice("/__discord/".length), content: typeof body.content === "string" ? body.content : "", at: Date.now() });
+      return send(res, 204);
+    }
+    if (p === "/__discord" && req.method === "GET") return send(res, 200, discord);
+    if (p === "/__discord" && req.method === "DELETE") {
+      discord = [];
+      return send(res, 204);
+    }
     if (p === "/__reset" && req.method === "POST") {
       reset(url.searchParams.get("room") ?? undefined);
       return send(res, 200, { ok: true });

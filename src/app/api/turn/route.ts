@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isJoinToken } from "@/lib/join-token";
 import { logEvent } from "@/lib/events";
+import { notifyUrgent } from "@/lib/notify";
 
 // ICE 서버 목록 발급. TURN 자격증명은 서버에서만 다루고
 // 클라이언트엔 단기 토큰만 내려준다. 유효시간은 상담이 만료되는 때까지(최대 2시간).
@@ -21,8 +22,11 @@ const CLOUDFLARE_TIMEOUT_MS = 5000;
 
 type TurnResponse = { iceServers: RTCIceServer[]; turnError: string | null };
 
-function stunOnly(turnError: string) {
+// alert: 응급 채널에 보낼 글(OPS-09). 중계 서버 없이는 모바일망끼리 연결이 안 될 수 있어 지금 봐야 할 일이다.
+// null이면 보내지 않는다(상한에 걸린 경우는 호출측이 상담 id를 붙여 따로 보낸다)
+function stunOnly(turnError: string, alert: string | null = `🚨 TURN 발급 실패 — ${turnError}. 중계 서버 없이 STUN만 내려갔어요. 모바일망끼리는 연결이 안 될 수 있어요 (NET-03)`) {
   console.error(`[turn] STUN만 반환: ${turnError}`);
+  if (alert) notifyUrgent(`turn:${turnError.slice(0, 40)}`, alert);
   return NextResponse.json<TurnResponse>(
     { iceServers: [STUN], turnError },
     { headers: { "Cache-Control": "no-store" } },
@@ -70,7 +74,11 @@ export async function GET(request: Request) {
     .eq("name", "turn_issued");
   if (countError) console.error("[turn] 발급 횟수 조회 실패(막지 않음):", countError);
   else if ((issued ?? 0) >= ISSUE_LIMIT) {
-    return stunOnly(`이 상담의 발급 횟수 ${ISSUE_LIMIT}회를 넘었어요`);
+    notifyUrgent(
+      `turn-cap:${room.id}`,
+      `🚨 TURN 발급 상한 — 상담 ${room.id.slice(0, 8)}: ${ISSUE_LIMIT}회를 넘었어요. 링크가 퍼졌거나 누가 되풀이해 부르고 있어요 (NET-02)`,
+    );
+    return stunOnly(`이 상담의 발급 횟수 ${ISSUE_LIMIT}회를 넘었어요`, null);
   }
 
   const keyId = process.env.CLOUDFLARE_TURN_KEY_ID?.trim();

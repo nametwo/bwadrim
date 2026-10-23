@@ -276,6 +276,10 @@ export function CameraStart({
             if (relay) postEvent("relay_used");
           }, 1000);
         }
+        // 연결 실패는 핵심 지표(연결 실패율)라 바로 남긴다. 서버가 응급 알림으로도 보낸다 (DATA-01, OPS-09)
+        if (s === "failed" && prev !== "failed") {
+          postEvent("connect_failed", { stage: connectedAtRef.current ? "call" : "connecting" });
+        }
         if (s === "ended" || s === "failed" || s === "denied" || s === "replaced") {
           // 바꾸던 카메라가 늦게 열려도 켜진 채 남지 않게
           liveGenRef.current += 1;
