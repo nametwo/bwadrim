@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeDevice, describeEvent, roomTag, shortId } from "./notify-events";
+import { describeDevice, describeEvent, hasMessage, roomTag, shortId } from "./notify-events";
 
 // 디스코드 글 만들기 (OPS-09). 어떤 이벤트가 어느 채널로 어떤 글이 되는지
 
@@ -35,10 +35,15 @@ describe("describeEvent — 일반 채널", () => {
       "🔗 상담 3f2b9c1e · 김도현 → 역삼점 | 고객이 링크를 열었어요 (안드로이드 크롬 · 카카오톡 앱 안)",
     );
     expect(describeEvent("link_opened", { ua: "Mozilla/5.0 (iPhone) Safari", inapp: null }, ROOM).general).toContain("(아이폰 사파리)");
+    expect(describeEvent("link_opened", { ua: "Mozilla/5.0 (Linux; Android 14) BAND/1.0", inapp: "band" }, ROOM).general).toContain("(안드로이드 크롬 · 밴드 앱 안)");
+    expect(describeEvent("link_opened", { ua: "x", inapp: "webview" }, ROOM).general).toContain("(기기 모름 · 이름 모르는 앱의 웹뷰 안)");
+    expect(describeEvent("link_opened", { ua: "x", inapp: "newapp" }, ROOM).general).toContain("newapp 앱 안");
     expect(describeEvent("camera_granted", { mic: true }, ROOM).general).toBe("📷 상담 3f2b9c1e · 김도현 → 역삼점 | 고객이 카메라를 켰어요");
     expect(describeEvent("camera_granted", { mic: false }, ROOM).general).toContain("(마이크 없이)");
     expect(describeEvent("camera_denied", { reason: "NotAllowedError" }, ROOM).general).toContain("고객이 카메라를 못 켰어요 (권한을 거부했거나 막혀 있음)");
     expect(describeEvent("camera_denied", { reason: "weird" }, ROOM).general).toContain("(weird)");
+    expect(describeEvent("camera_denied", { reason: "unknown" }, ROOM).general).toContain("(원인 모름)");
+    expect(describeEvent("camera_denied", { reason: "TrackStartError" }, ROOM).general).toContain("(다른 앱이 카메라를 쓰는 중)");
     expect(describeEvent("connected", { relay: false, turn: true }, ROOM).general).toContain("연결됐어요 (직접 연결)");
     expect(describeEvent("connected", { relay: true, turn: false }, ROOM).general).toContain("연결됐어요 (중계 서버 경유, TURN 없이)");
     expect(describeEvent("kakao_sent", { chat_type: "DirectChat" }, ROOM).general).toContain("카톡 카드가 채팅방에 갔어요 (1:1)");
@@ -58,17 +63,21 @@ describe("describeEvent — 일반 채널", () => {
     for (const name of ["pointer_used", "freeze_used", "anchor_used", "guide_used", "photo_taken", "relay_used", "turn_issued", "whatever"]) {
       expect(describeEvent(name, {}, ROOM)).toEqual({});
     }
+    // 글이 안 되는 이벤트는 상담 정보도 찾지 않게 미리 가른다
+    for (const name of ["pointer_used", "relay_used", "turn_issued"]) expect(hasMessage(name)).toBe(false);
+    for (const name of ["room_created", "link_opened", "camera_granted", "camera_denied", "connected", "connect_failed", "kakao_sent", "ended"]) expect(hasMessage(name)).toBe(true);
   });
 });
 
 describe("describeEvent — 응급 채널 (핵심 지표가 깨지는 신호)", () => {
   it("연결 실패는 일반에도 응급에도 간다. 같은 상담·같은 단계는 한 열쇠", () => {
     const m = describeEvent("connect_failed", { stage: "connecting" }, ROOM);
-    expect(m.general).toBe("❌ 상담 3f2b9c1e · 김도현 → 역삼점 | 연결에 실패했어요 (연결하다 실패)");
+    expect(m.general).toBe("❌ 상담 3f2b9c1e · 김도현 → 역삼점 | 연결에 실패했어요 (연결하던 중)");
     expect(m.urgent?.key).toBe("connect_failed:3f2b9c1e-8a4d-4e6f-9b2a-1c3d5e7f9a0b:connecting");
-    expect(m.urgent?.text).toContain("🚨 연결 실패 — 상담 3f2b9c1e · 김도현 → 역삼점: 연결하다 실패");
+    expect(m.urgent?.text).toContain("🚨 연결 실패 — 상담 3f2b9c1e · 김도현 → 역삼점: 연결하던 중에 실패했어요");
     const mid = describeEvent("connect_failed", { stage: "call" }, ROOM);
     expect(mid.general).toContain("(통화 중에 끊김)");
+    expect(mid.urgent?.text).toContain("통화 중에 끊겼어요");
     expect(mid.urgent?.key).toContain(":call");
   });
 

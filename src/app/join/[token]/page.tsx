@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { logEvent } from "@/lib/events";
+import { notifyUrgent } from "@/lib/notify";
 import { detectInApp, detectWebView, IN_APP_LABEL } from "@/lib/in-app-browser";
 import { isPreviewBot } from "@/lib/preview-bot";
 import { isJoinToken } from "@/lib/join-token";
@@ -58,6 +59,8 @@ export default async function JoinPage({ params, searchParams }: PageProps<"/joi
       room = data;
     } catch (e) {
       console.error("[join] 방 조회 실패:", e);
+      // 고객이 '잠깐 연결이 안 돼요'를 본다 — 지금 봐야 할 일 (OPS-09)
+      notifyUrgent("join-db", `🚨 상담 조회 실패 — 고객이 링크를 열었는데 Supabase 읽기가 안 돼요 (${e instanceof Error ? e.message : String(e)}). 고객 화면은 '잠깐 연결이 안 돼요'`);
       lookupFailed = true;
     }
   }

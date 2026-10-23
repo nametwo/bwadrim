@@ -44,7 +44,10 @@ export async function login(
     // 서버와 연결이 안 된 것(Supabase 장애·네트워크)은 비밀번호 탓이 아니다 — 관리자가 준 비밀번호를
     // 의심하지 않게 따로 안내한다 (AUTH-03). supabase-js는 이 경우도 throw하지 않고 error로 돌려준다
     if (isAuthRetryableFetchError(error)) {
-      notifyUrgent("auth-down", `🚨 Supabase 인증에 닿지 않아요 — 기사님이 로그인을 못 해요: ${error.message}`);
+      notifyUrgent(
+        "auth-down",
+        `🚨 Supabase 인증에 닿지 않아요 — 기사님이 로그인을 못 해요 (${error.message}). Supabase 프로젝트가 멈추지 않았는지와 status.supabase.com을 봐 주세요`,
+      );
       return { error: "지금 서버와 연결이 안 돼요. 조금 있다가 \u2018로그인\u2019을 다시 눌러 주세요.", email };
     }
     return { error: "이메일이나 비밀번호가 맞지 않아요.", email };

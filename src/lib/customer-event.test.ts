@@ -24,6 +24,11 @@ describe("parseCustomerEvent", () => {
       relay: false,
       turn: false,
     });
+    // 연결 실패(connect_failed): 연결하던 중 / 통화 중 끊김. 그 밖의 값·빠진 값은 connecting
+    expect(parseCustomerEvent({ token: TOKEN, name: "connect_failed", props: { stage: "call" } })?.props).toEqual({ stage: "call" });
+    expect(parseCustomerEvent({ token: TOKEN, name: "connect_failed", props: { stage: "connecting" } })?.props).toEqual({ stage: "connecting" });
+    expect(parseCustomerEvent({ token: TOKEN, name: "connect_failed", props: { stage: "weird", junk: 1 } })?.props).toEqual({ stage: "connecting" });
+    expect(parseCustomerEvent({ token: TOKEN, name: "connect_failed", props: {} })?.props).toEqual({ stage: "connecting" });
     // postEvent("relay_used")는 props 기본값 {}를 보낸다
     expect(parseCustomerEvent({ token: TOKEN, name: "relay_used", props: {} })).toEqual({
       token: TOKEN,

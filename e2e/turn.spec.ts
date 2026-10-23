@@ -86,4 +86,15 @@ test(`${LIMIT}회가 쌓인 상담은 STUN만 주고 상한 문구를 돌려준�
   // 다른 상담은 영향을 받지 않는다
   const other = await request.get(`/api/turn?t=${FIXTURE.rooms[10].join_token}`);
   expect(((await other.json()) as TurnBody).turnError).toContain("미설정");
+
+  // 응급 채널(가짜 웹훅)에 상한 알림 (OPS-09)
+  await expect
+    .poll(
+      async () => {
+        const all = (await (await fetch(`${SUPABASE_URL}/__discord`)).json()) as { channel: string; content: string }[];
+        return all.some((m) => m.channel === "urgent" && m.content.includes("TURN 발급 상한") && m.content.includes(`상담 ${ROOM.id.slice(0, 8)}`));
+      },
+      { timeout: 10_000 },
+    )
+    .toBe(true);
 });

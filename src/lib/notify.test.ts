@@ -3,12 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // 디스코드 보내기 (OPS-09): 웹훅이 없으면 조용히, 있으면 응답 뒤(after)에 POST, 응급은 10분에 한 번
 
 const later: Array<() => unknown> = [];
+// afterThrows: after()가 요청 밖(E468)이나 못 쓰는 배포에서 던지는 척
+let afterThrows: { __NEXT_ERROR_CODE: string; message: string } | null = null;
 vi.mock("next/server", async (orig) => ({
   ...(await orig<typeof import("next/server")>()),
-  after: (fn: () => unknown) => later.push(fn),
+  after: (fn: () => unknown) => {
+    if (afterThrows) throw Object.assign(new Error(afterThrows.message), { __NEXT_ERROR_CODE: afterThrows.__NEXT_ERROR_CODE });
+    later.push(fn);
+  },
 }));
 
-const { notifyEnabled, notifyGeneral, notifyUrgent, resetNotifyForTests, sendDiscord, shouldSendUrgent } = await import("./notify");
+const { allowGeneral, notifyEnabled, notifyGeneral, notifyUrgent, resetNotifyForTests, sendDiscord, shouldSendUrgent } = await import("./notify");
 
 const post = vi.fn(async () => ({ ok: true, status: 204 }));
 
@@ -18,6 +23,7 @@ async function flush() {
 
 beforeEach(() => {
   later.length = 0;
+  afterThrows = null;
   post.mockClear();
   resetNotifyForTests();
   vi.stubGlobal("fetch", post);
@@ -27,6 +33,17 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe("웹훅 주소 검사", () => {
+  it("https로 시작하지 않는 주소(스킴을 빠뜨린 경우)는 없는 것으로 본다", async () => {
+    vi.stubEnv("DISCORD_WEBHOOK_GENERAL", "discord.com/api/webhooks/1/x");
+    vi.stubEnv("DISCORD_WEBHOOK_URGENT", "");
+    expect(notifyEnabled()).toBe(false);
+    notifyGeneral("x");
+    await Promise.all(later.map((fn) => fn()));
+    expect(post).not.toHaveBeenCalled();
+  });
 });
 
 describe("웹훅이 없을 때", () => {
@@ -87,5 +104,35 @@ describe("웹훅이 있을 때", () => {
     expect(shouldSendUrgent("k", 1_000_000)).toBe(true);
     expect(shouldSendUrgent("k", 1_000_000 + 9 * 60_000)).toBe(false);
     expect(shouldSendUrgent("k", 1_000_000 + 10 * 60_000)).toBe(true);
+  });
+
+  it("응급을 못 보냈으면(디스코드 거부) 10분을 기다리지 않고 다음에 다시 보낸다", async () => {
+    post.mockResolvedValueOnce({ ok: false, status: 503 } as never);
+    notifyUrgent("k", "🚨 1");
+    await flush();
+    notifyUrgent("k", "🚨 2");
+    await flush();
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
+  it("요청 밖(E468)이면 after 없이 바로 보낸다. 다른 오류면 로그를 남기고 바로 보낸다", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    afterThrows = { __NEXT_ERROR_CODE: "E468", message: "outside request" };
+    notifyGeneral("a");
+    await vi.waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("after()"), expect.anything());
+    afterThrows = { __NEXT_ERROR_CODE: "E91", message: "no waitUntil" };
+    notifyGeneral("b");
+    await vi.waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("after()"), "no waitUntil");
+    expect(later).toHaveLength(0);
+  });
+
+  it("일반은 상담 하나가 10분에 30줄까지 — 링크를 가진 사람의 되풀이 호출을 막는다", () => {
+    const t = 5_000_000;
+    for (let i = 0; i < 30; i++) expect(allowGeneral("room-a", t + i)).toBe(true);
+    expect(allowGeneral("room-a", t + 31)).toBe(false);
+    expect(allowGeneral("room-b", t + 32)).toBe(true); // 다른 상담은 따로
+    expect(allowGeneral("room-a", t + 10 * 60_000)).toBe(true); // 10분이 지나면 다시
   });
 });

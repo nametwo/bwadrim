@@ -1,5 +1,5 @@
 {
-  "$comment": "E2E 가짜 Supabase 고정 데이터 (e2e/mock-supabase.mjs와 테스트가 함께 읽는다). 진짜 키가 아니다. 방 6~8번(a006~a008)은 받는 분 이름표 e2e/recipient.spec.ts 전용, 9번(a009)은 링크 열람 기록 e2e/join-open.spec.ts 전용. 10·11번(a010·a011)은 TURN 발급 e2e/turn.spec.ts 전용. 12번(a012)은 디스코드 알림 e2e/notify.spec.ts 전용.",
+  "$comment": "E2E 가짜 Supabase 고정 데이터 (e2e/mock-supabase.mjs와 테스트가 함께 읽는다). 진짜 키가 아니다. 방 6~8번(a006~a008)은 받는 분 이름표 e2e/recipient.spec.ts 전용, 9번(a009)은 링크 열람 기록 e2e/join-open.spec.ts 전용. 10·11번(a010·a011)은 TURN 발급 e2e/turn.spec.ts 전용. 12번(e2e0a012…)은 디스코드 알림 e2e/notify.spec.ts 전용 — 디스코드 글을 상담 id 앞 8자리로 거르므로 앞자리가 다른 방과 달라야 한다.",
   "supabasePort": 54329,
   "anonKey": "e2e-anon-key",
   "serviceKey": "e2e-service-key",
@@ -88,7 +88,7 @@
       "join_token": "e2e05555555555555555555555555551"
     },
     {
-      "id": "e2e00000-0000-4000-8000-00000000a012",
+      "id": "e2e0a012-0000-4000-8000-00000000a012",
       "code": "E2ELLL",
       "status": "waiting",
       "join_token": "e2e06666666666666666666666666662"

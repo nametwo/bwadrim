@@ -38,7 +38,7 @@ function pickProps(name: CustomerEventName, raw: Record<string, unknown>): Custo
     case "relay_used":
       return {};
     case "connect_failed":
-      // 연결하다 실패(connecting) / 통화 중 끊김(call). 그 밖의 값은 connecting으로
+      // 연결하던 중 실패(connecting) / 통화 중 끊김(call). 그 밖의 값은 connecting으로
       return { stage: raw.stage === "call" ? "call" : "connecting" };
   }
 }

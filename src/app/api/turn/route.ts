@@ -56,6 +56,7 @@ export async function GET(request: Request) {
   // 404는 '세션이 끝났다'는 뜻으로 쓰이므로(고객 화면이 종료 안내로 바뀜) 조회 오류와 구분한다
   if (error) {
     console.error("[turn] 방 조회 실패:", error);
+    notifyUrgent("turn-db", `🚨 상담 조회 실패 — TURN 발급 때 Supabase 읽기가 안 돼요 (${error.message}). 고객은 '카메라 켜는 중'에서 멈춰요`);
     return NextResponse.json({ error: "lookup failed" }, { status: 503 });
   }
 

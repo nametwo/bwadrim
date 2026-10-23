@@ -7,7 +7,7 @@ import { connected, customerJoin, engineerReady, useRig } from "./screens/rig";
 //  - 일반: 상담 단계마다 한 줄 — 링크 엶(기기), 카메라 켬, 연결됨, 끝남(걸린 시간·쓴 도구). 기사님 이름이 붙는다
 //  - 응급: 연결 실패(고객 폰이 failed로 판정), 카메라는 켰는데 연결 없이 끝남
 //  - e2e 서버는 TURN 키가 없어 '🚨 TURN 발급 실패'도 올 수 있다(10분에 한 번) — 상담 id가 없는 글이라 여기선 거른다
-// 방 12번(a012)은 이 파일 전용
+// 방 12번(e2e0a012…)은 이 파일 전용 — 글을 상담 id 앞 8자리로 거르므로 앞자리가 다른 방과 다르다
 
 test.use({ launchOptions: fakeCamera(CLIPS.jitter) });
 test.describe.configure({ mode: "serial" });
@@ -28,8 +28,24 @@ test.beforeEach(async () => {
   await fetch(`${SUPABASE_URL}/__discord`, { method: "DELETE" });
 });
 
+/** 받는 분 이름표를 하나 만들어 이 상담에 잇는다 (ROOM-16) — 글머리에 '→ 이름'이 붙는지 보려고 */
+async function labelRoom(label: string) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/recipients`, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: FIXTURE.serviceKey, prefer: "return=representation" },
+    body: JSON.stringify({ engineer_id: FIXTURE.user.id, label }),
+  });
+  const [row] = (await r.json()) as { id: string }[];
+  await fetch(`${SUPABASE_URL}/__patch-room`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: ROOM.id, recipient_id: row.id }),
+  });
+}
+
 test("상담 한 번: 일반 채널에 링크·카메라·연결·끝남이 차례로, 응급에는 아무것도 없다", async ({ browser, baseURL }) => {
   test.setTimeout(120_000);
+  await labelRoom("역삼점");
   await useRig(browser, baseURL, async (rig) => {
     const ep = await rig.engineer();
     const cp = await rig.customer();
@@ -58,8 +74,8 @@ test("상담 한 번: 일반 채널에 링크·카메라·연결·끝남이 차�
     expect(find("고객이 카메라를 켰어요")).toBeTruthy();
     expect(find("연결됐어요")).toContain("직접 연결");
     expect(find("상담을 끝냈어요")).toMatch(/걸림 · 쓴 도구: 사진/);
-    // 기사님 이름(계정 표시 이름)이 붙는다. 차례도 맞다
-    for (const m of general) expect(m).toContain(`${TAG} · 김도현`);
+    // 기사님 이름(계정 표시 이름)과 받는 분 이름표가 붙는다. 차례도 맞다
+    for (const m of general) expect(m).toContain(`${TAG} · 김도현 → 역삼점`);
     const order = ["링크를 열었어요", "카메라를 켰어요", "연결됐어요", "상담을 끝냈어요"].map((p) => general.findIndex((m) => m.includes(p)));
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(await discord("urgent")).toEqual([]);
@@ -107,4 +123,24 @@ test("카메라는 켰는데 연결 없이 상담을 닫으면 응급", async ({
     expect((await discord("urgent"))[0]).toContain("🚨 연결 없이 끝남");
     expect((await discord("general")).some((m) => m.includes("상담을 끝냈어요 · 연결 없이"))).toBe(true);
   });
+});
+
+test("지표를 기록하지 못하면(Supabase 쓰기 실패) 응급에 '지표 기록 실패'", async ({ browser, baseURL }) => {
+  test.setTimeout(60_000);
+  await fetch(`${SUPABASE_URL}/__faults`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ failEvents: true }) });
+  try {
+    await useRig(browser, baseURL, async (rig) => {
+      const cp = await rig.customer();
+      // 링크를 열면 서버가 link_opened를 남기려다 실패한다. 고객 화면은 그대로 열린다
+      await cp.goto(`/join/${ROOM.join_token}`);
+      await expect(cp.getByRole("button", { name: /카메라 켜고 시작하기/ })).toBeVisible({ timeout: 30_000 });
+      await expect.poll(async () => (await discord("urgent")).length, { timeout: 15_000 }).toBeGreaterThanOrEqual(1);
+      const [urgent] = await discord("urgent");
+      expect(urgent).toContain("🚨 지표 기록 실패");
+      expect(urgent).toContain("link_opened");
+      expect(await discord("general")).toEqual([]);
+    });
+  } finally {
+    await fetch(`${SUPABASE_URL}/__faults`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ failEvents: false }) });
+  }
 });

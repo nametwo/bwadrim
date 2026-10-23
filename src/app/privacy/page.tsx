@@ -100,8 +100,11 @@ export default function PrivacyPage() {
             <li>
               <b className="text-text-primary">카카오</b>: 엔지니어가 카카오톡으로 링크를 보낼 때 전송과 전송 결과(채팅방 종류와 구분 값) 알림.
             </li>
+            <li>
+              <b className="text-text-primary">Discord</b>: 운영자에게 상담 진행과 장애 알림. 기사님 이름, 받는 분 이름표, 고객 기기 종류, 연결 결과가 가요.
+            </li>
           </ul>
-          <p>Supabase, Vercel, Cloudflare는 미국 회사예요. 저장은 서울에서 하지만, 업체가 관리를 위해 해외에서 접근할 수 있고 영상 중계는 가까운 해외 서버를 거칠 수 있어요.</p>
+          <p>Supabase, Vercel, Cloudflare, Discord는 미국 회사예요. 저장은 서울에서 하지만, 업체가 관리를 위해 해외에서 접근할 수 있고 영상 중계는 가까운 해외 서버를 거칠 수 있어요.</p>
         </Section>
 
         <Section n={5} title="요청하실 수 있는 것">

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logEvent } from "@/lib/events";
 import { parseCustomerEvent } from "@/lib/customer-event";
+import { notifyUrgent } from "@/lib/notify";
 
 // 고객(anon) 쪽 지표 이벤트 수집. events 테이블엔 anon insert 정책이 없으므로
 // 유효한 고객 링크 토큰을 아는 요청만 이 API를 통해 기록한다.
@@ -31,11 +32,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid event" }, { status: 400 });
   }
 
-  const { data: room } = await createAdminClient()
+  const { data: room, error } = await createAdminClient()
     .from("rooms")
     .select("id, status, expires_at")
     .eq("join_token", event.token)
     .maybeSingle();
+
+  // 조회 오류는 '끝난 상담'(404)과 다르다 — 고객 화면이 종료 안내로 바뀌지 않게 503. 지금 봐야 할 일 (OPS-09)
+  if (error) {
+    console.error("[events] 방 조회 실패:", error);
+    notifyUrgent("events-db", `🚨 상담 조회 실패 — 고객 기록(${event.name}) 때 Supabase 읽기가 안 돼요 (${error.message})`);
+    return NextResponse.json({ error: "lookup failed" }, { status: 503 });
+  }
 
   if (
     !room ||

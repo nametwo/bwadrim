@@ -59,6 +59,8 @@ export default defineConfig({
               // 디스코드 알림(OPS-09)은 가짜 서버로 보낸다 — e2e/notify.spec.ts가 모인 글을 본다
               DISCORD_WEBHOOK_GENERAL: `http://127.0.0.1:${SUPABASE_PORT}/__discord/general`,
               DISCORD_WEBHOOK_URGENT: `http://127.0.0.1:${SUPABASE_PORT}/__discord/urgent`,
+              // 응급 '같은 일 10분에 한 번'을 끈다 — 같은 방으로 거듭 테스트해도 막히지 않게
+              DISCORD_URGENT_DEDUPE_MS: "0",
             },
           },
         ]),

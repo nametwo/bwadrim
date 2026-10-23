@@ -21,7 +21,10 @@ export async function endRoom(roomId: string, connected: boolean): Promise<EndRo
   // 인증 서버 일시 장애는 로그인 풀림이 아니다 — 다시 시도하게 한다
   if (!user) {
     if (isAuthRetryableFetchError(authError)) {
-      notifyUrgent("auth-down", `🚨 Supabase 인증에 닿지 않아요 — 상담 ${roomId.slice(0, 8)} 닫기 실패: ${authError?.message ?? ""}`);
+      notifyUrgent(
+        "auth-down",
+        `🚨 Supabase 인증에 닿지 않아요 — 상담 ${roomId.slice(0, 8)}: 상담을 닫지 못했어요 (${authError?.message ?? ""}). Supabase 프로젝트가 멈추지 않았는지와 status.supabase.com을 봐 주세요`,
+      );
       return { ok: false, reason: "db" };
     }
     return { ok: false, reason: "auth" };

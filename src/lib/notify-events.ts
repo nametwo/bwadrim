@@ -1,7 +1,8 @@
 import type { EventName } from "./events";
 
 // 지표 이벤트 → 디스코드 글 (OPS-09). 순수 함수 — 서버·DB를 모른다.
-// 일반 채널: 상담이 흘러가는 단계마다 한 줄(만듦·링크 엶·카메라·연결·끝남·카톡 전송). 도구 사용은 끝날 때 한 줄에 모은다.
+// 일반 채널: 상담이 흘러가는 단계마다 한 줄(만듦·링크 엶·카메라 켬·카메라 못 켬·연결·연결 실패·끝남·카톡 전송).
+// 도구 사용은 끝날 때 한 줄에 모으고, relay_used·turn_issued는 보내지 않는다(hasMessage).
 // 응급 채널: 핵심 지표(README '지표')가 깨지는 신호 — 연결 실패, 카메라는 켰는데 연결 없이 끝남.
 // TURN 발급 실패·상한, DB 기록 실패, 로그인 서버 장애는 이벤트가 아니라 그 자리(api/turn, actions)에서 바로 보낸다
 
@@ -39,22 +40,38 @@ const TOOL_KO: Record<string, string> = {
   photo_taken: "사진",
 };
 
+// 고객 폰 브라우저 오류 이름 → 말. camera-help.tsx가 화면에서 가르는 것과 같은 묶음
 const DENIED_KO: Record<string, string> = {
   NotAllowedError: "권한을 거부했거나 막혀 있음",
   NotReadableError: "다른 앱이 카메라를 쓰는 중",
+  AbortError: "다른 앱이 카메라를 쓰는 중",
+  TrackStartError: "다른 앱이 카메라를 쓰는 중",
   NotFoundError: "카메라 없음",
+  DevicesNotFoundError: "카메라 없음",
   OverconstrainedError: "맞는 카메라 없음",
   unsupported: "카메라 기능이 없는 화면",
+  unknown: "원인 모름",
 };
 
+// 앱 안 브라우저 종류(src/lib/in-app-browser.ts InAppKind) → 말
 const INAPP_KO: Record<string, string> = {
-  kakaotalk: "카카오톡",
-  line: "라인",
-  naver: "네이버",
-  instagram: "인스타그램",
-  facebook: "페이스북",
-  webview: "이름 모르는 앱의 웹뷰",
+  kakaotalk: "카카오톡 앱 안",
+  line: "라인 앱 안",
+  naver: "네이버 앱 안",
+  instagram: "인스타그램 앱 안",
+  facebook: "페이스북 앱 안",
+  band: "밴드 앱 안",
+  daum: "다음 앱 안",
+  webview: "이름 모르는 앱의 웹뷰 안",
 };
+
+// 따로 보내지 않는 이벤트 — 끝날 때 한 줄에 모이거나(도구), 지표용일 뿐이다. 상담 정보를 찾는 수고도 하지 않는다
+const SILENT = new Set(["pointer_used", "freeze_used", "anchor_used", "guide_used", "photo_taken", "relay_used", "turn_issued"]);
+
+/** 이 이벤트가 디스코드 글이 되는지 */
+export function hasMessage(name: string): boolean {
+  return !SILENT.has(name);
+}
 
 const CHAT_KO: Record<string, string> = {
   DirectChat: "1:1",
@@ -103,7 +120,7 @@ export function describeEvent(name: EventName | string, props: Record<string, un
     case "room_created":
       return { general: `🆕 ${tag} | 새 상담을 만들었어요` };
     case "link_opened": {
-      const inapp = typeof p.inapp === "string" ? ` · ${INAPP_KO[p.inapp] ?? p.inapp} 앱 안` : "";
+      const inapp = typeof p.inapp === "string" ? ` · ${INAPP_KO[p.inapp] ?? `${p.inapp} 앱 안`}` : "";
       return { general: `🔗 ${tag} | 고객이 링크를 열었어요 (${describeDevice(p.ua)}${inapp})` };
     }
     case "camera_granted":
@@ -117,12 +134,12 @@ export function describeEvent(name: EventName | string, props: Record<string, un
         general: `✅ ${tag} | 연결됐어요 (${p.relay === true ? "중계 서버 경유" : "직접 연결"}${p.turn === false ? ", TURN 없이" : ""})`,
       };
     case "connect_failed": {
-      const stage = p.stage === "call" ? "통화 중에 끊김" : "연결하다 실패";
+      const mid = p.stage === "call";
       return {
-        general: `❌ ${tag} | 연결에 실패했어요 (${stage})`,
+        general: `❌ ${tag} | 연결에 실패했어요 (${mid ? "통화 중에 끊김" : "연결하던 중"})`,
         urgent: {
-          key: `connect_failed:${ctx.id}:${p.stage === "call" ? "call" : "connecting"}`,
-          text: `🚨 연결 실패 — ${tag}: ${stage}. 고객 화면엔 '다시 연결'이 떠 있어요. 되풀이되면 TURN·망 상태를 봐 주세요`,
+          key: `connect_failed:${ctx.id}:${mid ? "call" : "connecting"}`,
+          text: `🚨 연결 실패 — ${tag}: ${mid ? "통화 중에 끊겼어요" : "연결하던 중에 실패했어요"}. 고객 화면엔 '다시 연결'이 떠 있어요. 되풀이되면 TURN 발급과 망 상태를 봐 주세요`,
         },
       };
     }
@@ -140,7 +157,7 @@ export function describeEvent(name: EventName | string, props: Record<string, un
           general,
           urgent: {
             key: `ended-no-connect:${ctx.id}`,
-            text: `🚨 연결 없이 끝남 — ${tag}: 고객이 카메라는 켰는데 연결이 안 된 채 상담이 닫혔어요. 연결 실패율에 들어가요`,
+            text: `🚨 연결 없이 끝남 — ${tag}: 카메라는 켜졌는데 연결이 안 된 채 상담이 닫혔어요. 연결 실패율에 들어가요 (기사님이 '고객 화면 열어 보기'로 켜 본 것일 수도)`,
           },
         };
       }
