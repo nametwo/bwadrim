@@ -49,6 +49,14 @@ test("카메라를 허용하면 연결 준비를 기다리지 않고 내 카메�
   test.setTimeout(60_000);
   const rig = new Rig(browser, baseURL!);
   try {
+    // 개발 서버가 통화 화면 코드를 처음 만들 때는 몇 초 걸린다 — 1.5초 안에 떠야 하는 아래 검사가 그 시간을 재지 않게 한 번 데운다
+    const warm = await rig.customer();
+    await open(warm, `/join/${ROOM.join_token}`);
+    await warm.getByRole("button", { name: /카메라 켜고 시작하기/ }).click();
+    await expect(warm.getByTestId("cust-video")).toBeVisible({ timeout: 30_000 });
+    await warm.close();
+    await mockReset(ROOM.id);
+
     const cp = await rig.customer();
     const logs = collectErrors([["cust", cp]]);
     // 느린 망: TURN 조회 응답을 3초 붙잡는다
