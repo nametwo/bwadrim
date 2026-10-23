@@ -97,7 +97,7 @@ test("고객 폰이 연결을 실패로 판정하면 일반·응급 둘 다에 '
     await expect.poll(async () => (await discord("urgent")).length, { timeout: 15_000 }).toBe(1);
     const [urgent] = await discord("urgent");
     expect(urgent).toContain("🚨 연결 실패");
-    expect(urgent).toContain("통화 중에 끊김");
+    expect(urgent).toContain("통화 중에 끊겼어요");
     expect((await discord("general")).some((m) => m.includes("연결에 실패했어요 (통화 중에 끊김)"))).toBe(true);
   });
 });
