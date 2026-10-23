@@ -2,6 +2,8 @@
 // Next 서버(서버 컴포넌트·서버 액션·라우트 핸들러)가 NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:<포트>로 부른다.
 // Realtime(WebSocket·REST 보내기)은 여기서 하지 않는다 — 브라우저 쪽에서 Playwright가 가로챈다 (e2e/realtime-mock.ts).
 //
+//   POST /auth/v1/token                로그인 — 계정이 없어 늘 400(맞지 않아요). faults.failAuth면 503(장애, AUTH-03)
+//   POST /auth/v1/logout               로그아웃 — scope를 기억한다 (GET /__last-logout, AUTH-06)
 //   GET  /auth/v1/user                 Bearer 토큰이 FIXTURE.accessToken이면 사용자, 아니면 401
 //   GET  /auth/v1/admin/users/:id      (서비스 키) 사용자 — 고객 화면의 기사님 이름
 //   GET  /rest/v1/rooms?code=eq.X      (eq·neq·in·gte·is 필터, select=…, count=exact·HEAD 지원) Accept가 vnd.pgrst.object+json이면 객체 1개
@@ -14,7 +16,7 @@
 //   GET  /__events  ·  GET /__rooms  ·  GET /__recipients  ·  POST /__reset[?room=ID]  ·  GET /__health   (테스트용)
 //   POST /__seed {rooms?, events?, recipients?}  목록 바꾸기 (화면 카탈로그: 대시보드·통계, 받는 분 이름표). ageMin = 몇 분 전
 //   POST /__patch-room {id, ...}       방 한 개 고치기 (링크를 연 뒤 세션이 닫힌 경우 등)
-//   POST /__faults {failJoinToken?, failRoomUpdate?}  일부러 실패시키기 (전체 reset하면 풀린다)
+//   POST /__faults {failJoinToken?, failRoomUpdate?, failAuth?}  일부러 실패시키기 (전체 reset하면 풀린다)
 //
 // 고정 데이터는 e2e/fixtures.json과 같다 (테스트도 같은 파일을 읽는다).
 import crypto from "node:crypto";
@@ -31,6 +33,8 @@ let rooms = [];
 let events = [];
 let recipients = [];
 let faults = {};
+/** 마지막 로그아웃 요청 {scope, at} — 이 기기만(local)인지 본다 (AUTH-06) */
+let lastLogout = null;
 
 function freshRoom(r, now) {
   return {
@@ -62,6 +66,7 @@ function reset(roomId) {
   events = [];
   recipients = [];
   faults = {};
+  lastLogout = null;
 }
 reset();
 
@@ -277,6 +282,7 @@ const server = http.createServer(async (req, res) => {
     if (p === "/__events") return send(res, 200, events);
     if (p === "/__rooms") return send(res, 200, rooms);
     if (p === "/__recipients") return send(res, 200, recipients);
+    if (p === "/__last-logout") return send(res, 200, lastLogout);
     if (p === "/__reset" && req.method === "POST") {
       reset(url.searchParams.get("room") ?? undefined);
       return send(res, 200, { ok: true });
@@ -309,6 +315,17 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, FIXTURE.user);
     }
 
+    // 로그인(서버 액션 signInWithPassword). 가짜 서버에 계정은 없다 — 늘 '맞지 않아요'.
+    // failAuth면 장애 흉내: 503은 auth-js가 AuthRetryableFetchError로 돌려준다 (AUTH-03)
+    if (p === "/auth/v1/token" && req.method === "POST") {
+      if (faults.failAuth) return send(res, 503, { message: "mock: auth down (failAuth)" });
+      return send(res, 400, { error: "invalid_grant", error_description: "Invalid login credentials" });
+    }
+    // 로그아웃. auth-js는 POST /logout?scope=local|global|others 로 보낸다 (AUTH-06)
+    if (p === "/auth/v1/logout" && req.method === "POST") {
+      lastLogout = { scope: url.searchParams.get("scope"), at: Date.now() };
+      return send(res, 204);
+    }
     if (p === "/auth/v1/user" && req.method === "GET") {
       if (!authed(req)) return send(res, 401, { code: 401, error_code: "bad_jwt", msg: "invalid JWT" });
       return send(res, 200, FIXTURE.user);

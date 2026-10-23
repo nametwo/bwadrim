@@ -142,7 +142,8 @@ export default async function JoinPage({ params, searchParams }: PageProps<"/joi
     .then(({ data }) => engineerNameOf(data.user))
     .catch(() => null);
 
-  const start = <CameraStart roomId={room.id} token={token} engineerName={engineerName} />;
+  // 전에 연결된 적 있는 상담('연결됨')에 링크로 다시 들어온 경우: 끝내면 기사님 화면이 상담을 닫으므로 그 기억을 넘긴다 (JOIN-08)
+  const start = <CameraStart roomId={room.id} token={token} engineerName={engineerName} connectedBefore={room.status === "active"} />;
   if (inApp) {
     return (
       <OpenInBrowser

@@ -64,11 +64,14 @@ export function CameraStart({
   roomId,
   token,
   engineerName = null,
+  connectedBefore = false,
 }: {
   roomId: string;
   token: string;
   /** 기다리고 있는 기사님 이름 (엔지니어 계정의 표시 이름, OPS-03). 없으면 '기사님' */
   engineerName?: string | null;
+  /** 이 상담이 전에 기사님과 연결된 적 있는지(rooms.status '연결됨'). 링크를 다시 열어 들어온 경우 — 끝내면 상담이 닫히므로 '링크를 다시 누르면 된다'고 하면 안 된다 (JOIN-08) */
+  connectedBefore?: boolean;
 }) {
   const [phase, setPhase] = useState<Phase>("ready");
   const [failure, setFailure] = useState<CameraFailure>("blocked");
@@ -85,7 +88,7 @@ export function CameraStart({
   const [connectedAt, setConnectedAt] = useState<number | null>(null);
   // 이 화면에서 기사님과 한 번이라도 연결됐는지. '다시 연결'·'이 폰으로 연결'(restart)로도 지워지지 않는다 —
   // 연결된 적 있는 상담은 사장님이 끝내면 기사님 화면이 상담을 닫으므로(ROOM-10), 그 뒤 '링크를 다시 누르면 된다'고 하면 안 된다
-  const [everConnected, setEverConnected] = useState(false);
+  const [everConnected, setEverConnected] = useState(connectedBefore);
   const [talkSec, setTalkSec] = useState<number | null>(null);
   const connectedAtRef = useRef<number | null>(null);
   // 통화 콜백은 시작 시점 값을 기억하므로 지금 카메라 상태는 ref로 읽는다
@@ -646,7 +649,7 @@ export function CameraStart({
     // 기사님과 통화하다가 기사님 쪽이 사라져 다시 기다리는 중 (기사님 폰이 꺼짐·탭이 닫힘·기기를 바꾸는 중, CALL-05).
     // 처음 기다릴 때와 같은 '카메라 켰다고 알려 주세요'는 방금까지 통화한 사장님에게 맞지 않는다.
     // 기사님이 돌아와 다시 잇는 중(connecting)에는 '다시 들어오면 이어져요'가 맞지 않으므로 기다리는 동안만
-    const rejoining = callState === "waiting" && connectedAt !== null;
+    const rejoining = callState === "waiting" && everConnected;
     // 기사님을 기다리는 동안(나갔다 다시 오는 중 포함)은 핀 안내를 띄우지 않는다 — '기다리는 중' 카드와 엇갈리지 않게
     const statusText =
       connected && anchorBanner === "pin" && !frozen

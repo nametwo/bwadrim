@@ -92,7 +92,7 @@ describe("formatTimeLeft", () => {
     expect(formatTimeLeft(3_600_000)).toBe("1시간 남음");
   });
   it("1시간 미만은 분으로 올림, 0이 되지 않게", () => {
-    expect(formatTimeLeft(3_599_000)).toBe("60분 남음");
+    expect(formatTimeLeft(3_599_000)).toBe("1시간 남음");
     expect(formatTimeLeft(10 * 60_000)).toBe("10분 남음");
     expect(formatTimeLeft(20_000)).toBe("1분 남음");
     expect(formatTimeLeft(0)).toBe("1분 남음");

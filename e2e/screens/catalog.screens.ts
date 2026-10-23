@@ -58,6 +58,7 @@ async function seedDashboard() {
       room(5, { status: "ended", ageMin: 20 * 60, tookMin: 5 }),
       room(6, { status: "waiting", expired: true }),
       room(7, { status: "ended", resolved_remotely: true, ageMin: 3 * 24 * 60, tookMin: 7 }),
+      room(8, { status: "waiting", ageMin: 23 * 60 + 20 }), // 링크가 40분 남음 — 1시간 미만은 분으로
     ],
     events: [
       ev(1, "link_opened"),
@@ -73,6 +74,7 @@ async function seedDashboard() {
       ev(6, "camera_granted"),
       ...["link_opened", "camera_granted", "connected", "freeze_used", "anchor_used", "photo_taken", "resolved_remotely"].map((e) => ev(7, e)),
       ev(7, "ended", { duration_sec: 420, resolved_remotely: true }),
+      ev(8, "link_opened"),
     ],
   });
 }
@@ -142,6 +144,18 @@ test("첫 화면·로그인·404", async ({ browser, baseURL }) => {
       await expect(p.getByText("이메일이나 비밀번호가 맞지 않아요.")).toBeVisible({ timeout: 20_000 });
       return [{ label: "폰", page: p }];
     });
+    await shot(
+      { section: "home", ids: ["AUTH-03"], title: "로그인 — 서버와 연결이 안 될 때", note: "Supabase 장애·네트워크(가짜 서버 failAuth). 비밀번호 탓을 하지 않는다" },
+      async () => {
+        await mock("/__faults", { failAuth: true });
+        await p.getByLabel("이메일").fill("engineer@example.com");
+        await p.getByLabel("비밀번호", { exact: true }).fill("wrong-password");
+        await p.getByRole("button", { name: "로그인", exact: true }).click();
+        await expect(p.getByText("지금 서버와 연결이 안 돼요")).toBeVisible({ timeout: 20_000 });
+        return [{ label: "폰", page: p }];
+      },
+      () => mock("/__faults", { failAuth: false }),
+    );
 
     const kb = await rig.visitor();
     await shot(
@@ -220,6 +234,7 @@ test("대시보드·통계", async ({ browser, baseURL }) => {
         await open(epc, "/dashboard");
         await expect(ep.getByText("진행 중", { exact: false }).first()).toBeVisible();
         await expect(ep.getByTestId("month-card")).toHaveCount(0);
+        await expect(ep.getByText(/링크 40분 남음/)).toBeVisible(); // 1시간 미만은 분, 그 위는 시간
         // 칩·걸린 시간: 3·4(지금 기록)·7(예전 기록)은 끝남, 5는 연결 안 됨, 6은 만료. 걸린 시간은 끝남만
         await expect(ep.getByText("끝남", { exact: true })).toHaveCount(3);
         await expect(ep.getByText("연결 안 됨", { exact: true })).toHaveCount(1);
@@ -572,6 +587,8 @@ test("받는 분 이름표", async ({ browser, baseURL }) => {
 
 test("고객 진입", async ({ browser, baseURL }) => {
   test.setTimeout(300_000);
+  // 앞 장면에서 연결됐던 상담은 '연결됨'이라 고객 화면이 '기사님을 다시 기다리는 중…'이 된다(JOIN-06) — 처음 들어오는 사장님으로 되돌린다
+  for (const r of [ROOM, ROOM_B, ROOM_D]) await mockReset(r.id);
   await useRig(browser, baseURL, async (rig) => {
     const cp = await rig.customer();
     const ios = await rig.customer({ userAgent: UA.iphone });
@@ -627,21 +644,20 @@ test("고객 진입", async ({ browser, baseURL }) => {
         }
         return b ? [cust(a, "안드로이드"), cust(b, "아이폰")] : [cust(a)];
       });
+      if (f.fail) {
+        await shot(
+          { section: "join", ids: ["JOIN-05"], title: `${f.title} — 다시 시도해도 그대로`, note: "'다시 시도하기'를 또 눌렀는데 또 못 켬. 화면이 안 바뀌어 눌린 줄 모를 수 있어 원인에 맞는 빨간 한 줄" },
+          async () => {
+            for (const p of [a, b]) {
+              if (!p) continue;
+              await p.getByRole("button", { name: "다시 시도하기" }).click();
+              await expect(p.getByTestId("cust-camera-still-blocked")).toBeVisible({ timeout: 10_000 });
+            }
+            return b ? [cust(a, "안드로이드"), cust(b, "아이폰")] : [cust(a)];
+          },
+        );
+      }
     }
-
-    const again = await rig.customer();
-    await shot(
-      { section: "join", ids: ["JOIN-05"], title: "다시 시도해도 막혀 있어요", note: "'다시 시도하기'를 눌렀는데 또 막힘. 화면이 그대로라 눌린 줄 모르지 않게 빨간 한 줄" },
-      async () => {
-        await open(again, `/join/${ROOM.join_token}`);
-        await failGum(again, { name: "NotAllowedError" });
-        await again.getByRole("button", { name: /카메라 켜고 시작하기/ }).click();
-        await expect(again.getByTestId("cust-camera-help")).toBeVisible();
-        await again.getByRole("button", { name: "다시 시도하기" }).click();
-        await expect(again.getByTestId("cust-camera-still-blocked")).toBeVisible({ timeout: 10_000 });
-        return [cust(again)];
-      },
-    );
 
     // 연결되기 전에 '통화 종료' → 창 → '끝내기' (JOIN-08). 상담은 그대로 열려 있다
     const early = await rig.customer();

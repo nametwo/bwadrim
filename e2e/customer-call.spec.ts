@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { CLIPS, FIXTURE, fakeCamera } from "./helpers";
+import { CLIPS, FIXTURE, fakeCamera, mockReset } from "./helpers";
 import { failGum, setFlip, setPeerState } from "./screens/browser-hooks";
 import { Rig, customerJoin, connected, engineerReady, open } from "./screens/rig";
 
@@ -18,6 +18,12 @@ test.use({ launchOptions: fakeCamera(CLIPS.jitter) });
 test.describe.configure({ mode: "serial" });
 
 const ROOM = FIXTURE.rooms[3];
+
+// 앞 테스트에서 연결됐던 상담('연결됨')에 다시 들어오면 고객 화면은 '기사님을 다시 기다리는 중…'이 된다(JOIN-06·08).
+// 테스트마다 처음 들어오는 사장님으로 시작하게 상담을 되돌린다
+test.beforeEach(async () => {
+  await mockReset(ROOM.id);
+});
 const START = /카메라 켜고 시작하기|카메라 켜는 중/;
 
 function collectErrors(pages: [string, Page][]) {

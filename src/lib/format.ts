@@ -112,8 +112,9 @@ export function formatAvgDuration(sec: number): string {
  * 1시간 미만을 '1시간'으로 올려 적으면 기사님이 '아까 링크 눌러 보세요' 했다가 사장님은 '링크가 만료됐어요'를 본다
  */
 export function formatTimeLeft(msLeft: number): string {
-  if (msLeft < 3_600_000) return `${Math.max(1, Math.ceil(msLeft / 60_000))}분 남음`;
-  return `${Math.floor(msLeft / 3_600_000)}시간 남음`;
+  const min = Math.max(1, Math.ceil(msLeft / 60_000));
+  if (min < 60) return `${min}분 남음`; // 올림해서 60분이 되면 '1시간 남음'
+  return `${Math.max(1, Math.floor(msLeft / 3_600_000))}시간 남음`;
 }
 
 /** 통화 시계: '3:07' · '1:02:09' */

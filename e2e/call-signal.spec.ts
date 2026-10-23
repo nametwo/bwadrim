@@ -8,8 +8,11 @@ import { EXPIRED, connected, customerJoin, engineerReady, mock, useRig, type Rig
 //     엔지니어는 대기 화면으로 가지 않고, 고객은 '다시 연결'을 누를 일이 없다
 //  ② 링크를 가진 제3자가 고객 채널(:c)에 진짜 고객 기기 id로 종료(bye)를 보내도 연결된 상담은 닫히지 않는다.
 //     진짜 고객이 '통화 종료' → '끝내기'를 누르면 그대로 닫힌다
-//  ③ 엔지니어 소켓이 끊겼다 붙으면 고객이 다시 offer해 이어진다. 같은 인증서라 '기기가 바뀌었어요'는 안 뜬다
+//  ③ 엔지니어 소켓만 잠깐 끊겼다 붙어도 고객은 8초 기다려 연결을 그대로 둔다(새 offer 없음, '기기가 바뀌었어요' 없음)
 //  ④ 진짜 고객 기기 id로 다른 인증서의 offer가 오면 '고객 쪽 기기가 바뀌었어요'가 뜬다
+//  ⑤ 한쪽 소켓이 유예(8초)보다 오래 끊겼다 같은 기기로 돌아오면 저절로 이어진다 — 고객이 오래 끊긴 경우는 엔지니어가
+//     reoffer를 보내고, 엔지니어가 오래 끊긴 경우는 고객이 '기사님을 다시 기다리는 중…'에서 새로 청한다
+//  ⑥ offer가 유실되면 고객이 10초 뒤 다시 청한다
 // 준비는 화면 카탈로그와 같다(e2e/screens/rig.ts: 가짜 서버·가짜 카메라·실제 WebRTC 루프백).
 // 다른 통화 테스트와 동시에 돌아도 방이 겹치지 않게, e2e에서 안 쓰는 만료 방(rooms[1])을 하루 살려 쓰고 끝나면 되돌린다.
 
@@ -168,6 +171,29 @@ test("고객 소켓이 유예(8초)보다 오래 끊겼다 같은 폰으로 돌�
       expect(offers(rig)).toBe(2);
       // 같은 기기라 '기기가 바뀌었어요'는 없다
       expect((await seen(ep)).peerChanged).toBe(false);
+      expect(logs).toEqual([]);
+    } finally {
+      dumpOnFail(rig, logs);
+    }
+  });
+});
+
+test("엔지니어 소켓이 유예(8초)보다 오래 끊기면 고객은 '기사님을 다시 기다리는 중…', 돌아오면 고객이 새로 청해 이어진다 (CALL-05)", async ({ browser, baseURL }) => {
+  test.setTimeout(150_000);
+  await useRig(browser, baseURL, async (rig) => {
+    const { ep, cp, logs } = await start(rig);
+    try {
+      const engineer = deviceId(rig, E_LANE);
+      expect(rig.hub.disconnect((t) => t === E_LANE, 12_000)).toBe(1);
+      // 고객은 8초 뒤 연결을 버리고 다시 기다린다 — 처음 기다릴 때의 '카메라 켰다고 알려 주세요'가 아니다
+      await expect(cp.getByTestId("cust-status")).toHaveText("기사님을 다시 기다리는 중…", { timeout: 20_000 });
+      await expect(cp.getByText(/기사님이 다시 들어오면 바로 이어져요/)).toBeVisible();
+      // 같은 기기 id로 돌아오면 고객이 새로 청해 이어진다. 아무도 버튼을 누르지 않는다
+      await expect.poll(() => rig.hub.presence(E_LANE).map((m) => m.id), { timeout: 40_000 }).toEqual([engineer]);
+      await expect(cp.getByTestId("cust-status")).toHaveText("기사님이 보고 있어요", { timeout: 30_000 });
+      await expect(ep.getByTestId("eng-call-status")).toContainText("통화 중", { timeout: 30_000 });
+      await expect(cp.getByRole("button", { name: /다시 연결/ })).toHaveCount(0);
+      expect(offers(rig)).toBe(2);
       expect(logs).toEqual([]);
     } finally {
       dumpOnFail(rig, logs);
