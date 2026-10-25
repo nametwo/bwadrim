@@ -74,8 +74,10 @@ test("상담 한 번: 일반 채널에 링크·카메라·연결·끝남이 차�
     expect(find("고객이 카메라를 켰어요")).toBeTruthy();
     expect(find("연결됐어요")).toContain("직접 연결");
     expect(find("상담을 끝냈어요")).toMatch(/걸림 · 쓴 도구: 사진/);
-    // 기사님 이름(계정 표시 이름)과 받는 분 이름표가 붙는다. 차례도 맞다
-    for (const m of general) expect(m).toContain(`${TAG} · 김도현 → 역삼점`);
+    // 기사님 이름(계정 표시 이름)이 붙는다. 받는 분 이름표는 다른 spec(recipient.spec)이 같은 때 가짜 서버의 이름표 목록을
+    // 통째로 바꿀 수 있어, 내 이름표가 아직 있을 때만 본다(혼자 돌리면 늘 본다). 차례도 맞다
+    const labelKept = ((await (await fetch(`${SUPABASE_URL}/__recipients`)).json()) as { label: string }[]).some((r) => r.label === "역삼점");
+    for (const m of general) expect(m).toContain(labelKept ? `${TAG} · 김도현 → 역삼점` : `${TAG} · 김도현`);
     const order = ["링크를 열었어요", "카메라를 켰어요", "연결됐어요", "상담을 끝냈어요"].map((p) => general.findIndex((m) => m.includes(p)));
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(await discord("urgent")).toEqual([]);
