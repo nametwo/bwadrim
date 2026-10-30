@@ -67,7 +67,7 @@ src/components/                                  # 엔지니어·고객 화면 �
   ui/                                            # 디자인 시스템 부품(NFR-08, 피그마 컴포넌트와 같은 이름): button(Button·ButtonLink·buttonClass), icons(선 아이콘), sheet(아래 확인 창, 고객용 `size="l"`), notice-screen(한 화면 한 안내), bottom-cta(아래에 붙는 버튼 자리), brand(로고), status-chip, step-item, banner(고객용 큰 글자 `size="l"`), call-control(통화 원형 버튼, 고객용 `size="xl"`), stat-card, engineer-card, call-timer, text-field(입력칸)
 public/manifest.webmanifest, public/icons/          # 엔지니어 웹 앱 설정·아이콘 (플레이 앱이 가져다 씀 OPS-08, 엔지니어 화면에만 붙음). 홈 화면에 추가하라고 권하지 않는다(NFR-09 폐기)
 public/manifest-samsung.webmanifest                 # 삼성 인터넷용 웹 앱 설정(display: browser, 바로가기만). 삼성이 직접 만든 APK는 Play 프로텍트가 막는다(BUG-24). 서비스 워커는 쓰지 않음(public/sw.js = 예전 등록 지우기)
-android/                                            # 엔지니어 안드로이드 앱(TWA, OPS-08). twa-manifest.json만 올리고 프로젝트는 Bubblewrap이 만든다. 빌드는 android/README.md
+android/                                            # 엔지니어 안드로이드 앱(TWA, OPS-08). twa-manifest.json만 올리고 프로젝트는 Bubblewrap이 만든다. 빌드는 GitHub Actions(.github/workflows/android.yml), 순서는 android/README.md
 supabase/schema.sql
 docs/requirements.md                             # 기능 요구사항 (기준 문서)
 할일.md                                          # 나중에 할 일 메모. 하기로 하면 requirements.md로 옮기고 지운다
