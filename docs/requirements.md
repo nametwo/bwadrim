@@ -1019,15 +1019,16 @@ TURN 발급과 고객 지표 기록은 유효한 링크 토큰만 있으면 몇 
 ### OPS-08 · 플레이 스토어 앱 🚧
 엔지니어용 안드로이드 앱을 구글 플레이에 낸다. 웹을 크롬이 주소창 없이 띄우는 앱(TWA, Bubblewrap)으로 감싼다. 앱 안에서 도는 것은 크롬 그 자체라 통화·화면 꺼짐 방지·공유 창·사진 저장·카톡 보내기가 웹과 똑같이 될 것으로 본다(실기기 확인 전). 웹을 배포하면 앱도 바로 바뀐다. 아이폰은 나중이다. 고객은 지금처럼 앱 없이 링크로 들어온다.
 - **동작**:
-  - 앱 설정은 `android/twa-manifest.json` 하나다. 패키지 이름 `com.bwadrim.app`, 앱 이름 '봐드림', 열면 `https://bwadrim.com/dashboard`, 아이콘은 웹 앱 설정의 파란 카메라 로고, 알림 권한은 받지 않는다. targetSdk 36, minSdk 24. 빌드 방법은 `android/README.md`.
+  - 앱 설정은 `android/twa-manifest.json` 하나다. 패키지 이름 `com.bwadrim.app`, 앱 이름 '봐드림', 열면 `https://bwadrim.com/dashboard`, 아이콘은 웹 앱 설정의 파란 카메라 로고, 알림 권한은 받지 않는다. targetSdk 36, minSdk 24.
+  - 빌드는 GitHub Actions(`.github/workflows/android.yml`, 'Android 앱 빌드' → Run workflow)가 한다. PC에 아무것도 깔지 않는다. 업로드 키는 GitHub Secrets(`ANDROID_KEYSTORE_BASE64`·`ANDROID_KEYSTORE_PASSWORD`)에만 있고, 결과(`.aab`·`.apk`)는 실행 페이지의 Artifacts에서 받는다. versionCode는 실행 번호라 늘 올라간다. 순서는 `android/README.md`.
   - 엔지니어 화면(로그인·상담 목록·상담·통계)에 웹 앱 설정(`/manifest.webmanifest`)이 붙어 있다. 앱이 이름·아이콘·색을 여기서 가져간다. 고객 링크(`/join`)에는 붙이지 않아 고객 폰에 '앱 설치'가 뜨지 않는다. 삼성 인터넷에는 앱으로 설치되지 않는 설정(`/manifest-samsung.webmanifest`, `display: browser`)을 준다([BUG-24](#bug-24--삼성-인터넷에서-앱-설치가-play-프로텍트에-막힘-높음)).
   - 홈 화면에 추가하라고 권하는 화면은 없다([NFR-09](#nfr-09--엔지니어-홈-화면-앱--폐기-2026-10-19) 폐기). 크롬이 스스로 띄우는 작은 '앱 설치' 띠도 막는다. 서비스 워커는 쓰지 않고, 예전에 등록된 것(`/sw.js`)은 엔지니어 화면을 열 때 지운다.
 - **왜**: 2026-10-10 제품 담당자 결정. 홈 화면에 추가([NFR-09](#nfr-09--엔지니어-홈-화면-앱--폐기-2026-10-19))는 30~60대 엔지니어에게 너무 어렵다. 플레이에서 '봐드림'을 검색해 설치하는 편이 익숙하다. 웹도 계속 지원한다. 2026-10-19 React Native로 새로 감쌀지 다시 봤다. RN 웹뷰는 공유 창·파일 받기·카톡 열기를 따로 이어 줘야 해서 TWA로 간다.
 - **계정**: 2026-10-18 아버지 사업자(에코정보통신, 개인사업자)로 플레이 콘솔 '조직' 계정을 만들었다(D-U-N-S 687837438, D&B 법적 이름 'echo information'). 조직 계정이라 새 개인 계정의 '테스터 12명·14일 비공개 테스트'가 없을 것으로 본다(대시보드에서 확인할 것). 웹사이트 인증(`bwadrim.com`, [OPS-07](#ops-07--도메인-))은 끝났고, 대표자 신원 인증과 전화 인증이 남았다. 플레이에는 상호·사업장 주소·개발자 전화·이메일이 공개된다.
-- **할 일**: 패키지 이름 확정(지금 `com.bwadrim.app`, 처음 올린 뒤에는 못 바꿈), 업로드 키 만들기와 Bubblewrap 빌드(`android/README.md`), 플레이 앱 서명 키 SHA-256으로 `public/.well-known/assetlinks.json` 만들기(없으면 앱 위에 주소창이 보인다), 갤럭시 실기기에서 마이크·카메라·카톡 보내기·사진 저장 확인, 처리방침 빈칸 채우기([NFR-10](#nfr-10--개인정보-처리방침-)), 카카오 로그인 설정([OPS-10](#ops-10--카카오-로그인-설정-)), 심사용 이메일 계정(만료·2단계 인증 없음, 로그인 화면 '이메일로 로그인'으로 들어감, [OPS-03](#ops-03--엔지니어-계정-만들기-)), 스토어 등록정보와 데이터 보안 양식(계정 만들기 있음, 계정 삭제 주소 `https://bwadrim.com/privacy#delete-account`, [AUTH-11](#auth-11--내-계정회원-탈퇴-)). 출시 뒤에는 웹 앱 설정에 플레이 앱을 적어(`related_applications`) 크롬이 플레이 앱을 권하게 할지 정한다.
-- **확인**: 아직 빌드하지 않았다. `twa-manifest.json`은 Bubblewrap 1.27의 검사를 통과하고, 그대로 안드로이드 프로젝트가 만들어지는 것(targetSdk 36, minSdk 24)까지 봤다. 화면 쪽은 자동 테스트 `e2e/web-app.spec.ts`(앱 설정은 엔지니어 화면에만, 크롬 설치 띠 막기, 삼성 인터넷 설정, 예전 서비스 워커 지우기).
+- **할 일**: 패키지 이름 확정(지금 `com.bwadrim.app`, 처음 올린 뒤에는 못 바꿈), 업로드 키를 GitHub Secrets에 넣고 'Android 앱 빌드' 한 번 돌리기(`android/README.md`), 플레이 앱 서명 키 SHA-256으로 `public/.well-known/assetlinks.json` 만들기(없으면 앱 위에 주소창이 보인다), 갤럭시 실기기에서 마이크·카메라·카톡 보내기·사진 저장 확인, 처리방침 빈칸 채우기([NFR-10](#nfr-10--개인정보-처리방침-)), 카카오 로그인 설정([OPS-10](#ops-10--카카오-로그인-설정-)), 심사용 이메일 계정(만료·2단계 인증 없음, 로그인 화면 '이메일로 로그인'으로 들어감, [OPS-03](#ops-03--엔지니어-계정-만들기-)), 스토어 등록정보와 데이터 보안 양식(계정 만들기 있음, 계정 삭제 주소 `https://bwadrim.com/privacy#delete-account`, [AUTH-11](#auth-11--내-계정회원-탈퇴-)). 출시 뒤에는 웹 앱 설정에 플레이 앱을 적어(`related_applications`) 크롬이 플레이 앱을 권하게 할지 정한다.
+- **확인**: 아직 빌드하지 않았다(워크플로는 2026-10-30에 만들었고 첫 실행 전). `twa-manifest.json`은 Bubblewrap 1.27의 검사를 통과하고, 그대로 안드로이드 프로젝트가 만들어지는 것(targetSdk 36, minSdk 24)까지 봤다. 화면 쪽은 자동 테스트 `e2e/web-app.spec.ts`(앱 설정은 엔지니어 화면에만, 크롬 설치 띠 막기, 삼성 인터넷 설정, 예전 서비스 워커 지우기).
 - **제약**: 갤럭시 기본 브라우저가 삼성 인터넷이면 앱도 삼성 인터넷으로 열린다. 크롬으로 고정할지는 실기기로 보고 정한다. TWA를 띄울 브라우저가 없으면 주소창이 보이는 탭(Custom Tab)으로 열린다. 고객 링크는 앱 범위(`/`) 안이라, 앱을 깐 엔지니어 폰에서 고객 링크를 누르면 앱으로 열릴 수 있다. 그때는 [JOIN-13](#join-13--엔지니어가-자기-링크를-열면-)처럼 '고객님께 보낸 링크예요'가 뜬다. 앱 안의 로그인은 크롬과 같아서, 크롬에서 로그인해 뒀으면 이어진다(실기기 확인 전). 플레이 targetSdk 의무가 해마다 오르니 1년에 한 번은 앱을 다시 빌드한다.
-- **관련 코드**: `android/twa-manifest.json`, `android/README.md`, `public/manifest.webmanifest`, `public/manifest-samsung.webmanifest`, `public/icons/`, `public/sw.js`(예전 서비스 워커 지우기), `src/app/(engineer)/layout.tsx`(브라우저별 앱 설정, 설치 띠 막기), `src/lib/browser-kind.ts`, `src/proxy.ts`(앱 설정 파일·`/.well-known/`은 로그인 확인 제외)
+- **관련 코드**: `android/twa-manifest.json`, `android/README.md`, `.github/workflows/android.yml`(빌드), `public/manifest.webmanifest`, `public/manifest-samsung.webmanifest`, `public/icons/`, `public/sw.js`(예전 서비스 워커 지우기), `src/app/(engineer)/layout.tsx`(브라우저별 앱 설정, 설치 띠 막기), `src/lib/browser-kind.ts`, `src/proxy.ts`(앱 설정 파일·`/.well-known/`은 로그인 확인 제외)
 
 ### OPS-10 · 카카오 로그인 설정 ✅
 카카오로 가입·로그인([AUTH-10](#auth-10--카카오로-가입로그인-))을 쓰려면 카카오와 Supabase에서 한 번 설정한다. 코드에 넣을 키는 없다(키는 Supabase에만).
@@ -1059,6 +1060,7 @@ TURN 발급과 고객 지표 기록은 유효한 링크 토큰만 있으면 몇 
 
 | 날짜 | 내용 |
 |---|---|
+| 2026-10-30 | 안드로이드 앱 빌드를 GitHub Actions로(OPS-08): 업로드 키는 Secrets, 결과는 Artifacts. `android/README.md` 순서 갱신 |
 | 2026-10-30 | 링크 보내기 화면의 큰 버튼을 문자에서 노란 '카톡으로 링크 보내기'로(카카오 키가 있을 때). 문자는 한 줄의 '문자 보내기'로. 바뀐 요구사항: ROOM-05·06·14, NFR-08 |
 | 2026-10-30 | 카카오 가입 실기기 확인(AUTH-10·OPS-10 ✅): 동의 항목 세 개 켜고 비즈 앱 전환, Supabase 키 다시 넣음(Bad client credentials). /auth/callback이 실패 이유를 서버 로그·디스코드 응급 채널에 남김 |
 | 2026-10-30 | 카카오 로그인 실기기 첫 시도에서 KOE205: Supabase는 닉네임·프로필 사진·이메일을 늘 요청하고 코드로 줄일 수 없다. 콘솔에서 비즈 앱 전환 뒤 세 항목을 켜는 것으로 바꿈(코드의 `scopes`는 되돌림). 바뀐 요구사항: AUTH-10, OPS-10 |

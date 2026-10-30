@@ -1,0 +1,105 @@
+# 엔지니어 안드로이드 앱(TWA) 빌드 (OPS-08). GitHub → Actions → 'Android 앱 빌드' → Run workflow.
+# android/twa-manifest.json으로 Bubblewrap이 안드로이드 프로젝트를 만들고 서명한 .aab(플레이용)·.apk(폰에 바로 설치용)를 내놓는다.
+# 필요한 Secrets (Settings → Secrets and variables → Actions):
+#   ANDROID_KEYSTORE_BASE64   업로드 키 파일(android.keystore)을 base64로 적은 것
+#   ANDROID_KEYSTORE_PASSWORD 그 키의 비밀번호 (키 저장소와 키 둘 다 같은 비밀번호로 만든다)
+# 버전: versionCode는 이 워크플로의 실행 번호(run_number)라 늘 올라간다. versionName은 입력값, 비우면 1.0.<실행 번호>
+name: Android 앱 빌드
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "버전 이름 (예: 1.0.3). 비우면 1.0.<실행 번호>"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BUILD_TOOLS: "36.1.0" # @bubblewrap/core가 찾는 build-tools 버전 (BUILD_TOOLS_VERSION)
+      PLATFORM: "android-36" # twa-manifest.json / Bubblewrap 템플릿의 targetSdk
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Bubblewrap은 JDK 17만 받는다 (JdkHelper)
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "build-tools;36.1.0 platforms;android-36"
+
+      - name: Bubblewrap 설치
+        run: npm i -g @bubblewrap/cli@1.27.0
+
+      # 설정 파일이 없으면 Bubblewrap이 JDK·SDK를 받을지 묻는다(자동 환경에선 멈춤). 미리 적어 둔다
+      - name: Bubblewrap 설정
+        run: |
+          mkdir -p ~/.bubblewrap
+          printf '{"jdkPath":"%s","androidSdkPath":"%s"}\n' "$JAVA_HOME" "$ANDROID_HOME" > ~/.bubblewrap/config.json
+          cat ~/.bubblewrap/config.json
+
+      - name: 업로드 키 꺼내기
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::Secrets에 ANDROID_KEYSTORE_BASE64가 없어요 (android/README.md)"; exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > android/android.keystore
+
+      - name: 버전 적기
+        working-directory: android
+        run: |
+          NAME="${{ github.event.inputs.version }}"
+          [ -z "$NAME" ] && NAME="1.0.${{ github.run_number }}"
+          jq --argjson code "${{ github.run_number }}" --arg name "$NAME" \
+            '.appVersionCode = $code | .appVersion = $name' twa-manifest.json > twa.tmp && mv twa.tmp twa-manifest.json
+          echo "versionCode=${{ github.run_number }} versionName=$NAME" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # update가 twa-manifest.json으로 프로젝트를 만들고 체크섬을 남겨, build가 '바꿀까요?'를 묻지 않는다
+      - name: 안드로이드 프로젝트 만들기
+        working-directory: android
+        run: bubblewrap update --skipVersionUpgrade
+
+      - name: 빌드·서명
+        working-directory: android
+        env:
+          BUBBLEWRAP_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          BUBBLEWRAP_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: bubblewrap build --skipPwaValidation
+
+      # 폰에 직접 깐 APK를 주소창 없이 띄우려면 이 지문도 assetlinks.json에 넣는다(플레이 앱 서명 키와는 다르다)
+      - name: 업로드 키 지문
+        working-directory: android
+        env:
+          PW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          FP=$(keytool -list -v -keystore android.keystore -alias upload -storepass "$PW" | grep 'SHA256:' | head -1 | sed 's/.*SHA256: //')
+          echo "업로드 키 SHA-256: $FP" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: 결과 올리기
+        uses: actions/upload-artifact@v4
+        with:
+          name: bwadrim-android-${{ github.run_number }}
+          path: |
+            android/app-release-bundle.aab
+            android/app-release-signed.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 키 지우기
+        if: always()
+        run: rm -f android/android.keystore
