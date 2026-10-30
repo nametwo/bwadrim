@@ -29,7 +29,9 @@
 src/proxy.ts                                     # 세션 갱신 + 엔지니어 라우트 보호 (Next 16: middleware → proxy)
 src/app/
   (engineer)/login, /dashboard, /room/[id], /stats, /account  # 로그인 필요(login 빼고). login = 카카오로 시작하기(AUTH-10)·숨긴 이메일 로그인. account = 내 계정·로그아웃·회원 탈퇴(AUTH-11). 방 생성·종료는 서버 액션. stats = 핵심 지표(DATA-06). layout = 앱 안 브라우저면 인터넷 앱으로(AUTH-09), 웹 앱 설정(manifest, 플레이 앱용 OPS-08)·크롬 설치 띠 막기
-  privacy                                        # 개인정보 처리방침, 공개(NFR-10). 사업자 정보 값은 lib/business-info.ts
+  privacy                                        # 개인정보 처리방침, 공개(NFR-10). 사업자 정보 값은 lib/business-info.ts. 로고는 링크가 아님(고객을 로그인 화면으로 보내지 않게)
+  not-found.tsx                                  # 404. 로그인한 엔지니어면 '상담 목록으로', 아니면 버튼 없이 사장님 안내만(AUTH-08). 고객을 사이트 주소(/ = 로그인)로 보내지 않는다
+  lab/guide                                      # 방향 지시 실험실(CALL-15). 개발자용 — 운영(VERCEL_ENV=production)에서는 404
   join/[token]                                   # 고객 진입, 공개. 32자리 링크 토큰(ROOM-12). start-screen(시작), camera-help(거부 원인별 안내), camera-start(통화), owner-notice(그 상담 엔지니어가 로그인한 채로 열면, JOIN-13)
   auth/callback                                  # 카카오 동의 화면에서 돌아오는 곳: 코드 → 로그인 쿠키, 원래 가려던 화면으로 (AUTH-10)
   api/turn                                       # 링크 토큰 검증 후 Cloudflare TURN 단기 자격증명 발급
@@ -42,6 +44,7 @@ src/lib/
   safe-next.ts                                   # 로그인 뒤 갈 주소 검사(같은 사이트 경로만, BUG-08)
   room-quota.ts                                  # 한 달 상담 한도 읽기(ROOM-17). 막는 것은 DB 트리거(schema.sql enforce_room_limit), 기본 30건, 엔지니어별은 engineer_plans
   join-token.ts                                  # 고객 링크 토큰 형식 검사
+  site-url.ts                                    # 서비스 주소(NEXT_PUBLIC_SITE_URL, OPS-07). 고객 링크·카톡 카드 사진 주소를 늘 운영 주소로. 없으면 요청 host
   engineer-name.ts                               # 엔지니어 표시 이름 (user_metadata.name, OPS-03). 고객 시작 화면 기사님 카드
   kakao-webhook.ts                               # 카톡 공유 웹훅 키 확인·상담 id 서명 (ROOM-15)
   recipients.ts                                  # 받는 분 이름표: 웹훅이 온 카톡 1:1 방을 상담에 잇기 (서버 전용, ROOM-16). 글자 다듬기는 recipient-label.ts
@@ -55,7 +58,10 @@ src/lib/
   browser-kind.ts                                # 브라우저·기기 가리기: 아이폰·아이폰의 다른 인터넷 앱(JOIN-05), 삼성 인터넷이면 앱으로 설치되지 않는 웹 앱 설정(BUG-24)
   preview-bot.ts                                 # 링크 미리보기 봇(카톡 스크랩·아이메시지 등) UA 감지 → link_opened 안 남김 (JOIN-12, 출처는 파일 주석)
   kakao-share.ts                                 # 카톡 보내기(카카오링크, ROOM-14). 카카오 키가 있을 때만. SDK는 링크 보내기 화면에서 미리 받는다
-  events.ts                                      # 지표 이벤트 기록
+  events.ts                                      # 지표 이벤트 기록. 기록 뒤 디스코드 일반 채널로(notify-room.ts), 기록 실패는 응급으로
+  notify.ts                                      # 디스코드 웹훅 보내기(OPS-09): 응급·일반 채널, 응답 뒤(after), 응급은 같은 일 10분에 한 번. 주소는 환경 변수로만
+  notify-events.ts                               # 지표 이벤트 → 디스코드 글(순수 함수). 응급 규칙 = README 핵심 지표가 깨지는 신호
+  notify-room.ts                                 # 글에 붙일 상담 정보(기사님 이름·받는 분·쓴 도구) 조회, 서버 전용
   metrics.ts                                     # 핵심 지표 계산 (통계 화면). endedConnected = 끝난 상담이 고객과 연결됐었는지 (대시보드 칩·끝난 상담 화면도 같이 씀)
 src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기). anchor/·anchor-overlay = AR 핀 층(CALL-14), guide-dpad(방향 링·가까이/멀리 알약)·guide-pad-geometry·guide-overlay(고객 노란 원 화살표·네 모서리)·guide-pill = 방향 지시(CALL-15), open-in-browser = 앱 안 브라우저 안내(고객 JOIN-10·엔지니어 AUTH-09)
   ui/                                            # 디자인 시스템 부품(NFR-08, 피그마 컴포넌트와 같은 이름): button(Button·ButtonLink·buttonClass), icons(선 아이콘), sheet(아래 확인 창, 고객용 `size="l"`), notice-screen(한 화면 한 안내), bottom-cta(아래에 붙는 버튼 자리), brand(로고), status-chip, step-item, banner(고객용 큰 글자 `size="l"`), call-control(통화 원형 버튼, 고객용 `size="xl"`), stat-card, engineer-card, call-timer, text-field(입력칸)
@@ -74,8 +80,8 @@ Supabase Realtime **비공개** broadcast 채널, 역할별 일방통행 두 개
 - `room:{id}:c` 고객 → 엔지니어. 링크를 연 누구나
 
 각자 자기 채널로 보내고 상대 채널만 듣는다. 고객은 `:e`에서 온 신호만 믿을 것 (엔지니어 사칭 차단). 공개 채널로 되돌리지 말 것.
-메시지 타입: `offer` / `answer` / `ice` / `pointer` / `cam` / `bye`.
-고객 종료는 연결돼 있으면 'draw' DataChannel의 `{t:'bye'}`로 먼저 보낸다. `:c`는 누구나 쓸 수 있어서, 엔지니어는 연결된 동안 시그널링 `bye`만 오면 그 기기가 채널에서 정말 나갈 때까지 기다렸다 따른다(CALL-12). 고객 presence가 사라져도 통화가 살아 있으면 8초 기다린 뒤 정리한다(CALL-05, 소켓만 잠깐 끊긴 경우).
+메시지 타입: `offer` / `answer` / `ice` / `pointer` / `cam` / `bye` / `reoffer`(엔지니어 → 고객: 유예가 끝나 버린 연결의 고객 기기가 돌아왔으니 다시 청하라, CALL-05). 고객 offer에는 번호 `n`이 붙고 엔지니어 answer가 그대로 돌려준다 — 10초 안에 answer가 없으면 고객이 다시 청한다(세 번, CALL-03).
+고객 종료는 연결돼 있으면 'draw' DataChannel의 `{t:'bye'}`로 먼저 보낸다. `:c`는 누구나 쓸 수 있어서, 엔지니어는 연결된 동안 시그널링 `bye`만 오면 그 기기가 채널에서 정말 나갈 때까지 기다렸다 따른다(CALL-12). 양쪽 다 상대 presence가 사라져도 통화(P2P)가 살아 있으면 8초 기다린 뒤 정리한다(CALL-05, 소켓만 잠깐 끊긴 경우). 유예가 끝나 연결을 버린 뒤 같은 고객 기기가 돌아오면 엔지니어가 `reoffer`를 보내 고객이 다시 청한다.
 AR 핀(CALL-14)은 전용 DataChannel `anchor`(고객이 offer에 포함). 기준 사진 조각이 'draw'의 포인터·그리기를 막지 않게 따로 연다. 엔지니어 영상 제스처: 짧게 탭 = 레이저 포인터(CALL-08), 0.5초 길게 누름 = AR 핀.
 포인터·드로잉은 연결 후 DataChannel로 옮길 것 (지연 최소화). 좌표는 0~1 정규화.
 방향 지시(CALL-15, `src/lib/webrtc/guide.ts`)는 전용 DataChannel `guide`(고객이 offer에 포함, `CallSession.guideLink`). 'draw'에 섞으면 정지 사진 조각 뒤에 막혀 1.5초가 지나 화살표가 저절로 사라진다(고객에겐 '멈춤'으로 보임). 엔지니어가 방향 링(`src/components/guide-dpad.tsx`, 상하좌우 네 조각 + 가운데 구멍 = 멈춤)이나 그 아래 '− 멀리 | 가까이 +' 알약을 누르는 동안 `hold`를 0.4초마다 재전송하고 떼면 `release`. 누른 자리 판정은 `src/components/guide-pad-geometry.ts`(단위 테스트 있음). 고객 쪽(`guide-overlay.tsx`)은 1.5초간 `hold`가 없으면 스스로 지운다. 고객 화면에 방향 지시가 떠 있는 동안은 AR 핀 층(`hidden`)과 상태 문구를 숨긴다. 실험실 `/lab/guide`는 통화 없이 흉내 낸다.
@@ -115,13 +121,15 @@ AR 핀(CALL-14)은 전용 DataChannel `anchor`(고객이 offer에 포함). 기�
 
 ## 이벤트 이름 (events 테이블)
 
-`room_created`, `link_opened`, `camera_granted`, `camera_denied`, `connected`, `relay_used`, `pointer_used`, `freeze_used`, `anchor_used`, `guide_used`, `photo_taken`, `kakao_sent`, `ended`
+`room_created`, `link_opened`, `camera_granted`, `camera_denied`, `connected`, `connect_failed`, `relay_used`, `pointer_used`, `freeze_used`, `anchor_used`, `guide_used`, `photo_taken`, `kakao_sent`, `turn_issued`, `ended`
+
+`turn_issued`는 `/api/turn`이 TURN 자격증명을 내줄 때마다 남기고, 그 개수로 상담당 발급 상한(40회)을 센다(NET-02). `connect_failed`는 고객 폰이 연결을 실패로 판정했을 때(`stage`: connecting·call) — 연결 실패율 실측, 디스코드 응급 알림(OPS-09)
 
 `resolved_remotely`('출장 없이 해결?')는 2026-10-03부터 남기지 않는다(예전 기록만 있음, DATA-01). `rooms.resolved_remotely` 칸도 지우지 않고 두되 새로 쓰지 않는다.
 
 ## 환경 변수
 
-`.env.example` 참고. TURN 자격증명은 서버에서만 다루고 클라이언트엔 단기 토큰만 내려줄 것.
+`.env.example` 참고. TURN 자격증명은 서버에서만 다루고 클라이언트엔 단기 토큰만 내려줄 것. 디스코드 웹훅 주소(`DISCORD_WEBHOOK_*`)는 환경 변수로만 받고 코드·문서·커밋에 적지 말 것. 보안 헤더는 `next.config.ts`(NFR-11) — 카메라·마이크를 막는 `Permissions-Policy`는 걸지 말 것.
 
 ## 하지 말 것
 

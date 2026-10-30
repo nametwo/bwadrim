@@ -33,6 +33,7 @@ import {
   ClockIcon,
   FlipCameraIcon,
   FreezeIcon,
+  MicOffIcon,
   PhoneIcon,
   PhoneOffIcon,
   RefreshIcon,
@@ -63,14 +64,19 @@ export function CameraStart({
   roomId,
   token,
   engineerName = null,
+  connectedBefore = false,
 }: {
   roomId: string;
   token: string;
   /** 기다리고 있는 기사님 이름 (엔지니어 계정의 표시 이름, OPS-03). 없으면 '기사님' */
   engineerName?: string | null;
+  /** 이 상담이 전에 기사님과 연결된 적 있는지(rooms.status '연결됨'). 링크를 다시 열어 들어온 경우 — 끝내면 상담이 닫히므로 '링크를 다시 누르면 된다'고 하면 안 된다 (JOIN-08) */
+  connectedBefore?: boolean;
 }) {
   const [phase, setPhase] = useState<Phase>("ready");
   const [failure, setFailure] = useState<CameraFailure>("blocked");
+  // 카메라를 못 켠 횟수. 두 번째부터는 안내 화면이 '아직 막혀 있어요'를 보인다 (JOIN-05)
+  const [deniedCount, setDeniedCount] = useState(0);
   const [callState, setCallState] = useState<CallState>("waiting");
   const [confirmEnd, setConfirmEnd] = useState(false);
   const confirmShownAtRef = useRef(0);
@@ -80,6 +86,9 @@ export function CameraStart({
   // 연결된 뒤 잠깐 끊김 (피그마 C10) · 기사님과 처음 연결된 시각(끝난 화면의 '12분 통화했어요')
   const [quality, setQuality] = useState<CallQuality>("good");
   const [connectedAt, setConnectedAt] = useState<number | null>(null);
+  // 이 화면에서 기사님과 한 번이라도 연결됐는지. '다시 연결'·'이 폰으로 연결'(restart)로도 지워지지 않는다 —
+  // 연결된 적 있는 상담은 사장님이 끝내면 기사님 화면이 상담을 닫으므로(ROOM-10), 그 뒤 '링크를 다시 누르면 된다'고 하면 안 된다
+  const [everConnected, setEverConnected] = useState(connectedBefore);
   const [talkSec, setTalkSec] = useState<number | null>(null);
   const connectedAtRef = useRef<number | null>(null);
   // 통화 콜백은 시작 시점 값을 기억하므로 지금 카메라 상태는 ref로 읽는다
@@ -89,6 +98,11 @@ export function CameraStart({
   // 기사님이 원격으로 바꿨을 때·연결됐을 때 잠깐 보이는 안내 (CALL-10, CALL-11)
   const [notice, setNotice] = useState<string | null>(null);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // 마이크 없이 연결된 순간 몇 초 보이는 '마이크가 꺼져 있어요' 띠 (JOIN-04)
+  const [micNote, setMicNote] = useState(false);
+  const micNoteTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // 이 화면에서 사장님이 직접 '끝내기'를 눌렀는지. 기사님이 상담을 닫아 끝난 것(bye)과 끝난 화면이 다르다 (JOIN-08)
+  const selfEndedRef = useRef(false);
   // 폰이 탭 없이는 카메라를 못 바꿀 때: '바꾸기' 버튼을 띄운다
   const [flipRequested, setFlipRequested] = useState(false);
   // 카메라 전환이 끝까지 실패해 영상이 꺼졌다 (JOIN-07·CALL-10). 탭 안에서 다시 켠다
@@ -128,6 +142,20 @@ export function CameraStart({
     setNotice(text);
     clearTimeout(noticeTimerRef.current);
     noticeTimerRef.current = setTimeout(() => setNotice(null), ms);
+  }
+
+  // 통화 중 카메라가 스스로 꺼지면(다른 앱이 카메라를 가져감, 전화 수신 등) 전환 실패 때와 같은 '카메라가 꺼졌어요' 창을
+  // 띄우고 기사님에게도 알린다 (JOIN-07·CALL-10). 우리가 track.stop()으로 끈 것은 ended가 오지 않는다
+  function watchCameraEnd(stream: MediaStream) {
+    const track = stream.getVideoTracks()[0];
+    if (!track) return;
+    const gen = liveGenRef.current;
+    track.onended = () => {
+      if (gen !== liveGenRef.current || streamRef.current !== stream) return;
+      setReopenFailed(false);
+      setCameraLost(true);
+      reportCamera("lost");
+    };
   }
 
   function reportCamera(error?: CameraState["error"]) {
@@ -183,10 +211,13 @@ export function CameraStart({
       postEvent("camera_denied", { reason: opened.error });
       releaseWakeLock();
       setFailure(cameraFailureOf(opened.error));
+      setDeniedCount((n) => n + 1);
       setPhase("denied");
       return;
     }
     streamRef.current = opened.stream;
+    watchCameraEnd(opened.stream);
+    setDeniedCount(0);
     setMicOff(!opened.mic);
     postEvent("camera_granted", { mic: opened.mic });
     // 카메라가 켜졌으면 '허용' 안내를 바로 내리고 내 카메라와 '기다리는 중'을 먼저 보여 준다.
@@ -227,14 +258,27 @@ export function CameraStart({
         if (s === "connected") {
           if (connectedAtRef.current === null) connectedAtRef.current = Date.now();
           setConnectedAt(connectedAtRef.current);
+          setEverConnected(true);
           reportCamera();
-          if (prev !== "connected") showNotice("기사님과 연결됐어요");
+          if (prev !== "connected") {
+            showNotice("기사님과 연결됐어요");
+            // 마이크 없이 연결했으면(전화 통화 중 등, JOIN-04) 말은 전화로 하라고 한 번 더 — 기다림 카드의 안내는 연결되면 사라지므로
+            if (!opened.mic) {
+              setMicNote(true);
+              clearTimeout(micNoteTimerRef.current);
+              micNoteTimerRef.current = setTimeout(() => setMicNote(false), 5000);
+            }
+          }
           // relay(TURN) 경유 여부 — 원가 지표. turn: TURN 자격증명을 받았는지
           setTimeout(async () => {
             const relay = (await sessionRef.current?.usedRelay()) ?? false;
             postEvent("connected", { relay, turn: !ice.turnError });
             if (relay) postEvent("relay_used");
           }, 1000);
+        }
+        // 연결 실패는 핵심 지표(연결 실패율)라 바로 남긴다. 서버가 응급 알림으로도 보낸다 (DATA-01, OPS-09)
+        if (s === "failed" && prev !== "failed") {
+          postEvent("connect_failed", { stage: connectedAtRef.current ? "call" : "connecting" });
         }
         if (s === "ended" || s === "failed" || s === "denied" || s === "replaced") {
           // 바꾸던 카메라가 늦게 열려도 켜진 채 남지 않게
@@ -301,6 +345,7 @@ export function CameraStart({
     remoteStreamRef.current = null;
     lastStateRef.current = "waiting";
     connectedAtRef.current = null;
+    selfEndedRef.current = false;
     setConnectedAt(null);
     setQuality("good");
     facingRef.current = "environment";
@@ -338,6 +383,7 @@ export function CameraStart({
       if (r.stream && r.stream !== current) {
         // 지금 카메라를 먼저 바꿔 둔다 — 연결 준비 중이면 곧 만들 통화가 이 카메라로 시작한다
         streamRef.current = r.stream;
+        watchCameraEnd(r.stream);
         if (videoRef.current) videoRef.current.srcObject = r.stream;
         torchRef.current = false; // 새 카메라는 손전등이 꺼진 상태
         setCameraLost(false);
@@ -349,7 +395,7 @@ export function CameraStart({
         // 바꾸지도, 원래 카메라를 다시 켜지도 못했다 — 영상이 꺼진 채다. 고객에게 다시 켜는 버튼을 띄운다
         setReopenFailed(false);
         setCameraLost(true);
-        reportCamera("failed");
+        reportCamera("lost");
         return;
       }
       if (r.ok) {
@@ -394,7 +440,7 @@ export function CameraStart({
       } catch {
         if (gen !== liveGenRef.current) return;
         setReopenFailed(true);
-        reportCamera("failed");
+        reportCamera("lost");
         return;
       }
       if (gen !== liveGenRef.current) {
@@ -404,6 +450,7 @@ export function CameraStart({
       // 마이크는 그대로 두고 영상만 새 카메라로
       const next = new MediaStream([track, ...(streamRef.current?.getAudioTracks() ?? [])]);
       streamRef.current = next;
+      watchCameraEnd(next);
       if (videoRef.current) videoRef.current.srcObject = next;
       torchRef.current = false;
       setCameraLost(false);
@@ -430,6 +477,7 @@ export function CameraStart({
   // 연결되기 전에 눌렀으면 상담은 그대로라 링크를 다시 열면 된다
   function hangup() {
     if (Date.now() - confirmShownAtRef.current < CONFIRM_ARM_MS) return;
+    selfEndedRef.current = true;
     // 바꾸던 카메라·연결 준비가 늦게 끝나도 카메라를 다시 켜지 않게
     liveGenRef.current += 1;
     sessionRef.current?.hangup();
@@ -514,10 +562,28 @@ export function CameraStart({
   if (phase === "gone") return goneScreen;
 
   // start(again)에 클릭 이벤트가 들어가지 않게 감싼다
-  if (phase === "denied") return <CameraHelp failure={failure} onRetry={() => start()} />;
+  if (phase === "denied") return <CameraHelp failure={failure} retried={deniedCount > 1} onRetry={() => start()} />;
 
   if (phase === "call") {
     if (callState === "ended") {
+      // 기사님과 연결되기 전에 사장님이 '끝내기'를 눌렀다: 상담은 그대로 열려 있고 카메라만 껐다 (JOIN-08, ROOM-10).
+      // '상담이 끝났어요'라고 하면 사장님은 끝난 줄 알고, 기사님은 전화로 다시 눌러 달라고 해야 한다.
+      // 기사님이 연결 전에 상담을 닫은 것(bye)은 다르다 — 링크가 죽었으니 아래 '상담이 끝났어요'.
+      // '다시 연결' 뒤 연결 전에 끝낸 것도 다르다 — 연결된 적 있는 상담이라 기사님 화면이 상담을 닫는다
+      if (selfEndedRef.current && !everConnected) {
+        return (
+          <NoticeScreen
+            testId="cust-ended"
+            tone="neutral"
+            icon={<CameraIcon className="size-10" />}
+            title="카메라를 껐어요"
+          >
+            다시 하시려면 문자나 카톡으로 받으신
+            <br />
+            링크를 눌러 주세요.
+          </NoticeScreen>
+        );
+      }
       // 피그마 C19: 더 누를 것이 없음. 브라우저 창은 코드로 닫을 수 없어서 '닫아도 돼요'로 안내
       return (
         <NoticeScreen
@@ -584,6 +650,10 @@ export function CameraStart({
     const guideShown = !frozen && guideView !== null;
     const connected = callState === "connected";
     const unstable = connected && quality === "unstable";
+    // 기사님과 통화하다가 기사님 쪽이 사라져 다시 기다리는 중 (기사님 폰이 꺼짐·탭이 닫힘·기기를 바꾸는 중, CALL-05).
+    // 처음 기다릴 때와 같은 '카메라 켰다고 알려 주세요'는 방금까지 통화한 사장님에게 맞지 않는다.
+    // 기사님이 돌아와 다시 잇는 중(connecting)에는 '다시 들어오면 이어져요'가 맞지 않으므로 기다리는 동안만
+    const rejoining = callState === "waiting" && everConnected;
     // 기사님을 기다리는 동안(나갔다 다시 오는 중 포함)은 핀 안내를 띄우지 않는다 — '기다리는 중' 카드와 엇갈리지 않게
     const statusText =
       connected && anchorBanner === "pin" && !frozen
@@ -594,13 +664,17 @@ export function CameraStart({
         ? "기사님이 보고 있어요"
         : callState === "connecting"
           ? "기사님과 연결하는 중…"
-          : "기사님을 기다리는 중…";
+          : rejoining
+            ? "기사님을 다시 기다리는 중…"
+            : "기사님을 기다리는 중…";
     const hideTop = anchorBanner === "card" || anchorBanner === "arrow" || guideShown;
-    const waitHint = longWait
-      ? "오래 걸리면 기사님께 전화로 “카메라 켰어요”라고 알려 주세요."
-      : micOff
-        ? "마이크 없이 연결할게요. 말씀은 전화로 나눠 주세요."
-        : "카메라는 이미 켜졌어요. 고장 난 곳을 미리 비춰 주세요.";
+    const waitHint = rejoining
+      ? "기사님이 다시 들어오면 바로 이어져요. 오래 걸리면 기사님께 전화해 보세요."
+      : longWait
+        ? "오래 걸리면 기사님께 전화로 “카메라 켰어요”라고 알려 주세요."
+        : micOff
+          ? "마이크 없이 연결할게요. 말씀은 전화로 나눠 주세요."
+          : "카메라는 이미 켜졌어요. 고장 난 곳을 미리 비춰 주세요.";
 
     return (
       <main className="relative flex h-dvh flex-col overflow-hidden bg-call-bg [--guide-bottom:120px]">
@@ -663,6 +737,11 @@ export function CameraStart({
               연결이 잠깐 끊겼어요
             </Banner>
           )}
+          {micNote && !unstable && (
+            <Banner tone="info" role="status" size="l" icon={<MicOffIcon className="size-6" />} sub="말씀은 전화로 나눠 주세요">
+              마이크가 꺼져 있어요
+            </Banner>
+          )}
           {/* 피그마 C09: 멈춘 동안은 폰을 내려놔도 된다 — 팔 떨림을 없앤다 */}
           {frozen && !unstable && (
             <Banner tone="info" role="status" size="l" icon={<FreezeIcon className="size-6" />} sub="폰을 내려놓으셔도 돼요">
@@ -685,7 +764,13 @@ export function CameraStart({
             <div className="flex max-w-xs flex-col items-center gap-3 rounded-2xl bg-black-80 px-6 py-5 text-center shadow-float">
               <Spinner className="size-7 text-call-text" />
               <p className="text-title-s text-call-text">
-                {unstable ? "다시 연결하는 중…" : callState === "connecting" ? "기사님과 연결하는 중…" : "기사님을 기다리는 중…"}
+                {unstable
+                  ? "다시 연결하는 중…"
+                  : callState === "connecting"
+                    ? "기사님과 연결하는 중…"
+                    : rejoining
+                      ? "기사님을 다시 기다리는 중…"
+                      : "기사님을 기다리는 중…"}
               </p>
               {!unstable && <p className="text-body-l text-call-text-secondary">{waitHint}</p>}
             </div>
@@ -753,8 +838,17 @@ export function CameraStart({
         <Sheet
           open={confirmEnd}
           onClose={() => setConfirmEnd(false)}
-          title="상담을 끝낼까요?"
-          description="기사님과 연결이 끊겨요."
+          // 한 번도 연결되기 전에는 끊길 연결이 없다. 끝내도 링크를 다시 누르면 들어올 수 있다는 것을 미리 말한다 (JOIN-08).
+          // 연결된 적 있는데 지금은 끊겨 있으면(기사님이 나감, '다시 연결' 중) 기사님이 돌아와도 이어지지 않는다는 것을 말한다.
+          // 링크가 다시 열릴지는 기사님이 상담을 닫는지에 달려 있어 약속하지 않는다
+          title={everConnected ? "상담을 끝낼까요?" : "아직 기사님과 연결되지 않았어요"}
+          description={
+            !everConnected
+              ? "지금 끝내도 문자나 카톡 속 링크를 다시 누르면 들어올 수 있어요."
+              : connected
+                ? "기사님과 연결이 끊겨요."
+                : "기사님이 돌아와도 이어지지 않아요. 도움이 더 필요하시면 기사님께 전화해 주세요."
+          }
           testId="cust-end-sheet"
           size="l"
         >

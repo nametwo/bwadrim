@@ -2,6 +2,8 @@
 // Next 서버(서버 컴포넌트·서버 액션·라우트 핸들러)가 NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:<포트>로 부른다.
 // Realtime(WebSocket·REST 보내기)은 여기서 하지 않는다 — 브라우저 쪽에서 Playwright가 가로챈다 (e2e/realtime-mock.ts).
 //
+//   POST /auth/v1/token                로그인 — 계정이 없어 늘 400(맞지 않아요). faults.failAuth면 503(장애, AUTH-03)
+//   POST /auth/v1/logout               로그아웃 — scope를 기억한다 (GET /__last-logout, AUTH-06)
 //   GET  /auth/v1/user                 Bearer 토큰이 FIXTURE.accessToken이면 사용자, 아니면 401
 //   GET  /auth/v1/admin/users/:id      (서비스 키) 사용자 — 고객 화면의 기사님 이름
 //   GET  /rest/v1/rooms?code=eq.X      (eq·neq·in·gte·is 필터, select=…, count=exact·HEAD 지원) Accept가 vnd.pgrst.object+json이면 객체 1개
@@ -10,7 +12,7 @@
 //   POST /rest/v1/rooms                상담 만들기 (사용자 토큰). 이번 달(한국 시간) 수가 한도에 닿으면 400 P0001 'room_limit' (ROOM-17 트리거 흉내)
 //   POST /rest/v1/rpc/my_room_limit    한 달 상담 한도 (기본 30, /__faults {roomLimit}로 바꿈)
 //   DELETE /auth/v1/admin/users/:id    (서비스 키) 회원 탈퇴 (AUTH-11). 같은 사용자를 다른 테스트가 같이 쓰므로 지우지 않고 기록만 (GET /__deleted-users)
-//   POST /rest/v1/events               기록 (본문 객체 또는 배열) · GET은 통계·대시보드용(같은 필터)
+//   POST /rest/v1/events               기록 (본문 객체 또는 배열) · GET은 통계·대시보드용(같은 필터, count=exact·HEAD 지원)
 //   GET·POST·PATCH /rest/v1/recipients  받는 분 이름표 (ROOM-16). 사용자 토큰이면 자기 것만(RLS), 서비스 키면 전부.
 //                                      eq·in·is 필터. POST는 본문 객체/배열, Prefer return=representation이면 넣은 줄을 돌려준다
 //                                      (insert().select().single() = POST + return=representation + Accept 객체).
@@ -18,7 +20,8 @@
 //   GET  /__events  ·  GET /__rooms  ·  GET /__recipients  ·  POST /__reset[?room=ID]  ·  GET /__health   (테스트용)
 //   POST /__seed {rooms?, events?, recipients?}  목록 바꾸기 (화면 카탈로그: 대시보드·통계, 받는 분 이름표). ageMin = 몇 분 전
 //   POST /__patch-room {id, ...}       방 한 개 고치기 (링크를 연 뒤 세션이 닫힌 경우 등)
-//   POST /__faults {failJoinToken?, failRoomUpdate?, failRoomInsert?, roomLimit?}  일부러 실패시키기 (전체 reset하면 풀린다)
+//   POST /__faults {failJoinToken?, failRoomUpdate?, failRoomInsert?, roomLimit?, failAuth?, failEvents?}  일부러 실패시키기 (전체 reset하면 풀린다)
+//   POST /__discord/{channel}  디스코드 웹훅 흉내(OPS-09) — 서버가 보낸 {content}를 모은다 · GET /__discord 목록 · DELETE /__discord 비우기
 //
 // 고정 데이터는 e2e/fixtures.json과 같다 (테스트도 같은 파일을 읽는다).
 import crypto from "node:crypto";
@@ -36,6 +39,10 @@ let events = [];
 let recipients = [];
 let faults = {};
 let deletedUsers = [];
+/** 마지막 로그아웃 요청 {scope, at} — 이 기기만(local)인지 본다 (AUTH-06) */
+let lastLogout = null;
+/** 디스코드 웹훅으로 온 글 [{channel, content, at}] (OPS-09) */
+let discord = [];
 
 function freshRoom(r, now) {
   return {
@@ -68,6 +75,8 @@ function reset(roomId) {
   recipients = [];
   faults = {};
   deletedUsers = [];
+  lastLogout = null;
+  discord = [];
 }
 reset();
 
@@ -283,6 +292,17 @@ const server = http.createServer(async (req, res) => {
     if (p === "/__events") return send(res, 200, events);
     if (p === "/__rooms") return send(res, 200, rooms);
     if (p === "/__recipients") return send(res, 200, recipients);
+    if (p === "/__last-logout") return send(res, 200, lastLogout);
+    if (p.startsWith("/__discord/") && req.method === "POST") {
+      const body = (await readBody(req)) ?? {};
+      discord.push({ channel: p.slice("/__discord/".length), content: typeof body.content === "string" ? body.content : "", at: Date.now() });
+      return send(res, 204);
+    }
+    if (p === "/__discord" && req.method === "GET") return send(res, 200, discord);
+    if (p === "/__discord" && req.method === "DELETE") {
+      discord = [];
+      return send(res, 204);
+    }
     if (p === "/__reset" && req.method === "POST") {
       reset(url.searchParams.get("room") ?? undefined);
       return send(res, 200, { ok: true });
@@ -362,6 +382,17 @@ const server = http.createServer(async (req, res) => {
       return send(res, 201, [out]);
     }
 
+    // 로그인(서버 액션 signInWithPassword). 가짜 서버에 계정은 없다 — 늘 '맞지 않아요'.
+    // failAuth면 장애 흉내: 503은 auth-js가 AuthRetryableFetchError로 돌려준다 (AUTH-03)
+    if (p === "/auth/v1/token" && req.method === "POST") {
+      if (faults.failAuth) return send(res, 503, { message: "mock: auth down (failAuth)" });
+      return send(res, 400, { error: "invalid_grant", error_description: "Invalid login credentials" });
+    }
+    // 로그아웃. auth-js는 POST /logout?scope=local|global|others 로 보낸다 (AUTH-06)
+    if (p === "/auth/v1/logout" && req.method === "POST") {
+      lastLogout = { scope: url.searchParams.get("scope"), at: Date.now() };
+      return send(res, 204);
+    }
     if (p === "/auth/v1/user" && req.method === "GET") {
       if (!authed(req)) return send(res, 401, { code: 401, error_code: "bad_jwt", msg: "invalid JWT" });
       return send(res, 200, FIXTURE.user);
@@ -414,17 +445,19 @@ const server = http.createServer(async (req, res) => {
     }
 
     // 통계 화면(/stats)·대시보드·대기 화면 고객 진행 상황용 읽기. eq·neq·in·gte 필터만 적용하고 자기 방 기록을 준다 (RLS 흉내)
-    if (p === "/rest/v1/events" && req.method === "GET") {
+    // HEAD = select(…, { count: "exact", head: true }): 개수만 (TURN 발급 횟수, NET-02)
+    if (p === "/rest/v1/events" && (req.method === "GET" || req.method === "HEAD")) {
       // 서비스 키면 전부(받는 분 잇기가 여러 명에게 보냈는지 볼 때, ROOM-16), 사용자 토큰이면 자기 방 것만
       const service = (req.headers.apikey ?? "") === FIXTURE.serviceKey;
-      if (!service && !authed(req)) return send(res, 200, []);
+      if (!service && !authed(req)) return send(res, 200, [], countHeader(req, 0));
       const mine = new Set(rooms.filter((r) => service || r.engineer_id === FIXTURE.user.id).map((r) => r.id));
       const select = url.searchParams.get("select");
       const rows = sortRows(filterRows(events.filter((e) => mine.has(e.room_id)), url.searchParams), url.searchParams.get("order"));
-      return send(res, 200, rows.map((e, i) => project({ id: i + 1, ...e }, select)));
+      return send(res, 200, rows.map((e, i) => project({ id: i + 1, ...e }, select)), countHeader(req, rows.length));
     }
 
     if (p === "/rest/v1/events" && req.method === "POST") {
+      if (faults.failEvents) return send(res, 500, { code: "XX000", message: "mock: 일부러 실패 (failEvents)" });
       const body = await readBody(req);
       const list = Array.isArray(body) ? body : body ? [body] : [];
       for (const e of list) events.push(eventRow(e));

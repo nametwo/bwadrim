@@ -4,7 +4,7 @@ import { FIXTURE, SUPABASE_URL, engineerCookie } from "./helpers";
 // 회원 (AUTH-10·AUTH-11)과 한 달 상담 한도 (ROOM-17):
 //  - 로그인 화면은 '카카오로 시작하기' 하나. 이메일 로그인은 아래 '이메일로 로그인'으로 연다
 //  - 카카오 동의 화면에서 돌아오면(/auth/callback) 로그인 쿠키를 받고 원래 가려던 화면으로. 코드가 틀리면 로그인 화면에 안내
-//  - 대시보드 '이번 달 상담 N건 / 30건', 한도를 다 쓰면 '새 A/S 시작' 대신 안내. 화면을 열어 둔 사이 다 써도 DB가 막는다
+//  - 내 계정에 '이번 달 상담 N / 30건', 한도를 다 쓰면 대시보드 '새 A/S 시작' 대신 안내. 화면을 열어 둔 사이 다 써도 DB가 막는다
 //  - 내 계정 → 회원 탈퇴 → 확인 창 → 계정 삭제(서비스 키) → 로그인 화면 '탈퇴했어요'
 // 가짜 Supabase는 같은 사용자를 모든 테스트가 같이 쓴다. 탈퇴는 지우지 않고 기록만 하고, 한도는 테스트가 끝나면 되돌린다
 
@@ -83,9 +83,11 @@ test("한 달 상담 한도: N / 30건, 다 쓰면 안내, 그사이 다 써도 
   await ctx.addCookies([engineerCookie(baseURL!)]);
   try {
     const page = await ctx.newPage();
+    // 이번 달 상담 수와 한도는 내 계정에 있다 (대시보드의 이번 달 카드는 2026-10-21에 뺐다)
+    await page.goto("/account");
+    const usage = await page.getByTestId("account-info").textContent();
+    const used = Number(usage!.match(/(\d+) \/ 30건/)![1]);
     await page.goto("/dashboard");
-    await expect(page.getByTestId("month-limit")).toHaveText("/ 30건");
-    const used = Number((await page.getByTestId("month-card").getAttribute("aria-label"))!.match(/상담 (\d+)건/)![1]);
     await expect(page.getByRole("button", { name: /새 A\/S 시작/ })).toBeVisible();
 
     // 화면을 열어 둔 사이 한도에 닿음 → 눌러도 상담이 생기지 않고 안내

@@ -107,6 +107,16 @@ export function formatAvgDuration(sec: number): string {
   return `${s}초`;
 }
 
+/**
+ * 링크가 만료되기까지 남은 시간: '23시간 남음' · '40분 남음' · '1분 남음' (ROOM-04 진행 중 목록).
+ * 1시간 미만을 '1시간'으로 올려 적으면 기사님이 '아까 링크 눌러 보세요' 했다가 사장님은 '링크가 만료됐어요'를 본다
+ */
+export function formatTimeLeft(msLeft: number): string {
+  const min = Math.max(1, Math.ceil(msLeft / 60_000));
+  if (min < 60) return `${min}분 남음`; // 올림해서 60분이 되면 '1시간 남음'
+  return `${Math.max(1, Math.floor(msLeft / 3_600_000))}시간 남음`;
+}
+
 /** 통화 시계: '3:07' · '1:02:09' */
 export function formatClock(totalSec: number): string {
   const sec = Math.max(0, Math.floor(totalSec));

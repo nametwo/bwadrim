@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useSyncExternalStore } from "react";
 import { BottomCta } from "@/components/ui/bottom-cta";
 import { BrandMark } from "@/components/ui/brand";
@@ -62,6 +63,13 @@ export function StartScreen({
         <p className="flex items-center justify-center gap-1 text-body-s text-text-secondary">
           <ShieldIcon className="size-4 flex-none" />
           앱은 안 깔아도 되고, 통화 영상은 남지 않아요
+        </p>
+        {/* 고객도 개인정보를 맡기는 사람이라(브라우저 정보·카메라 기록, NFR-10) 첫 화면에서 처리방침으로 갈 수 있어야 한다.
+            누를 것은 위 파란 버튼 하나라, 작은 회색 글자 링크로만 둔다 */}
+        <p className="text-center text-body-s">
+          <Link href="/privacy" className="text-text-tertiary underline underline-offset-2" data-testid="join-privacy">
+            개인정보 처리방침
+          </Link>
         </p>
       </BottomCta>
 

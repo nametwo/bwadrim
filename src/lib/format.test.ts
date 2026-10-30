@@ -7,6 +7,7 @@ import {
   formatKstDay,
   formatKstRange,
   formatKstTime,
+  formatTimeLeft,
   kstMonthStartIso,
 } from "./format";
 
@@ -82,5 +83,18 @@ describe("formatKstRange", () => {
 
   it("끝이 없으면 시작만", () => {
     expect(formatKstRange(new Date("2026-09-24T03:00:00Z"), null, NOW)).toBe("9월 24일 (목) 오후 12:00");
+  });
+});
+
+describe("formatTimeLeft", () => {
+  it("1시간 이상은 시간으로 내림", () => {
+    expect(formatTimeLeft(23 * 3_600_000 + 59 * 60_000)).toBe("23시간 남음");
+    expect(formatTimeLeft(3_600_000)).toBe("1시간 남음");
+  });
+  it("1시간 미만은 분으로 올림, 0이 되지 않게", () => {
+    expect(formatTimeLeft(3_599_000)).toBe("1시간 남음");
+    expect(formatTimeLeft(10 * 60_000)).toBe("10분 남음");
+    expect(formatTimeLeft(20_000)).toBe("1분 남음");
+    expect(formatTimeLeft(0)).toBe("1분 남음");
   });
 });

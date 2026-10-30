@@ -153,8 +153,9 @@ create index if not exists rooms_kakao_hash_idx on rooms(engineer_id, kakao_hash
 -- 이름표를 지울 때(on delete set null, 매일 정리) 그 이름표를 단 상담을 rooms 전체를 훑지 않고 찾게
 create index if not exists rooms_recipient_idx on rooms(recipient_id);
 
--- 1년 지난 이름표와 해시 지우기 (OPS-06). 매일 한국 시간 새벽 3시(UTC 18시).
+-- 1년 지난 이름표·해시·고객 브라우저 정보 지우기 (OPS-06). 매일 한국 시간 새벽 3시(UTC 18시).
 -- 이름표: 그 분께 마지막으로 보낸 날(last_sent_at)부터 1년. 상담: 만든 지 1년이면 방 해시와 이름표 연결을 끊는다(목록·화면이 같게)
+-- 고객 브라우저 정보(link_opened의 ua와 앱 안 브라우저 종류 inapp): 연결 문제를 찾는 데는 최근 기록이면 되므로 1년이 지나면 지운다(처리방침 NFR-10)
 create or replace function public.expire_recipients()
 returns void
 language sql
@@ -166,6 +167,8 @@ as $$
     where (kakao_hash is not null or recipient_id is not null) and created_at < now() - interval '1 year';
   update events set props = props - 'hash_chat_id'
     where name = 'kakao_sent' and props ? 'hash_chat_id' and created_at < now() - interval '1 year';
+  update events set props = props - 'ua' - 'inapp'
+    where name = 'link_opened' and (props ? 'ua' or props ? 'inapp') and created_at < now() - interval '1 year';
 $$;
 revoke all on function public.expire_recipients() from public, anon, authenticated;
 

@@ -16,11 +16,16 @@ import { fromRTCDataChannel, type ChannelDataLink, type DataLink } from "./data-
 // 정지 화면(JPEG data URL)은 DataChannel 메시지 크기 제한 때문에 조각내 보낸다
 const FREEZE_CHUNK = 12_000;
 const FREEZE_MAX_CHUNKS = 400;
-// 엔지니어: 고객 presence가 사라져도 통화가 살아 있으면 이만큼 기다린 뒤에야 정리한다.
-// 고객 폰의 시그널링 소켓만 잠깐 끊겼다가(앱 전환·망 전환) 같은 기기로 다시 붙는 경우가 있다 (CALL-05)
+// 상대 presence가 사라져도 통화(P2P)가 살아 있으면 이만큼 기다린 뒤에야 정리한다 — 양쪽 모두.
+// 시그널링 소켓만 잠깐 끊겼다가(앱 전환·망 전환·엘리베이터) 같은 기기로 다시 붙는 경우가 있다 (CALL-05).
+// 2026-10-21 전에는 엔지니어 쪽에만 있어서, 엔지니어 폰의 소켓이 흔들리면 고객 폰이 멀쩡한 영상을 끊고 다시 맺었다
 const PEER_GONE_GRACE_MS = 8000;
 // 엔지니어: 연결된 동안 고객 채널로 온 종료(bye)는 보낸 기기가 이 시간 안에 채널에서 정말 나가야 따른다 (CALL-12)
 const BYE_CLAIM_MS = 5000;
+// 고객: offer를 보내고 이 시간 안에 answer가 없으면 다시 청한다 (CALL-03). broadcast는 저장되지 않아 받는 쪽 소켓이
+// 재접속 중이면 신호가 그냥 사라지는데, 그러면 양쪽이 '연결 중'에서 영영 멈춘다. 이만큼 거듭 안 되면 실패로 본다
+const OFFER_TIMEOUT_MS = 10_000;
+const OFFER_MAX_RETRIES = 3;
 // 엔지니어: 같은 고객 기기의 종료가 DataChannel과 시그널링으로 두 번 오면 한 번만 처리한다
 const BYE_DEDUP_MS = 3000;
 
@@ -41,6 +46,8 @@ const BYE_DEDUP_MS = 3000;
 // 고객 쪽 1.5초 만료가 지나 화살표가 저절로 사라진다(고객에겐 '멈춤'으로 보임). guideLink도 anchorLink처럼 같은 객체.
 // 사진 찍기(CALL-16)도 전용 DataChannel('photo') — 원본 사진(수백 KB~수 MB)이 다른 채널을 막지 않게. photoLink도 같은 객체.
 // 포인터는 연결 후 DataChannel로, 아직 열리지 않았으면 시그널링 broadcast로 보낸다.
+// 엔지니어가 유예(PEER_GONE_GRACE_MS)가 끝나 연결을 버린 뒤 바로 그 고객 기기가 돌아오면 'reoffer'를 보낸다 — 그 기기는
+// 자기 연결이 살아 있는 줄 알아(상대가 pc를 닫아도 브라우저는 수십 초 뒤에야 안다) 새 offer를 보내지 않기 때문 (CALL-05).
 // 고객 채널(:c)은 링크를 가진 누구나 쓸 수 있고 from도 보낸 쪽이 직접 적는다. 그래서 엔지니어는 (CALL-12)
 //  - 연결된 동안의 고객 종료는 DTLS로 보호되는 'draw' 채널의 {t:'bye'}로 받는다. 시그널링 bye만 오면
 //    보낸 기기가 채널에서 정말 나갈 때까지(BYE_CLAIM_MS) 기다렸다 따른다
@@ -163,7 +170,7 @@ export class CallSession {
   private activePeer: string | null = null;
   private pcPeer: string | null = null;
   // 엔지니어: presence보다 먼저 도착한 offer
-  private pendingOffer: { from: string; sdp: RTCSessionDescriptionInit; pinned: boolean } | null =
+  private pendingOffer: { from: string; sdp: RTCSessionDescriptionInit; pinned: boolean; n?: number } | null =
     null;
   // 고객: 이 세션 동안 모든 연결에 쓰는 DTLS 인증서 (없으면 연결마다 브라우저가 새로 만든다)
   private cert: RTCCertificate | null = null;
@@ -171,6 +178,12 @@ export class CallSession {
   private readonly peerPrints = new Map<string, string>();
   // 엔지니어: 고객 presence가 사라진 뒤 살아 있는 연결을 정리하기까지의 유예 타이머
   private peerGoneTimer: ReturnType<typeof setTimeout> | null = null;
+  // 엔지니어: 유예가 끝나 연결을 버린 고객 기기 id. 같은 기기가 돌아오면 reoffer를 보낸다
+  private lostPeer: string | null = null;
+  // 고객: 지금 offer의 번호(answer가 어느 offer의 것인지 맞춰 본다)와 answer 대기 타이머·재시도 횟수
+  private offerSeq = 0;
+  private offerTimer: ReturnType<typeof setTimeout> | null = null;
+  private offerRetries = 0;
   // 엔지니어: 연결된 동안 시그널링으로 온 고객 종료. 그 기기가 채널에서 나가면 따른다
   private byeClaim: { from: string; until: number } | null = null;
   // 엔지니어: 마지막으로 따른 고객 종료 (같은 종료가 두 길로 오는 것을 한 번만)
@@ -258,6 +271,9 @@ export class CallSession {
       .on("broadcast", { event: "answer" }, ({ payload }) => {
         if (role === "customer") this.acceptAnswer(payload);
       })
+      .on("broadcast", { event: "reoffer" }, ({ payload }) => {
+        if (role === "customer") this.onReoffer(payload);
+      })
       .on("broadcast", { event: "ice" }, ({ payload }) => this.onIce(payload))
       .on("broadcast", { event: "bye" }, ({ payload }) => this.onByeSignal(payload))
       .on("broadcast", { event: "pointer" }, ({ payload }) => {
@@ -323,13 +339,18 @@ export class CallSession {
     }
 
     if (!top) {
-      // 엔지니어: 통화가 살아 있으면 곧바로 끊지 않는다. 고객 폰의 시그널링 소켓만 잠깐 끊겼다가 같은 기기로
-      // 다시 붙었을 수 있고, 그때 연결을 버리면 고객 쪽은 자기 연결이 살아 있어 다시 offer하지 않는다 (CALL-05).
+      // 통화가 살아 있으면 곧바로 끊지 않는다(양쪽 모두). 상대의 시그널링 소켓만 잠깐 끊겼다가 같은 기기로
+      // 다시 붙었을 수 있고, 그때 연결을 버리면 상대 쪽은 자기 연결이 살아 있어 다시 맺지 못한다 (CALL-05).
+      // 같은 기기가 돌아오면(아래 top.id === pcPeer) 살아 있는 연결을 그대로 쓴다.
       // 정말 나갔으면 유예하는 동안 연결이 '불안정'이 되고, 유예가 끝나면 정리한다
-      if (this.opts.role === "engineer" && this.pc?.connectionState === "connected") {
+      if (this.pc?.connectionState === "connected") {
         this.peerGoneTimer ??= setTimeout(() => {
           this.peerGoneTimer = null;
-          if (!this.closed && !this.activePeer && this.pc) this.resetPeer();
+          if (!this.closed && !this.activePeer && this.pc) {
+            // 엔지니어는 버린 기기를 기억해 둔다 — 같은 기기가 돌아오면 다시 맺자고 알려야 한다 (reoffer)
+            if (this.opts.role === "engineer") this.lostPeer = this.pcPeer;
+            this.resetPeer();
+          }
         }, PEER_GONE_GRACE_MS);
         return;
       }
@@ -345,12 +366,22 @@ export class CallSession {
       const stale = !!this.pc && top.id !== this.pcPeer;
       if (stale) this.resetPeer();
       if (prev || stale) this.opts.onPeerChanged?.();
+      this.offerRetries = 0;
       const queued = this.pendingOffer;
       if (queued?.from === top.id) {
         this.pendingOffer = null;
-        this.answer(queued.from, queued.sdp, queued.pinned);
+        this.answer(queued.from, queued.sdp, queued.pinned, queued.n);
         return;
       }
+    }
+
+    // 엔지니어: 유예가 끝나 연결을 버린 바로 그 고객 기기가 돌아왔다. 그 기기는 자기 연결이 살아 있는 줄 알아
+    // 새 offer를 보내지 않으므로 다시 맺자고 알린다. 다른 기기면 그쪽이 스스로 offer한다
+    if (this.lostPeer) {
+      if (this.opts.role === "engineer" && !this.pc && top.id === this.lostPeer) {
+        this.send("reoffer", { to: top.id });
+      }
+      this.lostPeer = null;
     }
 
     // customer가 offer 측: 엔지니어가 보이고 아직 연결 전이면 시작 (보낼 채널이 준비된 뒤)
@@ -394,13 +425,23 @@ export class CallSession {
 
     this.pc = pc;
     this.pcPeer = peerId;
+    this.lostPeer = null;
     return pc;
+  }
+
+  // 고객: 엔지니어가 내 연결을 버렸다고 알려 왔다(유예 만료 뒤 돌아온 경우). 지금 연결을 버리고 새로 청한다.
+  // :e 채널은 방 주인만 쓸 수 있으므로 믿는다. 나에게 온, 지금 이어진 엔지니어 기기 것만 따른다
+  private onReoffer(payload: { from?: unknown; to?: unknown } | null | undefined) {
+    if (this.closed || payload?.to !== this.id || payload.from !== this.activePeer) return;
+    if (this.pc) this.resetPeer();
+    this.onPresenceSync();
   }
 
   private async offer() {
     const peerId = this.activePeer;
     if (!peerId) return;
     let pc: RTCPeerConnection | null = null;
+    const n = ++this.offerSeq;
     try {
       this.negotiating = true;
       this.opts.onState("connecting");
@@ -415,7 +456,9 @@ export class CallSession {
       await pc.setLocalDescription(offer);
       if (this.pc !== pc) return; // 그사이 상대 기기가 바뀌었다
       // pinned: 이 세션의 연결은 모두 같은 인증서 — 엔지니어가 지문으로 같은 기기인지 본다
-      this.send("offer", { to: peerId, sdp: offer, ...(this.cert ? { pinned: true } : {}) });
+      // n: offer 번호. 엔지니어가 answer에 그대로 실어 보내 늦게 온 예전 answer를 가려낸다
+      this.send("offer", { to: peerId, sdp: offer, n, ...(this.cert ? { pinned: true } : {}) });
+      this.armOfferTimer(pc);
     } catch (e) {
       if (this.pc !== pc) return;
       console.error("[call] offer 실패:", e);
@@ -433,16 +476,18 @@ export class CallSession {
     to?: unknown;
     sdp?: RTCSessionDescriptionInit;
     pinned?: unknown;
+    n?: unknown;
   }) {
     if (typeof payload?.from !== "string" || payload.to !== this.id || !payload.sdp) {
       return;
     }
     const pinned = payload.pinned === true;
+    const n = typeof payload.n === "number" ? payload.n : undefined;
     if (payload.from !== this.activePeer) {
-      this.pendingOffer = { from: payload.from, sdp: payload.sdp, pinned };
+      this.pendingOffer = { from: payload.from, sdp: payload.sdp, pinned, n };
       return;
     }
-    this.answer(payload.from, payload.sdp, pinned);
+    this.answer(payload.from, payload.sdp, pinned, n);
   }
 
   // 같은 기기 id로 온 offer인데 인증서 지문이 처음과 다르면, 링크를 가진 다른 기기가 그 id를 흉내 낸 것일 수 있다.
@@ -460,12 +505,14 @@ export class CallSession {
     }
   }
 
-  private async answer(peerId: string, sdp: RTCSessionDescriptionInit, pinned: boolean) {
+  private async answer(peerId: string, sdp: RTCSessionDescriptionInit, pinned: boolean, n?: number) {
     this.checkPeerPrint(peerId, sdp, pinned);
     let pc: RTCPeerConnection | null = null;
     try {
+      // 고객이 재시도한 경우 이전 연결 폐기. resetPeer가 'waiting'을 알리므로 그 뒤에 'connecting'을 알린다 —
+      // 순서가 바뀌면 재협상 동안 엔지니어 화면이 어두운 통화 화면에서 흰 대기 화면으로 갔다 돌아온다
+      if (this.pc) this.resetPeer();
       this.opts.onState("connecting");
-      if (this.pc) this.resetPeer(); // 고객이 재시도한 경우 이전 연결 폐기
       pc = this.createPeer(peerId);
 
       pc.ondatachannel = (e) => {
@@ -481,7 +528,7 @@ export class CallSession {
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       if (this.pc !== pc) return;
-      this.send("answer", { to: peerId, sdp: answer });
+      this.send("answer", { to: peerId, sdp: answer, ...(n !== undefined ? { n } : {}) });
     } catch (e) {
       if (this.pc !== pc) return;
       console.error("[call] answer 실패:", e);
@@ -489,14 +536,18 @@ export class CallSession {
     }
   }
 
-  private async acceptAnswer(payload: { from?: unknown; to?: unknown; sdp?: RTCSessionDescriptionInit }) {
+  private async acceptAnswer(payload: { from?: unknown; to?: unknown; sdp?: RTCSessionDescriptionInit; n?: unknown }) {
     const pc = this.pc;
     if (!pc || payload?.to !== this.id || payload.from !== this.pcPeer || !payload.sdp) {
       return;
     }
+    // 다시 청한 뒤 늦게 도착한 예전 offer의 answer는 버린다 (번호가 없는 answer는 예전 엔지니어 화면 — 그대로 받는다)
+    if (typeof payload.n === "number" && payload.n !== this.offerSeq) return;
     try {
       await pc.setRemoteDescription(payload.sdp);
       if (this.pc !== pc) return;
+      this.clearOfferTimer();
+      this.offerRetries = 0;
       this.flushIce();
     } catch (e) {
       if (this.pc !== pc) return;
@@ -729,9 +780,33 @@ export class CallSession {
     this.peerGoneTimer = null;
   }
 
+  // 고객: answer가 제때 안 오면 다시 청한다. 몇 번을 거듭해도 안 오면 실패('연결이 끊겼어요 / 다시 연결')
+  private armOfferTimer(pc: RTCPeerConnection) {
+    this.clearOfferTimer();
+    this.offerTimer = setTimeout(() => {
+      this.offerTimer = null;
+      if (this.closed || this.pc !== pc || pc.remoteDescription) return;
+      if (this.offerRetries >= OFFER_MAX_RETRIES) {
+        console.warn("[call] answer가 오지 않아 연결 실패");
+        this.fail();
+        return;
+      }
+      this.offerRetries++;
+      console.warn(`[call] answer가 없어 다시 청한다 (${this.offerRetries}/${OFFER_MAX_RETRIES})`);
+      this.resetPeer();
+      this.onPresenceSync();
+    }, OFFER_TIMEOUT_MS);
+  }
+
+  private clearOfferTimer() {
+    if (this.offerTimer) clearTimeout(this.offerTimer);
+    this.offerTimer = null;
+  }
+
   private resetPeer() {
     const old = this.pcPeer;
     this.clearPeerGoneTimer();
+    this.clearOfferTimer();
     // 버리는 연결에 대한 종료 주장도 같이 버린다
     this.byeClaim = null;
     this.pc?.close();
@@ -825,6 +900,7 @@ export class CallSession {
   destroy() {
     this.closed = true;
     this.clearPeerGoneTimer();
+    this.clearOfferTimer();
     this.anchorChannel.dispose();
     this.guideChannel.dispose();
     this.photoChannel.dispose();

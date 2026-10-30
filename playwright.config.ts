@@ -56,6 +56,11 @@ export default defineConfig({
               // 카톡 공유 웹훅(/api/kakao/share-webhook, ROOM-15·16)이 실제로 돌게 하는 가짜 대표 어드민 키.
               // 테스트가 카카오인 척 'KakaoAK {이 키}'로 웹훅을 보내고, 같은 키로 상담 서명(sig)을 만든다 (e2e/recipient.spec.ts)
               KAKAO_ADMIN_KEY: fixture.kakaoAdminKey,
+              // 디스코드 알림(OPS-09)은 가짜 서버로 보낸다 — e2e/notify.spec.ts가 모인 글을 본다
+              DISCORD_WEBHOOK_GENERAL: `http://127.0.0.1:${SUPABASE_PORT}/__discord/general`,
+              DISCORD_WEBHOOK_URGENT: `http://127.0.0.1:${SUPABASE_PORT}/__discord/urgent`,
+              // 응급 '같은 일 10분에 한 번'을 끈다 — 같은 방으로 거듭 테스트해도 막히지 않게
+              DISCORD_URGENT_DEDUPE_MS: "0",
             },
           },
         ]),

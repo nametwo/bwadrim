@@ -8,8 +8,9 @@ export interface CameraState {
   facing: Facing;
   torch: boolean;
   torchSupported: boolean;
-  // 방금 명령이 실패했으면 이유. needs_tap: 폰이 고객의 탭 없이는 카메라를 못 바꾼다(아이폰 등)
-  error?: "failed" | "needs_tap";
+  // 방금 명령이 실패했으면 이유. needs_tap: 폰이 고객의 탭 없이는 카메라를 못 바꾼다(아이폰 등).
+  // lost: 카메라가 아예 꺼졌다(전환 끝까지 실패, 다시 켜기 실패, 다른 앱이 카메라를 가져감) — 고객 화면에 '카메라 다시 켜기'가 떠 있다
+  error?: "failed" | "needs_tap" | "lost";
 }
 
 // 엔지니어 → 고객
@@ -35,7 +36,7 @@ export function parseCameraState(msg: unknown): CameraState | null {
   ) {
     return null;
   }
-  const error = m.error === "failed" || m.error === "needs_tap" ? m.error : undefined;
+  const error = m.error === "failed" || m.error === "needs_tap" || m.error === "lost" ? m.error : undefined;
   return { facing: m.facing, torch: m.torch, torchSupported: m.torchSupported, error };
 }
 

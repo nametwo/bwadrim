@@ -7,7 +7,7 @@ import { isJoinToken } from "./join-token";
 
 export type CustomerEventName = Extract<
   EventName,
-  "camera_granted" | "camera_denied" | "connected" | "relay_used"
+  "camera_granted" | "camera_denied" | "connected" | "relay_used" | "connect_failed"
 >;
 
 export type CustomerEvent = {
@@ -37,10 +37,13 @@ function pickProps(name: CustomerEventName, raw: Record<string, unknown>): Custo
       return { relay: raw.relay, turn: raw.turn };
     case "relay_used":
       return {};
+    case "connect_failed":
+      // 연결하던 중 실패(connecting) / 통화 중 끊김(call). 그 밖의 값은 connecting으로
+      return { stage: raw.stage === "call" ? "call" : "connecting" };
   }
 }
 
-const NAMES: readonly string[] = ["camera_granted", "camera_denied", "connected", "relay_used"];
+const NAMES: readonly string[] = ["camera_granted", "camera_denied", "connected", "relay_used", "connect_failed"];
 
 function isCustomerEventName(value: unknown): value is CustomerEventName {
   return typeof value === "string" && NAMES.includes(value);

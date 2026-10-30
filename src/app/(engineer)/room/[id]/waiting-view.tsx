@@ -40,7 +40,6 @@ export function WaitingView({
   joinUrl,
   roomId,
   kakaoArgs,
-  createdLabel,
   micOn,
   sentVia,
   onSent,
@@ -60,7 +59,6 @@ export function WaitingView({
   joinUrl: string;
   roomId: string;
   kakaoArgs: KakaoShareArgs | null;
-  createdLabel: string;
   /** null = 아직 모름(마이크 권한 묻는 중) */
   micOn: boolean | null;
   sentVia: SentVia | null;
@@ -162,7 +160,13 @@ export function WaitingView({
     cameraAgoSec: progress?.cameraAgoSec ?? null,
   });
   const heads: Record<WaitKind, { tone: Tone; title: ReactNode; sub: ReactNode }> = {
-    failed: { tone: "error", title: "연결에 실패했어요", sub: "고객님께 링크를 다시 열어 달라고 말씀해 주세요." },
+    // 고객 화면에는 같은 때 '연결이 끊겼어요'와 큰 파란 '다시 연결'이 떠 있다(JOIN-09) — 그 버튼 이름을 부른다.
+    // 링크를 다시 열게 하면 새 기기로 들어와 '고객 쪽 기기가 바뀌었어요'까지 뜬다
+    failed: {
+      tone: "error",
+      title: "연결에 실패했어요",
+      sub: "고객님께 화면의 \u2018다시 연결\u2019을 눌러 달라고 말씀해 주세요. 그 버튼이 없으면 링크를 다시 열어 달라고 해 주세요.",
+    },
     denied: {
       tone: "error",
       title: (
@@ -187,6 +191,8 @@ export function WaitingView({
       sub: "고객님이 다시 들어오면 바로 이어져요",
     },
     coming: { tone: "ok", title: "곧 연결돼요", sub: "고객님이 카메라를 켰어요. 잠시만 기다려 주세요." },
+    // 기다리는 두 단계의 부제는 지금 전화로 할 한마디다 — 이 화면을 보는 기사님은 대개 사장님과 통화 중이고
+    // "뭘 눌러요?"를 듣고 있다. 전체 대사는 아래 '고객님께 이렇게 말씀해 주세요'에 있다 (ROOM-05·13)
     opened: {
       tone: "wait",
       title: (
@@ -196,7 +202,7 @@ export function WaitingView({
           켜기를 기다리고 있어요
         </>
       ),
-      sub: "고객님이 카메라를 켜면 바로 연결돼요",
+      sub: "고객님께 \u201c파란 버튼 누르시고, 허용 누르세요\u201d라고 말씀해 주세요",
     },
     waiting: {
       tone: "wait",
@@ -207,7 +213,7 @@ export function WaitingView({
           기다리고 있어요
         </>
       ),
-      sub: `${createdLabel}에 만든 상담이에요`,
+      sub: `고객님께 \u201c${via === "kakao" ? "카톡" : via === "sms" ? "문자" : "링크"} 보내 드렸어요. 한번 눌러 보세요\u201d라고 말씀해 주세요`,
     },
   };
   const head = heads[kind];
