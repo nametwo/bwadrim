@@ -13,8 +13,8 @@ test("로그인 화면 아래 처리방침 링크로 로그인 없이 처리방�
   const footer = page.getByTestId("business-footer");
   await expect(footer).toContainText("에코정보통신");
   await expect(footer).toContainText("contact@bwadrim.com");
-  // '로그인'은 그대로 있다
-  await expect(page.getByRole("button", { name: "로그인", exact: true })).toBeVisible();
+  // '카카오로 시작하기'는 그대로 있다 (AUTH-10)
+  await expect(page.getByTestId("kakao-login")).toBeVisible();
 
   await footer.getByRole("link", { name: "개인정보 처리방침" }).click();
   await expect(page).toHaveURL(/\/privacy$/);

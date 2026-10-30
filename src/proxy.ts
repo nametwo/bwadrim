@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 // 세션 쿠키 갱신 + 엔지니어 라우트 보호.
 // 고객 진입(/join/*)은 절대 여기서 막지 않는다 — 로그인 없음이 제품 원칙.
-const PROTECTED_PREFIXES = ["/dashboard", "/room", "/stats"];
+const PROTECTED_PREFIXES = ["/dashboard", "/room", "/stats", "/account"];
 
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -44,7 +44,7 @@ export async function proxy(request: NextRequest) {
     !isServerAction &&
     PROTECTED_PREFIXES.some((p) => pathname.startsWith(p))
   ) {
-    // 쿼리도 함께 싣는다. 삼성 바로가기 표시(?from=home, NFR-09)나 통계 기간이 로그인 뒤에도 남게
+    // 쿼리도 함께 싣는다. 통계 기간(?period=7) 같은 조건이 로그인 뒤에도 남게
     const url = request.nextUrl.clone();
     const next = pathname + request.nextUrl.search;
     url.pathname = "/login";

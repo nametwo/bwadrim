@@ -2,7 +2,7 @@
   "name": "봐드림",
   "short_name": "봐드림",
   "description": "기사님용 원격 A/S. 링크를 보내고 고객 폰 카메라로 함께 봐요.",
-  "start_url": "/dashboard?from=home",
+  "start_url": "/dashboard",
   "display": "browser",
   "lang": "ko",
   "background_color": "#ffffff",

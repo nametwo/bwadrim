@@ -28,11 +28,12 @@
 ```
 src/proxy.ts                                     # 세션 갱신 + 엔지니어 라우트 보호 (Next 16: middleware → proxy)
 src/app/
-  (engineer)/login, /dashboard, /room/[id], /stats  # 로그인 필요. 방 생성·종료는 서버 액션. stats = 핵심 지표(DATA-06). layout = 앱 안 브라우저면 인터넷 앱으로(AUTH-09), 홈 화면 앱 설정(manifest)·설치 신호 받기(NFR-09)
+  (engineer)/login, /dashboard, /room/[id], /stats, /account  # 로그인 필요(login 빼고). login = 카카오로 시작하기(AUTH-10)·숨긴 이메일 로그인. account = 내 계정·로그아웃·회원 탈퇴(AUTH-11). 방 생성·종료는 서버 액션. stats = 핵심 지표(DATA-06). layout = 앱 안 브라우저면 인터넷 앱으로(AUTH-09), 웹 앱 설정(manifest, 플레이 앱용 OPS-08)·크롬 설치 띠 막기
   privacy                                        # 개인정보 처리방침, 공개(NFR-10). 사업자 정보 값은 lib/business-info.ts. 로고는 링크가 아님(고객을 로그인 화면으로 보내지 않게)
   not-found.tsx                                  # 404. 로그인한 엔지니어면 '상담 목록으로', 아니면 버튼 없이 사장님 안내만(AUTH-08). 고객을 사이트 주소(/ = 로그인)로 보내지 않는다
   lab/guide                                      # 방향 지시 실험실(CALL-15). 개발자용 — 운영(VERCEL_ENV=production)에서는 404
   join/[token]                                   # 고객 진입, 공개. 32자리 링크 토큰(ROOM-12). start-screen(시작), camera-help(거부 원인별 안내), camera-start(통화), owner-notice(그 상담 엔지니어가 로그인한 채로 열면, JOIN-13)
+  auth/callback                                  # 카카오 동의 화면에서 돌아오는 곳: 코드 → 로그인 쿠키, 원래 가려던 화면으로 (AUTH-10)
   api/turn                                       # 링크 토큰 검증 후 Cloudflare TURN 단기 자격증명 발급
   api/events                                     # 고객(비로그인) 쪽 지표 이벤트 수집
   api/kakao/share-webhook                        # 카카오톡 공유 전송 성공 웹훅 → kakao_sent(채팅방 종류·해시, ROOM-15), 서명된 상담 id만 믿음, 받는 분 이름표에 잇기(ROOM-16)
@@ -40,6 +41,8 @@ src/lib/
   supabase/{client,server,admin}.ts              # admin = service role, 서버 전용
   webrtc/                                        # peer 연결, ICE 설정, 시그널링, 포인터 좌표(pointer.ts), 화면 멈춤·그리기(draw.ts), 카메라 전환·손전등(camera.ts), DataChannel 래퍼(data-link.ts), 방향 지시 메시지(guide.ts), 사진 찍기·주고받기(photo.ts, CALL-16), 대시보드 탭에서 마이크 미리 받기(mic-ahead.ts, CALL-01)
   tracking/                                      # 평면 앵커 추적(AR 핀, CALL-14). 설계는 tracking/README.md, 벤치는 scripts/tracking-bench
+  safe-next.ts                                   # 로그인 뒤 갈 주소 검사(같은 사이트 경로만, BUG-08)
+  room-quota.ts                                  # 한 달 상담 한도 읽기(ROOM-17). 막는 것은 DB 트리거(schema.sql enforce_room_limit), 기본 30건, 엔지니어별은 engineer_plans
   join-token.ts                                  # 고객 링크 토큰 형식 검사
   site-url.ts                                    # 서비스 주소(NEXT_PUBLIC_SITE_URL, OPS-07). 고객 링크·카톡 카드 사진 주소를 늘 운영 주소로. 없으면 요청 host
   engineer-name.ts                               # 엔지니어 표시 이름 (user_metadata.name, OPS-03). 고객 시작 화면 기사님 카드
@@ -52,7 +55,7 @@ src/lib/
   pointer-color.ts                               # 가리키기 빨강을 캔버스용으로 옮겨 적은 값 (globals.css --color-pointer-live와 같이 고칠 것)
   wake-lock.ts                                   # 통화 중 화면 꺼짐 방지
   in-app-browser.ts                              # 카톡 등 인앱 브라우저 감지·외부 브라우저로 열기
-  install-guide.ts                               # 홈 화면 앱 설치 안내 글: 기기·브라우저별 세 단계 (NFR-09). 화면은 components/install-prompt.tsx
+  browser-kind.ts                                # 브라우저·기기 가리기: 아이폰·아이폰의 다른 인터넷 앱(JOIN-05), 삼성 인터넷이면 앱으로 설치되지 않는 웹 앱 설정(BUG-24)
   preview-bot.ts                                 # 링크 미리보기 봇(카톡 스크랩·아이메시지 등) UA 감지 → link_opened 안 남김 (JOIN-12, 출처는 파일 주석)
   kakao-share.ts                                 # 카톡 보내기(카카오링크, ROOM-14). 카카오 키가 있을 때만. SDK는 링크 보내기 화면에서 미리 받는다
   events.ts                                      # 지표 이벤트 기록. 기록 뒤 디스코드 일반 채널로(notify-room.ts), 기록 실패는 응급으로
@@ -60,10 +63,11 @@ src/lib/
   notify-events.ts                               # 지표 이벤트 → 디스코드 글(순수 함수). 응급 규칙 = README 핵심 지표가 깨지는 신호
   notify-room.ts                                 # 글에 붙일 상담 정보(기사님 이름·받는 분·쓴 도구) 조회, 서버 전용
   metrics.ts                                     # 핵심 지표 계산 (통계 화면). endedConnected = 끝난 상담이 고객과 연결됐었는지 (대시보드 칩·끝난 상담 화면도 같이 씀)
-src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기). anchor/·anchor-overlay = AR 핀 층(CALL-14), guide-dpad(방향 링·가까이/멀리 알약)·guide-pad-geometry·guide-overlay(고객 노란 원 화살표·네 모서리)·guide-pill = 방향 지시(CALL-15), open-in-browser = 앱 안 브라우저 안내(고객 JOIN-10·엔지니어 AUTH-09), install-prompt = 엔지니어 홈 화면 앱 설치 화면(NFR-09)
+src/components/                                  # 엔지니어·고객 화면 공용 UI (포인터 동그라미, 정지 화면 그리기). anchor/·anchor-overlay = AR 핀 층(CALL-14), guide-dpad(방향 링·가까이/멀리 알약)·guide-pad-geometry·guide-overlay(고객 노란 원 화살표·네 모서리)·guide-pill = 방향 지시(CALL-15), open-in-browser = 앱 안 브라우저 안내(고객 JOIN-10·엔지니어 AUTH-09)
   ui/                                            # 디자인 시스템 부품(NFR-08, 피그마 컴포넌트와 같은 이름): button(Button·ButtonLink·buttonClass), icons(선 아이콘), sheet(아래 확인 창, 고객용 `size="l"`), notice-screen(한 화면 한 안내), bottom-cta(아래에 붙는 버튼 자리), brand(로고), status-chip, step-item, banner(고객용 큰 글자 `size="l"`), call-control(통화 원형 버튼, 고객용 `size="xl"`), stat-card, engineer-card, call-timer, text-field(입력칸)
-public/manifest.webmanifest, public/icons/          # 엔지니어 홈 화면 앱 설정·아이콘 (NFR-09, 엔지니어 화면에만 붙음)
+public/manifest.webmanifest, public/icons/          # 엔지니어 웹 앱 설정·아이콘 (플레이 앱이 가져다 씀 OPS-08, 엔지니어 화면에만 붙음). 홈 화면에 추가하라고 권하지 않는다(NFR-09 폐기)
 public/manifest-samsung.webmanifest                 # 삼성 인터넷용 웹 앱 설정(display: browser, 바로가기만). 삼성이 직접 만든 APK는 Play 프로텍트가 막는다(BUG-24). 서비스 워커는 쓰지 않음(public/sw.js = 예전 등록 지우기)
+android/                                            # 엔지니어 안드로이드 앱(TWA, OPS-08). twa-manifest.json만 올리고 프로젝트는 Bubblewrap이 만든다. 빌드는 android/README.md
 supabase/schema.sql
 docs/requirements.md                             # 기능 요구사항 (기준 문서)
 할일.md                                          # 나중에 할 일 메모. 하기로 하면 requirements.md로 옮기고 지운다

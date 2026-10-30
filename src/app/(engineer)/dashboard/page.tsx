@@ -3,17 +3,18 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { formatDuration, formatKstDateTime, formatKstRange, formatTimeLeft } from "@/lib/format";
+import { quotaFull, readRoomQuota } from "@/lib/room-quota";
+import { BUSINESS } from "@/lib/business-info";
 import { endedConnected } from "@/lib/metrics";
 import { engineerNameOf } from "@/lib/engineer-name";
 import { BottomCta } from "@/components/ui/bottom-cta";
 import { Brand } from "@/components/ui/brand";
-import { AlertIcon, ChartIcon, ChevronRightIcon, ClockIcon, LogoutIcon, MessageIcon, RefreshIcon } from "@/components/ui/icons";
+import { AlertIcon, ChartIcon, ChevronRightIcon, ClockIcon, MessageIcon, RefreshIcon, UserIcon } from "@/components/ui/icons";
+import { Banner } from "@/components/ui/banner";
 import { StatusChip } from "@/components/ui/status-chip";
-import { logout } from "../login/actions";
 import { createRoom } from "./actions";
 import { NewRoomButton } from "./new-room-button";
 import { MicAheadLink } from "./mic-ahead-link";
-import { InstallPrompt } from "@/components/install-prompt";
 
 export const metadata: Metadata = {
   title: "상담 목록 | 봐드림",
@@ -57,17 +58,24 @@ export default async function DashboardPage() {
   // proxy가 1차로 막지만, 데이터 접근 지점에서 한 번 더 확인
   if (!user) redirect("/login");
 
-  const { data: rooms, error: roomsError } = await supabase
-    .from("rooms")
-    .select("id, status, resolved_remotely, created_at, expires_at, ended_at")
-    .order("created_at", { ascending: false })
-    .limit(20);
+  const [{ data: rooms, error: roomsError }, quota] = await Promise.all([
+    supabase
+      .from("rooms")
+      .select("id, status, resolved_remotely, created_at, expires_at, ended_at")
+      .order("created_at", { ascending: false })
+      .limit(20),
+    // 이번 달(한국 시간) 만든 상담 수와 한도 — 다 썼는지만 본다 (ROOM-17)
+    readRoomQuota(supabase),
+  ]);
 
   const now = new Date();
   const name = engineerNameOf(user);
   const list = (rooms ?? []) as Room[];
   const open = list.filter((r) => isOpen(r, now));
   const past = list.filter((r) => !isOpen(r, now));
+  // 이번 달 상담을 다 썼으면 '새 A/S 시작' 대신 안내 (ROOM-17). 숫자는 내 계정(AUTH-11)에 있다
+  const full = quotaFull(quota);
+
   // 끝난 상담이 고객과 연결됐었는지 (metrics.endedConnected와 같은 판정).
   // 예전 상담은 방에 남은 해결 여부로, 그 밖에는 'ended' 기록으로 가린다. 목록에 보이는 방 것만 한 번에 읽는다(RLS로 자기 방만)
   const connectedIds = new Set(
@@ -103,15 +111,14 @@ export default async function DashboardPage() {
               <ChartIcon className="size-5" />
               통계
             </Link>
-            <form action={logout}>
-              <button
-                type="submit"
-                className="flex h-touch items-center gap-1.5 rounded-xl px-3 text-label-m text-text-secondary active:bg-border"
-              >
-                <LogoutIcon className="size-5" />
-                로그아웃
-              </button>
-            </form>
+            <Link
+              href="/account"
+              data-testid="account-link"
+              className="flex h-touch items-center gap-1.5 rounded-xl px-3 text-label-m text-text-secondary active:bg-border"
+            >
+              <UserIcon className="size-5" />
+              내 계정
+            </Link>
           </div>
         </header>
 
@@ -214,13 +221,20 @@ export default async function DashboardPage() {
         </div>
 
         <BottomCta bg="muted">
-          <form action={createRoom}>
-            <NewRoomButton />
-          </form>
+          {full ? (
+            <>
+              <Banner tone="warning" icon={<AlertIcon className="size-[22px]" />} flat testId="room-limit" sub="다음 달 1일에 다시 쓸 수 있어요.">
+                이번 달 상담 {quota.limit}건을 다 썼어요
+              </Banner>
+              <p className="text-center text-body-s text-text-secondary">더 필요하시면 {BUSINESS.email}로 알려 주세요.</p>
+            </>
+          ) : (
+            <form action={createRoom}>
+              <NewRoomButton />
+            </form>
+          )}
         </BottomCta>
       </main>
-      {/* 폰 브라우저로 열었으면 홈 화면 앱 설치부터 권한다 (NFR-09) */}
-      <InstallPrompt />
     </div>
   );
 }

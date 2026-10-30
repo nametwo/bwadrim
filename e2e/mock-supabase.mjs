@@ -8,6 +8,10 @@
 //   GET  /auth/v1/admin/users/:id      (서비스 키) 사용자 — 고객 화면의 기사님 이름
 //   GET  /rest/v1/rooms?code=eq.X      (eq·neq·in·gte·is 필터, select=…, count=exact·HEAD 지원) Accept가 vnd.pgrst.object+json이면 객체 1개
 //   PATCH /rest/v1/rooms?id=eq.X…      상태 갱신 (status=eq.X·neq.X, recipient_id=is.null 조건 지원). recipient_id는 있는 이름표만(FK, 없으면 409 23503)
+//   POST /auth/v1/token?grant_type=pkce  카카오 로그인 돌아오기(AUTH-10). auth_code가 'e2e-kakao-code'이고 code_verifier가 있으면 사용자 세션
+//   POST /rest/v1/rooms                상담 만들기 (사용자 토큰). 이번 달(한국 시간) 수가 한도에 닿으면 400 P0001 'room_limit' (ROOM-17 트리거 흉내)
+//   POST /rest/v1/rpc/my_room_limit    한 달 상담 한도 (기본 30, /__faults {roomLimit}로 바꿈)
+//   DELETE /auth/v1/admin/users/:id    (서비스 키) 회원 탈퇴 (AUTH-11). 같은 사용자를 다른 테스트가 같이 쓰므로 지우지 않고 기록만 (GET /__deleted-users)
 //   POST /rest/v1/events               기록 (본문 객체 또는 배열) · GET은 통계·대시보드용(같은 필터, count=exact·HEAD 지원)
 //   GET·POST·PATCH /rest/v1/recipients  받는 분 이름표 (ROOM-16). 사용자 토큰이면 자기 것만(RLS), 서비스 키면 전부.
 //                                      eq·in·is 필터. POST는 본문 객체/배열, Prefer return=representation이면 넣은 줄을 돌려준다
@@ -16,7 +20,7 @@
 //   GET  /__events  ·  GET /__rooms  ·  GET /__recipients  ·  POST /__reset[?room=ID]  ·  GET /__health   (테스트용)
 //   POST /__seed {rooms?, events?, recipients?}  목록 바꾸기 (화면 카탈로그: 대시보드·통계, 받는 분 이름표). ageMin = 몇 분 전
 //   POST /__patch-room {id, ...}       방 한 개 고치기 (링크를 연 뒤 세션이 닫힌 경우 등)
-//   POST /__faults {failJoinToken?, failRoomUpdate?, failAuth?, failEvents?}  일부러 실패시키기 (전체 reset하면 풀린다)
+//   POST /__faults {failJoinToken?, failRoomUpdate?, failRoomInsert?, roomLimit?, failAuth?, failEvents?}  일부러 실패시키기 (전체 reset하면 풀린다)
 //   POST /__discord/{channel}  디스코드 웹훅 흉내(OPS-09) — 서버가 보낸 {content}를 모은다 · GET /__discord 목록 · DELETE /__discord 비우기
 //
 // 고정 데이터는 e2e/fixtures.json과 같다 (테스트도 같은 파일을 읽는다).
@@ -34,6 +38,7 @@ let rooms = [];
 let events = [];
 let recipients = [];
 let faults = {};
+let deletedUsers = [];
 /** 마지막 로그아웃 요청 {scope, at} — 이 기기만(local)인지 본다 (AUTH-06) */
 let lastLogout = null;
 /** 디스코드 웹훅으로 온 글 [{channel, content, at}] (OPS-09) */
@@ -69,6 +74,7 @@ function reset(roomId) {
   events = [];
   recipients = [];
   faults = {};
+  deletedUsers = [];
   lastLogout = null;
   discord = [];
 }
@@ -327,6 +333,53 @@ const server = http.createServer(async (req, res) => {
       if ((req.headers.apikey ?? "") !== FIXTURE.serviceKey) return send(res, 401, { msg: "service key required" });
       if (adminUser[1] !== FIXTURE.user.id) return send(res, 404, { msg: "User not found" });
       return send(res, 200, FIXTURE.user);
+    }
+
+    if (adminUser && req.method === "DELETE") {
+      if ((req.headers.apikey ?? "") !== FIXTURE.serviceKey) return send(res, 401, { msg: "service key required" });
+      deletedUsers.push(adminUser[1]);
+      return send(res, 200, {});
+    }
+    if (p === "/__deleted-users" && req.method === "GET") return send(res, 200, deletedUsers);
+
+    if (p === "/auth/v1/token" && req.method === "POST" && url.searchParams.get("grant_type") === "pkce") {
+      const body = (await readBody(req)) ?? {};
+      if (body.auth_code !== "e2e-kakao-code" || !body.code_verifier) {
+        return send(res, 400, { code: 400, error_code: "flow_state_not_found", msg: "invalid flow state, no valid flow state found" });
+      }
+      return send(res, 200, {
+        access_token: FIXTURE.accessToken,
+        refresh_token: FIXTURE.refreshToken,
+        token_type: "bearer",
+        expires_in: 3600,
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        user: FIXTURE.user,
+      });
+    }
+
+    if (p === "/rest/v1/rpc/my_room_limit" && req.method === "POST") {
+      if (!authed(req)) return send(res, 401, { code: "42501", message: "permission denied for function my_room_limit" });
+      return send(res, 200, faults.roomLimit ?? 30);
+    }
+
+    if (p === "/rest/v1/rooms" && req.method === "POST") {
+      if (!authed(req)) return send(res, 401, { code: "42501", message: "new row violates row-level security policy" });
+      if (faults.failRoomInsert) return send(res, 500, { code: "XX000", message: "mock: 일부러 실패 (failRoomInsert)" });
+      // 트리거 흉내: 한국 시간 이번 달 1일 0시부터 만든 내 상담 수
+      const kst = new Date(Date.now() + 9 * 3600_000);
+      const monthStart = Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth(), 1, -9);
+      const used = rooms.filter((r) => r.engineer_id === FIXTURE.user.id && new Date(r.created_at).getTime() >= monthStart).length;
+      if (used >= (faults.roomLimit ?? 30)) return send(res, 400, { code: "P0001", details: null, hint: null, message: "room_limit" });
+      const body = (await readBody(req)) ?? {};
+      const now = Date.now();
+      const row = {
+        ...freshRoom({ id: crypto.randomUUID(), status: "waiting", join_token: crypto.randomBytes(16).toString("hex"), ...body }, now),
+        created_at: new Date(now).toISOString(),
+      };
+      rooms.push(row);
+      const out = project(row, url.searchParams.get("select"));
+      if ((req.headers.accept ?? "").includes("vnd.pgrst.object")) return send(res, 201, out);
+      return send(res, 201, [out]);
     }
 
     // 로그인(서버 액션 signInWithPassword). 가짜 서버에 계정은 없다 — 늘 '맞지 않아요'.

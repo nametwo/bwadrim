@@ -5,7 +5,7 @@ import { NoticeScreen } from "@/components/ui/notice-screen";
 import { Button } from "@/components/ui/button";
 import { AlertIcon, CameraIcon, CopyIcon, PhoneIcon, RefreshIcon } from "@/components/ui/icons";
 import { detectWebView } from "@/lib/in-app-browser";
-import { iosBrowserApp, isIOSDevice } from "@/lib/install-guide";
+import { iosBrowserApp, isIOSDevice } from "@/lib/browser-kind";
 
 // 카메라를 켜지 못했을 때 (JOIN-05, 피그마 C04). 원인마다 할 일이 달라서 나눠 안내하고, 기기별 설정 경로를 짧게.
 //  - blocked: '허용 안 함'을 눌렀거나 폰 설정에서 막힘 → 이 폰에서 권한을 켜는 방법(아이폰·안드로이드 따로)

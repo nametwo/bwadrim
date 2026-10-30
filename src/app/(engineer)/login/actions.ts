@@ -1,30 +1,14 @@
 "use server";
 
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { isAuthRetryableFetchError } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
+import { safeNext } from "@/lib/safe-next";
 import { notifyUrgent } from "@/lib/notify";
 
 // email: 실패해도 입력한 이메일을 다시 채워 둔다 (폼 액션이 끝나면 입력칸이 비워지므로)
 export type LoginState = { error: string | null; email?: string };
-
-// 로그인 후 이동할 곳. 같은 사이트 안의 경로만 허용한다 (BUG-08).
-// 브라우저는 '\'를 '/'로 읽어 '/\evil.com'을 외부 주소로 여기므로 문자 검사만으로는 부족하다 —
-// 실제로 주소를 해석해 사이트가 바뀌지 않는지 본다.
-function safeNext(next: string): string {
-  if (!next.startsWith("/") || next.startsWith("//") || /[\\\s]/.test(next)) {
-    return "/dashboard";
-  }
-  const base = "https://bwadrim.invalid";
-  try {
-    const url = new URL(next, base);
-    // '/..//evil.com'처럼 해석 뒤에 '//'로 시작하게 되는 경우도 막는다
-    if (url.origin !== base || url.pathname.startsWith("//")) return "/dashboard";
-    return url.pathname + url.search + url.hash;
-  } catch {
-    return "/dashboard";
-  }
-}
 
 export async function login(
   _prev: LoginState,
@@ -54,6 +38,24 @@ export async function login(
   }
 
   redirect(safeNext(String(formData.get("next") ?? "")));
+}
+
+// 카카오로 시작하기 (AUTH-10). 처음이면 그대로 가입된다.
+// 카카오 동의 화면을 거쳐 /auth/callback으로 돌아온다. 돌아올 주소는 엔지니어가 지금 연 주소로 만든다(OPS-07)
+export async function loginWithKakao(formData: FormData) {
+  const h = await headers();
+  const host = h.get("host") ?? "localhost:3000";
+  const proto = h.get("x-forwarded-proto") ?? "http";
+  const next = safeNext(String(formData.get("next") ?? ""));
+  const callback = `${proto}://${host}/auth/callback?next=${encodeURIComponent(next)}`;
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: "kakao",
+    options: { redirectTo: callback },
+  });
+  if (error || !data.url) redirect("/login?error=kakao");
+  redirect(data.url);
 }
 
 // 로그아웃 (AUTH-06). 이 기기(브라우저)만 로그아웃한다 — 사무실 PC에서 로그아웃했다고 폰의 홈 화면 앱까지
