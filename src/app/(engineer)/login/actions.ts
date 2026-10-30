@@ -50,9 +50,11 @@ export async function loginWithKakao(formData: FormData) {
   const callback = `${proto}://${host}/auth/callback?next=${encodeURIComponent(next)}`;
 
   const supabase = await createClient();
+  // 동의 항목은 닉네임만. 비워 두면 Supabase가 이메일·프로필 사진까지 달라고 해서, 카카오 콘솔에
+  // 그 항목을 켜 두지 않으면 KOE205(설정하지 않은 동의 항목)로 막힌다 (OPS-10)
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: "kakao",
-    options: { redirectTo: callback },
+    options: { redirectTo: callback, scopes: "profile_nickname" },
   });
   if (error || !data.url) redirect("/login?error=kakao");
   redirect(data.url);
