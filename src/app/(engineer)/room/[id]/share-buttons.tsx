@@ -37,16 +37,17 @@ export function useSendWays() {
   return { sms, share, kakao: !!kakaoKey };
 }
 
-type Way = "kakao" | "share" | "copy";
+type Way = "sms" | "share" | "copy";
 
 // 고객에게 링크 보내기 (ROOM-05~08·14). 이 기기에서 할 수 있는 것만 띄운다:
-//  - 문자로 링크 보내기: 폰에서만. 엔지니어 본인 번호로 가므로 고객에게 아는 번호로 도착한다 (별도 SMS API 불필요)
-//  - 카톡 보내기: 카카오 키가 있을 때. 카톡 친구 선택 창을 바로 연다
+//  - 카톡으로 링크 보내기: 카카오 키가 있을 때. 카톡 친구 선택 창을 바로 연다. 사장님들이 문자보다 카톡을 더 잘 열어서
+//    2026-10-30부터 이것이 맨 위 큰 버튼(노랑)이다
+//  - 문자 보내기: 폰에서만. 엔지니어 본인 번호로 가므로 고객에게 아는 번호로 도착한다 (별도 SMS API 불필요).
+//    카카오 키가 없으면 이것이 큰 버튼(파랑 '문자로 링크 보내기')
 //  - 공유하기: 기기 공유 창이 있는 브라우저. 카톡 말고 다른 앱(밴드·라인 등)으로도 보낸다
 //  - 링크 복사: 늘
-// 크게 하나(폰은 문자, 그 밖에 복사만 남으면 복사) + 나머지는 한 줄에 나란히(아이콘 위·글자 아래).
-// 문자가 없는 PC에서는 그 한 줄이 곧 누를 것이다(파랑 없음).
-// resend: 이미 보낸 뒤(E04)에는 '지금 누를 것'이 없으므로 파란 버튼 대신 회색 '문자 다시 보내기',
+// 크게 하나(카톡 → 없으면 문자 → 그 밖에 복사만 남으면 복사) + 나머지는 한 줄에 나란히(아이콘 위·글자 아래).
+// resend: 이미 보낸 뒤(E04)에는 '지금 누를 것'이 없으므로 큰 버튼은 회색 '카톡(문자) 다시 보내기',
 // 나머지는 글자 버튼으로 낮춰 화면 아래가 버튼 더미로 무거워지지 않게 한다
 export function ShareButtons({
   joinUrl,
@@ -79,7 +80,10 @@ export function ShareButtons({
   }, []);
 
   const message = inviteMessage(joinUrl);
-  const smsLabel = resend ? "문자 다시 보내기" : "문자로 링크 보내기";
+  // 카카오 키가 있으면 카톡이 큰 버튼, 문자는 한 줄의 하나
+  const kakaoMain = can.kakao;
+  const smsLabel = kakaoMain ? "문자 보내기" : resend ? "문자 다시 보내기" : "문자로 링크 보내기";
+  const kakaoLabel = resend ? "카톡 다시 보내기" : "카톡으로 링크 보내기";
 
   // 한 가지로 보냈으면 다른 방법이 실패했던 안내는 지운다 (보낸 뒤 화면에도 이 버튼들이 그대로 이어진다)
   function sent(via: SentVia) {
@@ -129,9 +133,11 @@ export function ShareButtons({
     }
   }
 
-  const ways: Way[] = [...(can.kakao ? (["kakao"] as const) : []), ...(can.share ? (["share"] as const) : []), "copy"];
-  // 크게 보일 하나: 폰은 문자. 문자가 없고 복사만 남으면 복사
-  const copyIsMain = !can.sms && ways.length === 1;
+  // 큰 버튼 하나 아래 한 줄: 카톡이 크면 문자도 이 줄에 선다
+  const ways: Way[] = [...(kakaoMain && can.sms ? (["sms"] as const) : []), ...(can.share ? (["share"] as const) : []), "copy"];
+  const smsIsMain = !kakaoMain && can.sms;
+  // 카톡도 문자도 없고 복사만 남으면 복사가 큰 버튼
+  const copyIsMain = !kakaoMain && !can.sms && ways.length === 1;
   const rest = copyIsMain ? [] : ways;
 
   const copyLabel = copied === "ok" ? "복사됐어요" : "링크 복사";
@@ -145,18 +151,17 @@ export function ShareButtons({
     const size = resend ? "m" : "l";
     const icon = resend ? "size-5" : "size-[22px]";
     const common = { size, stack: true, className: "whitespace-nowrap" } as const;
-    if (way === "kakao") {
+    if (way === "sms") {
       return (
         <Button
           key={way}
           {...common}
-          variant={resend ? "ghost" : "kakao"}
-          icon={<ChatBubbleIcon className={icon} />}
-          loading={kakaoLoading}
-          onClick={sendKakao}
-          data-testid="share-kakao"
+          variant={resend ? "ghost" : "secondary"}
+          icon={<MessageIcon className={icon} />}
+          onClick={sendSms}
+          data-testid="share-sms"
         >
-          카톡 보내기
+          {smsLabel}
         </Button>
       );
     }
@@ -183,7 +188,21 @@ export function ShareButtons({
 
   return (
     <div className={`flex flex-col ${resend ? "gap-1" : "gap-2"}`}>
-      {can.sms && (
+      {kakaoMain && (
+        // 카톡 보내기(ROOM-14)만 노랑 — 카카오 색. CLAUDE.md 디자인 토큰 예외
+        <Button
+          variant={resend ? "secondary" : "kakao"}
+          size={resend ? "l" : "xl"}
+          block
+          icon={<ChatBubbleIcon className="size-6" />}
+          loading={kakaoLoading}
+          onClick={sendKakao}
+          data-testid="share-kakao"
+        >
+          {kakaoLabel}
+        </Button>
+      )}
+      {smsIsMain && (
         <Button
           variant={resend ? "secondary" : "primary"}
           size={resend ? "l" : "xl"}

@@ -367,7 +367,7 @@ test("세션 화면 — 고객 부르기", async ({ browser, baseURL }) => {
         section: "room",
         ids: ["ROOM-05", "ROOM-06", "ROOM-07", "ROOM-08", "ROOM-14"],
         title: "고객님께 링크를 보내 주세요 (E03)",
-        note: "폰: 파란 문자 + 카톡 보내기·공유하기·링크 복사 한 줄. PC는 문자 앱이 없어 문자를 숨기고, 이 PC 브라우저는 공유 기능도 없어 카톡 보내기·링크 복사만. 그래서 PC 카드는 '보낼 링크'",
+        note: "폰: 노란 카톡 + 문자 보내기·공유하기·링크 복사 한 줄. PC는 문자 앱이 없어 문자를 숨긴다(카카오 키가 없으면 파란 문자가 크게)",
       },
       async () => {
         await expect(ep.getByTestId("eng-waiting")).toHaveAttribute("data-sent", "false", { timeout: 30_000 });

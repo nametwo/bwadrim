@@ -13,8 +13,8 @@ import { cameraFailureOf, type CameraFailure } from "@/app/join/[token]/camera-h
 import type { JoinProgress } from "./actions";
 
 // 고객 부르기 (피그마 E03 새 A/S 시작 → E04 고객 기다리는 중, ROOM-05·13).
-//  - 아직 안 보냈으면(E03): 큰 제목 '고객님께 링크를 보내 주세요' + 고객이 받을 글 그림, 아래 파란 '문자로 링크 보내기'(폰)와
-//    카톡 보내기·공유하기·링크 복사 한 줄 (이 기기에서 할 수 있는 것만, share-buttons.tsx)
+//  - 아직 안 보냈으면(E03): 큰 제목 '고객님께 링크를 보내 주세요' + 고객이 받을 글 그림, 아래 노란 '카톡으로 링크 보내기'와
+//    문자 보내기·공유하기·링크 복사 한 줄 (이 기기에서 할 수 있는 것만, 카카오 키가 없으면 파란 문자가 크게, share-buttons.tsx)
 //  - 보냈거나 고객이 링크를 열었으면(E04): 큰 제목이 지금 기다리는 단계 그 자체다('고객님이 카메라를 켜기를 기다리고 있어요').
 //    아래 진행 상황 카드가 링크 열림 → 카메라 허용 → 연결을 실시간으로 보여 준다. 누를 것이 없으니 파란 버튼 없이 '문자 다시 보내기'
 // 이 화면에 있는 동안 통화 대기는 이미 켜져 있다 — 고객이 카메라를 켜면 바로 통화 화면으로 바뀐다
@@ -123,11 +123,12 @@ export function WaitingView({
           <p className="text-body-m text-text-secondary">고객님이 카메라를 켜면 바로 연결돼요</p>
         </section>
 
-        {/* 고객이 받을 글 그대로 — 무엇을 보내는지 설명 대신 보여 준다. 그 글을 보내는 버튼(문자·공유하기)이 없는 PC는 링크만 */}
+        {/* 고객이 받을 글 그대로 — 무엇을 보내는지 설명 대신 보여 준다. 그 글을 보내는 버튼(문자·공유하기)이 없는 PC는 링크만.
+            카톡이 큰 버튼이면 카톡은 이 글 대신 카드(ROOM-14)가 가므로 '보낼 문자'라 하지 않고 '문자·공유로 보낼 글' */}
         <figure className="mt-8 flex flex-col gap-3 rounded-3xl bg-bg-subtle p-4" data-testid="eng-invite">
           <figcaption className="flex items-center gap-1.5 px-1 text-label-m text-text-secondary">
             {can.sms || can.share ? <MessageIcon className="size-4" /> : <LinkIcon className="size-4" />}
-            {can.sms ? "보낼 문자" : can.share ? "공유할 글" : "보낼 링크"}
+            {can.kakao && (can.sms || can.share) ? "문자·공유로 보낼 글" : can.sms ? "보낼 문자" : can.share ? "공유할 글" : "보낼 링크"}
           </figcaption>
           <p className="rounded-2xl rounded-tl-md bg-bg-page px-4 py-3 text-body-m whitespace-pre-line text-text-primary select-all">
             {can.sms || can.share ? inviteMessage(joinUrl) : joinUrl}
