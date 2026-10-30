@@ -59,6 +59,8 @@ test("카카오로 시작하기 → 카카오 동의 → 돌아오면 원래 가
 
     expect(authorize!.searchParams.get("provider")).toBe("kakao");
     expect(authorize!.searchParams.get("code_challenge")).toBeTruthy();
+    // 닉네임만 — 이메일·프로필 사진을 요청하면 카카오가 KOE205로 막는다
+    expect(authorize!.searchParams.get("scopes")).toBe("profile_nickname");
     const redirect = new URL(authorize!.searchParams.get("redirect_to")!);
     expect(redirect.origin).toBe(new URL(baseURL!).origin);
     expect(redirect.pathname).toBe("/auth/callback");
