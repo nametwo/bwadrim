@@ -129,3 +129,13 @@ test("로그아웃된 채 조건이 붙은 주소를 열면 로그인 뒤 그 �
     await ctx.close();
   }
 });
+
+test("앱 연결 파일: 로그인 없이 넘김 없이 열리고, 플레이 앱 패키지와 지문이 있다 (OPS-08)", async ({ request }) => {
+  const res = await request.get("/.well-known/assetlinks.json", { maxRedirects: 0 });
+  expect(res.status()).toBe(200);
+  expect(res.headers()["content-type"]).toContain("application/json");
+  const links = (await res.json()) as { relation: string[]; target: { package_name: string; sha256_cert_fingerprints: string[] } }[];
+  const app = links.find((l) => l.target.package_name === "com.bwadrim.app");
+  expect(app?.relation).toContain("delegate_permission/common.handle_all_urls");
+  for (const fp of app!.target.sha256_cert_fingerprints) expect(fp).toMatch(/^([0-9A-F]{2}:){31}[0-9A-F]{2}$/);
+});

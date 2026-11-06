@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.bwadrim.app",
+      "sha256_cert_fingerprints": [
+        "DD:92:52:D2:04:18:BA:AA:2A:82:7A:C6:78:75:9E:98:CE:19:54:3F:3E:5C:E7:E3:83:EE:CE:F9:97:D0:F7:A9"
+      ]
+    }
+  }
+]
