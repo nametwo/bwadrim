@@ -1040,7 +1040,7 @@ TURN 발급과 고객 지표 기록은 유효한 링크 토큰만 있으면 몇 
 ### OPS-08 · 플레이 스토어 앱 🚧
 엔지니어용 안드로이드 앱을 구글 플레이에 낸다. 웹을 크롬이 주소창 없이 띄우는 앱(TWA, Bubblewrap)으로 감싼다. 앱 안에서 도는 것은 크롬 그 자체라 통화·화면 꺼짐 방지·공유 창·사진 저장·카톡 보내기가 웹과 똑같이 될 것으로 본다(실기기 확인 전). 웹을 배포하면 앱도 바로 바뀐다. 아이폰은 나중이다. 고객은 지금처럼 앱 없이 링크로 들어온다.
 - **동작**:
-  - 앱 설정은 `android/twa-manifest.json` 하나다. 패키지 이름 `com.bwadrim.app`, 앱 이름 '봐드림', 열면 `https://bwadrim.com/dashboard`, 아이콘은 웹 앱 설정의 파란 카메라 로고, 알림 권한은 받지 않는다. targetSdk 36, minSdk 24.
+  - 앱 설정은 `android/twa-manifest.json` 하나다. 패키지 이름 `com.bwadrim.app`, 앱 이름 '봐드림', 열면 `https://bwadrim.com/dashboard`, 아이콘은 웹 앱 설정의 파란 '봐' 로고([NFR-12](#nfr-12--앱처럼-보이게-)), 알림 권한은 받지 않는다. targetSdk 36, minSdk 24.
   - 빌드는 GitHub Actions(`.github/workflows/android.yml`, 'Android 앱 빌드' → Run workflow)가 한다. PC에 아무것도 깔지 않는다. 업로드 키는 GitHub Secrets(`ANDROID_KEYSTORE_BASE64`·`ANDROID_KEYSTORE_PASSWORD`)에만 있고, 결과(`.aab`·`.apk`)는 실행 페이지의 Artifacts에서 받는다. versionCode는 실행 번호라 늘 올라간다. 순서는 `android/README.md`.
   - 엔지니어 화면(로그인·상담 목록·상담·통계)에 웹 앱 설정(`/manifest.webmanifest`)이 붙어 있다. 앱이 이름·아이콘·색을 여기서 가져간다. 고객 링크(`/join`)에는 붙이지 않아 고객 폰에 '앱 설치'가 뜨지 않는다. 삼성 인터넷에는 앱으로 설치되지 않는 설정(`/manifest-samsung.webmanifest`, `display: browser`)을 준다([BUG-24](#bug-24--삼성-인터넷에서-앱-설치가-play-프로텍트에-막힘-높음)).
   - 홈 화면에 추가하라고 권하는 화면은 없다([NFR-09](#nfr-09--엔지니어-홈-화면-앱--폐기-2026-10-19) 폐기). 크롬이 스스로 띄우는 작은 '앱 설치' 띠도 막는다. 서비스 워커는 쓰지 않고, 예전에 등록된 것(`/sw.js`)은 엔지니어 화면을 열 때 지운다.
