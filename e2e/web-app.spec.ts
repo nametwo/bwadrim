@@ -138,6 +138,13 @@ test("앱 연결 파일: 로그인 없이 넘김 없이 열리고, 플레이 앱
   const app = links.find((l) => l.target.package_name === "com.bwadrim.app");
   expect(app?.relation).toContain("delegate_permission/common.handle_all_urls");
   for (const fp of app!.target.sha256_cert_fingerprints) expect(fp).toMatch(/^([0-9A-F]{2}:){31}[0-9A-F]{2}$/);
+  // 플레이 앱 서명 키(플레이에서 받은 앱)와 업로드 키(직접 깐 APK) 둘 다 있어야 주소창이 안 뜬다
+  expect(app!.target.sha256_cert_fingerprints).toEqual(
+    expect.arrayContaining([
+      "6D:A8:86:90:E8:B1:0D:54:2A:B9:B6:3C:F1:78:C0:6B:D6:A9:6A:23:EB:2E:C6:B9:31:0F:B1:CE:24:FA:94:C9",
+      "DD:92:52:D2:04:18:BA:AA:2A:82:7A:C6:78:75:9E:98:CE:19:54:3F:3E:5C:E7:E3:83:EE:CE:F9:97:D0:F7:A9",
+    ]),
+  );
 });
 
 test("앱처럼: 글자는 선택되지 않고 입력칸·처리방침은 선택된다 · 번역 제안 없음 (NFR-12)", async ({ page }) => {
