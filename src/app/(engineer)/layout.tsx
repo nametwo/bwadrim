@@ -10,6 +10,11 @@ import { manifestHref } from "@/lib/browser-kind";
 // 예전에 삼성 인터넷에만 등록하던 서비스 워커(/sw.js)는 열 때 지운다 (BUG-24). 리액트보다 먼저 돌아야 해서 HTML에 바로 둔다
 const PAGE_SETUP = `(function(w){w.addEventListener('beforeinstallprompt',function(e){e.preventDefault();});var sw=navigator.serviceWorker;sw&&sw.getRegistrations().then(function(rs){rs.forEach(function(r){var u=(r.active||r.waiting||r.installing||{}).scriptURL||'';if(u.slice(-6)==='/sw.js')r.unregister();});}).catch(function(){});})(window);`;
 
+// 앱(TWA)·크롬의 위쪽 상태 띠를 화면 바탕색에 맞춘다 (NFR-12). 대시보드는 회색, 상담 화면은 흰색, 통화는 검정이라
+// 띠가 늘 흰색이면 화면과 따로 놀아 웹을 감싼 티가 난다. 화면 맨 위 왼쪽 가장자리(카드는 좌우 여백이 있어 바탕이 보이는 자리)에
+// 겹친 것 중 맨 위의 불투명한 바탕색을 읽어(반투명한 확인 창 뒤 가림막은 건너뜀) theme-color로 넣는다. 화면이 바뀌면(DOM 변화) 0.15초 안에 다시 읽는다. 캔버스로 색을 #hex로 바꾼다
+const STATUS_BAR_COLOR = `(function(d,w){var m,c,t,last;function pick(){t=0;var els=d.elementsFromPoint(2,1),i,x,p,h;c=c||d.createElement('canvas').getContext('2d',{willReadFrequently:true});for(i=0;i<els.length;i++){x=getComputedStyle(els[i]).backgroundColor;c.clearRect(0,0,1,1);c.fillStyle='#0000';c.fillStyle=x;c.fillRect(0,0,1,1);p=c.getImageData(0,0,1,1).data;if(p[3]===255){h='#'+((1<<24)|(p[0]<<16)|(p[1]<<8)|p[2]).toString(16).slice(1);if(h!==last){last=h;if(!m){m=d.querySelector('meta[name="theme-color"]');if(!m){m=d.createElement('meta');m.name='theme-color';d.head.appendChild(m);}}m.content=h;}return;}}}function soon(){if(!t)t=setTimeout(pick,150);}new MutationObserver(soon).observe(d.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:['class','style','data-state']});w.addEventListener('load',soon);w.addEventListener('resize',soon);soon();})(document,window);`;
+
 // 웹 앱 설정(manifest)은 브라우저마다 다르게 아래에서 붙인다 — 삼성 인터넷은 앱으로 설치되지 않는 설정 (BUG-24)
 export const metadata: Metadata = {
   appleWebApp: { capable: true, title: "봐드림", statusBarStyle: "default" },
@@ -34,6 +39,7 @@ export default async function EngineerLayout({ children }: LayoutProps<"/">) {
       <>
         {manifest}
         <script dangerouslySetInnerHTML={{ __html: PAGE_SETUP }} />
+        <script dangerouslySetInnerHTML={{ __html: STATUS_BAR_COLOR }} />
         {children}
       </>
     );

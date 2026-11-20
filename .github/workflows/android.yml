@@ -85,6 +85,23 @@ jobs:
         working-directory: android
         run: bubblewrap update --skipVersionUpgrade
 
+      # 앱처럼 보이게 다듬기 (NFR-12)
+      # - 시작 화면: Bubblewrap은 아이콘을 스플래시 그림(300dp)에 꽉 채워 넣어 화면 폭의 3/4만 한 아이콘이 뜬다.
+      #   안드로이드 앱 시작 화면처럼 가운데 작게(약 96dp) 둔 그림으로 바꾼다. 그림은 android/splash
+      # - 홈 화면 아이콘: Bubblewrap은 둥근 아이콘을 8.5dp 줄여 흰 바탕 위에 올려서 둘레에 흰 테가 보인다.
+      #   줄이는 건 maskable 안전 영역(80%)을 안드로이드가 보여 주는 영역(66%)에 맞추려는 것이라 그대로 두고,
+      #   바탕만 아이콘과 같은 파랑(brand-600)으로 바꿔 테가 안 보이게 한다
+      - name: 시작 화면·아이콘 다듬기
+        working-directory: android
+        run: |
+          for d in splash/drawable-*; do cp "$d/splash.png" "app/src/main/res/$(basename "$d")/splash.png"; done
+          ls -l app/src/main/res/drawable-*/splash.png
+          ICON=app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          grep -q '@android:color/white' "$ICON" || { echo "::error::Bubblewrap 아이콘 틀이 바뀌었어요: $ICON"; cat "$ICON"; exit 1; }
+          sed -i 's#<item android:drawable="@android:color/white" */>#<item><color android:color="\#FF2456E6" /></item>#' "$ICON"
+          grep -q 'FF2456E6' "$ICON" || { echo "::error::아이콘 바탕을 못 바꿨어요"; cat "$ICON"; exit 1; }
+          grep -n 'color' "$ICON"
+
       - name: 빌드·서명
         working-directory: android
         env:

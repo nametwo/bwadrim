@@ -207,3 +207,31 @@ test("앱처럼: 상담 목록에서 들어가면 오른쪽에서, 돌아오면 
     await ctx.close();
   }
 });
+
+test("앱처럼: 위쪽 띠 색(theme-color)이 화면 바탕을 따라간다 · 흰 로그인, 회색 상담 목록 (NFR-12)", async ({ browser, baseURL }) => {
+  const themeColor = (page: import("@playwright/test").Page) =>
+    page.evaluate(() => document.querySelector('meta[name="theme-color"]')?.getAttribute("content") ?? null);
+  const anon = await browser.newContext(PHONE);
+  try {
+    const page = await anon.newPage();
+    await page.goto("/login");
+    await expect.poll(() => themeColor(page)).toBe("#ffffff");
+  } finally {
+    await anon.close();
+  }
+  const { ctx, page } = await engineerPage(browser, baseURL!, PHONE);
+  try {
+    await page.goto("/dashboard");
+    await expect.poll(() => themeColor(page)).toBe("#eef0f3");
+    // 확인 창 같은 반투명 가림막은 건너뛰고 그 뒤 바탕색을 읽는다
+    await page.evaluate(() => {
+      const d = document.createElement("div");
+      d.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:99";
+      document.body.appendChild(d);
+    });
+    await page.waitForTimeout(400);
+    expect(await themeColor(page)).toBe("#eef0f3");
+  } finally {
+    await ctx.close();
+  }
+});
