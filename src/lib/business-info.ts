@@ -15,7 +15,7 @@ export const BUSINESS = {
   /** 문의·개인정보 요청 메일 (Cloudflare 메일 전달, OPS-07) */
   email: "contact@bwadrim.com",
   /** 개인정보 보호책임자 */
-  privacyOfficer: { name: "", phone: "" },
+  privacyOfficer: { name: "이선용", phone: "" },
   /** 처리방침 시행일 (2026-10-20 형식) */
   privacyEffectiveDate: "",
 } as const;
