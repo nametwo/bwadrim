@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import type { CallQuality } from "@/lib/webrtc/call";
 import { ChevronLeftIcon } from "@/components/ui/icons";
+import { NAV_BACK } from "@/components/page-transition";
 
 // 엔지니어 세션 화면 조각들 (피그마 E03~E11, P01).
 
@@ -46,7 +47,7 @@ export function AppBar({
             <ChevronLeftIcon className="size-6" />
           </button>
         ) : (
-          <Link href="/dashboard" aria-label="상담 목록으로" className={BACK_CLASS}>
+          <Link href="/dashboard" transitionTypes={NAV_BACK} aria-label="상담 목록으로" className={BACK_CLASS}>
             <ChevronLeftIcon className="size-6" />
           </Link>
         ))}

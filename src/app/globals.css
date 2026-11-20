@@ -184,13 +184,15 @@
   --drop-shadow-signal: 0 2px 6px var(--color-black-50);
 }
 
-/* 앱처럼 (NFR-12): 누를 때 회색 번쩍임 없음, 아래로 당겨 새로고침·끝에서 튕김 없음 */
+/* 앱처럼 (NFR-12): 누를 때 회색 번쩍임 없음, 아래로 당겨 새로고침·끝에서 튕김 없음.
+   안드로이드 크롬(앱 안 크롬 133에서 확인)은 html에만 주면 당겨 새로고침을 그대로 해서 body에도 준다 */
 html {
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior-y: none;
 }
 
 body {
+  overscroll-behavior-y: none;
   /* 앱처럼 (NFR-12): 글자를 꾹 눌러도 선택·검색 창이 뜨지 않고, 두 번 톡 눌러 확대되지 않는다.
      입력칸은 아래에서 다시 켜고, 복사할 글(링크 주소·처리방침)은 select-text·select-all로 켠다 */
   -webkit-user-select: none;
@@ -265,5 +267,82 @@ a {
   }
   100% {
     opacity: 0;
+  }
+}
+
+/* 앱처럼 (NFR-12): 화면 넘김 — 상담 목록에서 들어가면 오른쪽에서, 돌아오면 왼쪽에서 밀려 들어온다
+   (src/components/page-transition.tsx). 앱처럼 짧게: 나가는 화면은 빨리 흐려지고 들어오는 화면이 미끄러져 온다 */
+::view-transition {
+  pointer-events: none; /* 넘기는 동안 누른 것도 화면에 닿게 */
+}
+::view-transition-old(.nav-forward) {
+  --slide-offset: -48px;
+  animation:
+    120ms ease-in both page-fade reverse,
+    260ms cubic-bezier(0.2, 0, 0, 1) both page-slide reverse;
+}
+::view-transition-new(.nav-forward) {
+  --slide-offset: 48px;
+  animation:
+    180ms ease-out 60ms both page-fade,
+    260ms cubic-bezier(0.2, 0, 0, 1) both page-slide;
+}
+::view-transition-old(.nav-back) {
+  --slide-offset: 48px;
+  animation:
+    120ms ease-in both page-fade reverse,
+    260ms cubic-bezier(0.2, 0, 0, 1) both page-slide reverse;
+}
+::view-transition-new(.nav-back) {
+  --slide-offset: -48px;
+  animation:
+    180ms ease-out 60ms both page-fade,
+    260ms cubic-bezier(0.2, 0, 0, 1) both page-slide;
+}
+@keyframes page-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes page-slide {
+  from {
+    translate: var(--slide-offset);
+  }
+  to {
+    translate: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(*),
+  ::view-transition-new(*),
+  ::view-transition-group(*) {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+  }
+}
+
+/* 뼈대 화면(page-skeleton)은 아주 빨리 끝나면 보이지 않게, 잠깐 늦게 옅게 나타난다 — 번쩍임 방지 */
+@keyframes skeleton-in {
+  0%,
+  35% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* '새 A/S 시작'을 누르자마자 상담 화면 뼈대가 들어오는 움직임 — 화면 넘김(nav-forward)과 같은 방향·속도 */
+@keyframes page-push {
+  from {
+    opacity: 0;
+    translate: 48px;
+  }
+  to {
+    opacity: 1;
+    translate: 0;
   }
 }

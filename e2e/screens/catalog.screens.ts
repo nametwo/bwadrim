@@ -283,11 +283,20 @@ test("대시보드·통계", async ({ browser, baseURL }) => {
     );
 
     await mock("/__faults", { failRoomInsert: true });
-    await shot({ section: "dashboard", ids: ["ROOM-01"], title: "새 A/S 만드는 중…" }, async () => {
-      await ep.getByRole("button", { name: /새 A\/S 시작/ }).click();
-      await expect(ep.getByRole("button", { name: /만드는 중/ })).toBeVisible();
-      return [eng(ep)];
-    });
+    await shot(
+      {
+        section: "dashboard",
+        ids: ["ROOM-01", "NFR-12"],
+        title: "새 A/S 만드는 중… (상담 화면 뼈대)",
+        note: "누르자마자 상담 화면 뼈대가 오른쪽에서 밀려 들어오고, 상담이 만들어지면 진짜 화면이 같은 자리에 뜬다. 다른 화면으로 넘어갈 때(loading.tsx)도 같은 뼈대",
+      },
+      async () => {
+        await ep.getByRole("button", { name: /새 A\/S 시작/ }).click();
+        await expect(ep.getByRole("button", { name: /만드는 중/ })).toBeAttached();
+        await expect(ep.getByTestId("page-skeleton")).toBeVisible();
+        return [eng(ep)];
+      },
+    );
     release();
     await shot(
       { section: "dashboard", ids: ["ROOM-01"], title: "새 A/S 만들기 실패 (오류 화면)", note: "가짜 서버가 상담 만들기를 거부하게 해서 띄움. 개발 모드 오류 표시는 가림" },

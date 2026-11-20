@@ -11,6 +11,7 @@ import {
   type MetricRoom,
   type Ratio,
 } from "@/lib/metrics";
+import { NAV_BACK } from "@/components/page-transition";
 
 export const metadata: Metadata = {
   title: "통계 | 봐드림",
@@ -136,6 +137,7 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
         <header className="flex min-h-14 items-center">
           <Link
             href="/dashboard"
+            transitionTypes={NAV_BACK}
             className="-ml-2 flex h-touch items-center gap-0.5 rounded-xl pr-3 pl-1 text-label-m text-text-secondary active:bg-border"
           >
             <ChevronLeftIcon className="size-6" />

@@ -15,6 +15,7 @@ import { StatusChip } from "@/components/ui/status-chip";
 import { createRoom } from "./actions";
 import { NewRoomButton } from "./new-room-button";
 import { MicAheadLink } from "./mic-ahead-link";
+import { NAV_FORWARD } from "@/components/page-transition";
 
 export const metadata: Metadata = {
   title: "상담 목록 | 봐드림",
@@ -106,6 +107,7 @@ export default async function DashboardPage() {
           <div className="-mr-2 flex items-center">
             <Link
               href="/stats"
+              transitionTypes={NAV_FORWARD}
               className="flex h-touch items-center gap-1.5 rounded-xl px-3 text-label-m text-text-secondary active:bg-border"
             >
               <ChartIcon className="size-5" />
@@ -113,6 +115,7 @@ export default async function DashboardPage() {
             </Link>
             <Link
               href="/account"
+              transitionTypes={NAV_FORWARD}
               data-testid="account-link"
               className="flex h-touch items-center gap-1.5 rounded-xl px-3 text-label-m text-text-secondary active:bg-border"
             >
@@ -141,7 +144,8 @@ export default async function DashboardPage() {
                       <MicAheadLink
                         roomId={room.id}
                         href={`/room/${room.id}`}
-                        className="flex items-center gap-3 px-5 py-3 active:bg-bg-subtle"
+                        transitionTypes={NAV_FORWARD}
+                        className="flex items-center gap-3 px-5 py-3 transition-colors duration-100 active:bg-bg-muted"
                       >
                         <span
                           className={`grid size-11 flex-none place-items-center rounded-full ${
@@ -202,7 +206,11 @@ export default async function DashboardPage() {
                   return (
                     <li key={room.id}>
                       {/* 피그마 SessionRow: 받는 분 이름표가 있으면 그 이름(ROOM-16), 없으면 시작~끝 시각으로 구분한다 */}
-                      <Link href={`/room/${room.id}`} className="flex items-center gap-3 px-5 py-3 active:bg-bg-subtle">
+                      <Link
+                        href={`/room/${room.id}`}
+                        transitionTypes={NAV_FORWARD}
+                        className="flex items-center gap-3 px-5 py-3 transition-colors duration-100 active:bg-bg-muted"
+                      >
                         <span className="flex min-w-0 flex-1 flex-col">
                           {/* 서버(Vercel)는 UTC라서 한국 시간으로 고정해 보여 준다 (BUG-06) */}
                           <span className="truncate text-label-l" data-testid={label ? "room-label" : undefined}>

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { ChevronLeftIcon, LogoutIcon } from "@/components/ui/icons";
 import { logout } from "../login/actions";
 import { DeleteAccount } from "./delete-account";
+import { NAV_BACK } from "@/components/page-transition";
 
 export const metadata: Metadata = {
   title: "내 계정 | 봐드림",
@@ -39,6 +40,7 @@ export default async function AccountPage() {
       <header className="flex min-h-14 items-center">
         <Link
           href="/dashboard"
+            transitionTypes={NAV_BACK}
           className="-ml-2 flex h-touch items-center gap-0.5 rounded-xl pr-3 pl-1 text-label-m text-text-secondary active:bg-border"
         >
           <ChevronLeftIcon className="size-6" />

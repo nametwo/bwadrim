@@ -14,6 +14,7 @@ import { kakaoShareArgs } from "@/lib/kakao-webhook";
 import { SITE_URL } from "@/lib/site-url";
 import { CallPanel } from "./call-panel";
 import { RecipientCard } from "./recipient-card";
+import { NAV_BACK } from "@/components/page-transition";
 
 export const metadata: Metadata = {
   title: "원격 A/S | 봐드림",
@@ -91,6 +92,7 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
         <header className="flex min-h-14 items-center">
           <Link
             href="/dashboard"
+            transitionTypes={NAV_BACK}
             className="-ml-2 flex h-touch items-center gap-0.5 rounded-xl pr-3 pl-1 text-label-m text-text-secondary active:bg-bg-muted"
           >
             <ChevronLeftIcon className="size-6" />
@@ -125,7 +127,11 @@ export default async function RoomPage({ params }: PageProps<"/room/[id]">) {
           <form action={createRoom}>
             <NewRoomButton />
           </form>
-          <Link href="/dashboard" className={buttonClass({ variant: "ghost", size: "m", block: true })}>
+          <Link
+            href="/dashboard"
+            transitionTypes={NAV_BACK}
+            className={buttonClass({ variant: "ghost", size: "m", block: true })}
+          >
             상담 목록으로
           </Link>
         </BottomCta>

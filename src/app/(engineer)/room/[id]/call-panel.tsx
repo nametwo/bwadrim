@@ -61,6 +61,7 @@ import { AppBar, AppBarAction, CallTimer, QualityPill, ShortcutsBox } from "./ca
 import type { KakaoShareArgs } from "@/lib/kakao-webhook";
 import { WaitingView } from "./waiting-view";
 import { PhotoSaveView, SavePhotosFirst, type PhotoNotice } from "./photo-save-view";
+import { NAV_BACK } from "@/components/page-transition";
 
 // 누가 통화를 끝냈는지. null = 고객과 연결된 적 없이 닫음
 type Closer = "engineer" | "customer" | null;
@@ -674,7 +675,7 @@ export function CallPanel({
       return;
     }
     if (then === "login") router.replace(`/login?next=/room/${roomId}`);
-    else if (then === "dashboard") router.push("/dashboard");
+    else if (then === "dashboard") router.push("/dashboard", { transitionTypes: NAV_BACK });
     else {
       closingRef.current = true;
       stopSession();
@@ -747,7 +748,7 @@ export function CallPanel({
       // 찍은 사진이 있으면 지워지기 전에 저장할지 묻는다. 없으면 고객이 끝낸 경우만 알리고, 내가 끝냈으면 바로 목록으로
       if (hasPhotos) setState({ phase: "photos", by, relogin: false, notice: null });
       else if (by === "customer") setState({ phase: "ended" });
-      else router.replace("/dashboard");
+      else router.replace("/dashboard", { transitionTypes: NAV_BACK });
       return;
     }
     if (result?.reason === "auth") {
@@ -822,7 +823,9 @@ export function CallPanel({
         byCustomer={state.by === "customer"}
         relogin={state.relogin}
         notice={state.notice}
-        onLeave={() => router.replace(state.relogin ? `/login?next=/room/${roomId}` : "/dashboard")}
+        onLeave={() =>
+          router.replace(state.relogin ? `/login?next=/room/${roomId}` : "/dashboard", { transitionTypes: NAV_BACK })
+        }
       />
     );
   }
@@ -835,7 +838,7 @@ export function CallPanel({
         icon={<PhoneOffIcon className="size-10" />}
         title="고객님이 통화를 끝냈어요"
         actions={
-          <Button size="xl" block onClick={() => router.replace("/dashboard")}>
+          <Button size="xl" block onClick={() => router.replace("/dashboard", { transitionTypes: NAV_BACK })}>
             상담 목록으로
           </Button>
         }

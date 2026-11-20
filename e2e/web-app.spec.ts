@@ -143,6 +143,8 @@ test("앱 연결 파일: 로그인 없이 넘김 없이 열리고, 플레이 앱
 test("앱처럼: 글자는 선택되지 않고 입력칸·처리방침은 선택된다 · 번역 제안 없음 (NFR-12)", async ({ page }) => {
   await page.goto("/login");
   await expect(page.locator("html")).toHaveAttribute("translate", "no");
+  // 안드로이드 크롬은 translate="no"만으로는 번역 제안을 계속 띄운다 — 구글이 읽는 메타가 있어야 한다
+  await expect(page.locator('head meta[name="google"]')).toHaveAttribute("content", "notranslate");
   const style = (sel: string) =>
     page.locator(sel).first().evaluate((el) => {
       const cs = getComputedStyle(el);
@@ -150,11 +152,58 @@ test("앱처럼: 글자는 선택되지 않고 입력칸·처리방침은 선택
     });
   expect((await style("body")).select).toBe("none");
   expect((await style("body")).touch).toBe("manipulation");
+  // 당겨서 새로고침: 안드로이드 크롬은 html에만 주면 그대로 새로고침한다(2026-11-20 앱 안 크롬 133) — body에도
   expect(await page.locator("html").evaluate((el) => getComputedStyle(el).overscrollBehaviorY)).toBe("none");
+  expect(await page.locator("body").evaluate((el) => getComputedStyle(el).overscrollBehaviorY)).toBe("none");
 
   await page.getByTestId("email-login-open").click();
   expect((await style('input[name="email"]')).select).toBe("text");
 
   await page.goto("/privacy");
   expect((await style("main")).select).toBe("text");
+});
+
+test("앱처럼: 링크·글자를 꾹 눌러도 크롬 메뉴가 뜨지 않고, 입력칸·복사할 글에서는 뜬다 (NFR-12)", async ({ page }) => {
+  await page.goto("/login");
+  // 크롬은 꾹 누르면 contextmenu를 보내고, 막히지 않으면 '새 탭에서 열기'·'링크 다운로드' 메뉴를 띄운다
+  const menuBlocked = (sel: string) =>
+    page.locator(sel).first().evaluate((el) => {
+      const e = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+      el.dispatchEvent(e);
+      return e.defaultPrevented;
+    });
+  expect(await menuBlocked("a")).toBe(true);
+  expect(await menuBlocked("h1")).toBe(true);
+  await page.getByTestId("email-login-open").click();
+  expect(await menuBlocked('input[name="email"]')).toBe(false);
+
+  await page.goto("/privacy");
+  expect(await menuBlocked("main p")).toBe(false);
+});
+
+test("앱처럼: 상담 목록에서 들어가면 오른쪽에서, 돌아오면 왼쪽에서 밀려 들어온다 (NFR-12)", async ({ browser, baseURL }) => {
+  const { ctx, page } = await engineerPage(browser, baseURL!, PHONE);
+  try {
+    await page.goto("/dashboard");
+    // 넘김 효과: 들어가는 링크는 nav-forward, 돌아오는 링크는 nav-back으로 넘긴다
+    const types: string[][] = [];
+    await page.exposeFunction("__vt", (t: string[]) => types.push(t));
+    await page.evaluate(() => {
+      const orig = document.startViewTransition?.bind(document);
+      if (!orig) return;
+      document.startViewTransition = ((arg: StartViewTransitionOptions | ViewTransitionUpdateCallback) => {
+        const t = typeof arg === "object" && arg && "types" in arg ? [...(arg.types ?? [])] : [];
+        (window as unknown as { __vt: (t: string[]) => void }).__vt(t);
+        return orig(arg as StartViewTransitionOptions);
+      }) as typeof document.startViewTransition;
+    });
+    await page.getByRole("link", { name: "통계" }).click();
+    await expect(page).toHaveURL(/\/stats$/);
+    await expect(page.getByText(/최근 30일 · 상담/)).toBeVisible();
+    await page.getByRole("link", { name: "상담 목록" }).click();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect.poll(() => types.flat()).toEqual(expect.arrayContaining(["nav-forward", "nav-back"]));
+  } finally {
+    await ctx.close();
+  }
 });
