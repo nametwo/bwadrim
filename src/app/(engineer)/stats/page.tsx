@@ -30,7 +30,7 @@ const MAX_PAGES = 50;
 const ROOM_CHUNK = 100;
 const PARALLEL = 4;
 // 지표(metrics.ts)에 쓰는 이벤트만 받는다 — room_created·kakao_sent·도구 기록 등은 세지 않는다
-const METRIC_EVENTS = ["link_opened", "camera_granted", "connected", "relay_used", "pointer_used", "freeze_used", "ended"];
+const METRIC_EVENTS = ["link_opened", "camera_granted", "connected", "connect_failed", "relay_used", "pointer_used", "freeze_used", "ended"];
 
 async function fetchAll<T>(
   page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
@@ -107,7 +107,7 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
       detail: `링크를 연 ${m.linkToCamera.of}건 중 ${m.linkToCamera.hit}건`,
     },
     {
-      title: "연결 실패율(추정)",
+      title: "연결 실패율",
       value: percent(m.connectFailure),
       detail: `카메라를 켠 ${m.connectFailure.of}건 중 ${m.connectFailure.hit}건`,
     },
@@ -126,7 +126,10 @@ export default async function StatsPage({ searchParams }: PageProps<"/stats">) {
   // 숫자를 읽을 때 주의할 점 — 카드마다 붙이면 글이 많아져 맨 아래에 모아 접어 둔다
   const notes: [string, string][] = [
     ["카메라 허용", "링크를 연 상담 가운데 고객님이 카메라를 켠 비율이에요."],
-    ["연결 실패율", "연결 준비를 안 눌렀거나 고객님이 기다리다 나간 경우까지 들어가서 실제보다 높게 나와요."],
+    [
+      "연결 실패율",
+      `고객님 폰이 연결에 실패했다고 알려 온 상담만 셌어요. 카메라를 켰지만 연결되기 전에 끝난 상담 ${m.notConnected}건은 넣지 않았어요.`,
+    ],
     ["TURN 중계", "비용을 따질 때 보는 숫자예요. 5G끼리처럼 바로 연결이 안 되면 중계 서버를 거쳐요."],
     ["상담당 평균", "고객님과 연결됐던 상담만 셌어요. 통화 시간이 아니라 상담을 만든 때부터 쟀어요."],
   ];

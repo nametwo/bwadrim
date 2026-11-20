@@ -72,6 +72,7 @@ async function seedDashboard() {
       ev(5, "ended", { duration_sec: 300, connected: false }),
       ev(6, "link_opened"),
       ev(6, "camera_granted"),
+      ev(6, "connect_failed", { stage: "connecting" }), // 통계의 연결 실패율(DATA-02)
       ...["link_opened", "camera_granted", "connected", "freeze_used", "anchor_used", "photo_taken", "resolved_remotely"].map((e) => ev(7, e)),
       ev(7, "ended", { duration_sec: 420, resolved_remotely: true }),
       ev(8, "link_opened"),

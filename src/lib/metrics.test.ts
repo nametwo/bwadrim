@@ -118,8 +118,9 @@ describe("computeMetrics", () => {
       ev("preview", "camera_granted"),
     ]);
     expect(m.linkToCamera).toEqual({ hit: 1, of: 2 });
-    // 연결 실패율은 카메라를 켠 상담 기준이라 그대로 들어간다
-    expect(m.connectFailure).toEqual({ hit: 2, of: 2 });
+    // 연결 실패율은 카메라를 켠 상담 기준이라 분모에 그대로 들어간다(실패 기록은 없어 연결 전에 끝난 상담)
+    expect(m.connectFailure).toEqual({ hit: 0, of: 2 });
+    expect(m.notConnected).toBe(2);
   });
 
   it("비율은 이벤트 개수가 아니라 상담 수로 센다", () => {
@@ -135,7 +136,7 @@ describe("computeMetrics", () => {
       ev("a", "relay_used"),
       ev("a", "pointer_used"),
       ev("a", "freeze_used"),
-      // b: 카메라 허용했지만 연결 기록 없음 → 연결 실패(추정)
+      // b: 카메라 허용했지만 연결 기록 없음, 실패 기록도 없음 → 연결 전에 끝남
       ev("b", "link_opened"),
       ev("b", "camera_granted"),
       // c: 링크만 열고 거부
@@ -148,9 +149,41 @@ describe("computeMetrics", () => {
       ev("d", "pointer_used"),
     ]);
     expect(m.linkToCamera).toEqual({ hit: 3, of: 4 });
-    expect(m.connectFailure).toEqual({ hit: 1, of: 3 });
+    expect(m.connectFailure).toEqual({ hit: 0, of: 3 });
+    expect(m.notConnected).toBe(1);
     expect(m.relay).toEqual({ hit: 1, of: 2 });
     expect(m.pointerUsed).toEqual({ hit: 2, of: 2 });
     expect(m.freezeUsed).toEqual({ hit: 1, of: 2 });
+  });
+
+  it("연결 실패율: 고객 폰이 연결 실패를 알려 왔고 끝내 연결되지 않은 상담만. 다시 연결됐거나 통화 중 끊김은 빼고, 기록 없는 상담은 따로 센다 (DATA-02)", () => {
+    const rooms = ["fail", "retry", "drop", "left", "ok"].map((id) => ({ id }));
+    const m = computeMetrics(rooms, [
+      // fail: 연결하다 실패하고 끝
+      ev("fail", "camera_granted"),
+      ev("fail", "connect_failed", { stage: "connecting" }),
+      ev("fail", "connect_failed", { stage: "connecting" }),
+      // retry: 실패했다가 다시 연결됨 → 실패 아님
+      ev("retry", "camera_granted"),
+      ev("retry", "connect_failed", { stage: "connecting" }),
+      ev("retry", "connected"),
+      // drop: 연결됐다가 통화 중 끊김 → 연결 실패 아님
+      ev("drop", "camera_granted"),
+      ev("drop", "connected"),
+      ev("drop", "connect_failed", { stage: "call" }),
+      // left: 카메라만 켜고 기록 없이 끝 → 연결 전에 끝남
+      ev("left", "camera_granted"),
+      // ok
+      ev("ok", "camera_granted"),
+      ev("ok", "connected"),
+    ]);
+    expect(m.connectFailure).toEqual({ hit: 1, of: 5 });
+    expect(m.notConnected).toBe(1);
+  });
+
+  it("연결 실패율: stage가 없는 예전·이상한 실패 기록은 연결하던 중 실패로 본다", () => {
+    const m = computeMetrics([{ id: "a" }], [ev("a", "camera_granted"), ev("a", "connect_failed")]);
+    expect(m.connectFailure).toEqual({ hit: 1, of: 1 });
+    expect(m.notConnected).toBe(0);
   });
 });

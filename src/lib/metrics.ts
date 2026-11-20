@@ -21,7 +21,8 @@ export interface Ratio {
 export interface Metrics {
   sessions: number;
   linkToCamera: Ratio; // 링크 연 세션 중 카메라 허용
-  connectFailure: Ratio; // 카메라 허용한 세션 중 연결 기록이 없는 세션 (추정치)
+  connectFailure: Ratio; // 카메라 허용한 세션 중 고객 폰이 연결 실패를 알려 왔고 끝내 연결되지 않은 세션 (connect_failed, 2026-10-23부터)
+  notConnected: number; // 카메라 허용했지만 연결도 실패 기록도 없는 세션 (연결 준비를 안 눌렀거나 기다리다 나감. 2026-10-23 전의 실패도 여기 들어간다)
   relay: Ratio; // 연결된 세션 중 TURN 경유
   pointerUsed: Ratio; // 연결된 세션 중 레이저 포인터 사용
   freezeUsed: Ratio; // 연결된 세션 중 화면 멈춤 사용
@@ -55,8 +56,11 @@ export function computeMetrics(
   const withEvent = new Map<string, Set<string>>();
   // 세션마다 시간 하나. 연결 없이 닫은 세션은 빼야 평균이 부풀지 않는다
   const durations = new Map<string, number>();
+  // 연결하던 중 실패한 세션. 통화 중 끊김(stage: 'call')은 연결 실패가 아니다
+  const failedToConnect = new Set<string>();
   for (const e of events) {
     if (!ids.has(e.room_id)) continue;
+    if (e.name === "connect_failed" && e.props?.stage !== "call") failedToConnect.add(e.room_id);
     let set = withEvent.get(e.name);
     if (!set) withEvent.set(e.name, (set = new Set()));
     set.add(e.room_id);
@@ -80,9 +84,10 @@ export function computeMetrics(
     sessions: rooms.length,
     linkToCamera: { hit: both(opened, granted), of: opened.size },
     connectFailure: {
-      hit: [...granted].filter((id) => !connected.has(id)).length,
+      hit: [...granted].filter((id) => failedToConnect.has(id) && !connected.has(id)).length,
       of: granted.size,
     },
+    notConnected: [...granted].filter((id) => !connected.has(id) && !failedToConnect.has(id)).length,
     relay: { hit: both(connected, has("relay_used")), of: connected.size },
     pointerUsed: { hit: both(connected, has("pointer_used")), of: connected.size },
     freezeUsed: { hit: both(connected, has("freeze_used")), of: connected.size },
