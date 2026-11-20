@@ -13,6 +13,8 @@ test("로그인 화면 아래 처리방침 링크로 로그인 없이 처리방�
   const footer = page.getByTestId("business-footer");
   await expect(footer).toContainText("에코정보통신");
   await expect(footer).toContainText("contact@bwadrim.com");
+  await expect(footer).toContainText("대표 이재덕");
+  await expect(footer).toContainText("사업자등록번호 305-05-83181");
   // '카카오로 시작하기'는 그대로 있다 (AUTH-10)
   await expect(page.getByTestId("kakao-login")).toBeVisible();
 
@@ -20,6 +22,10 @@ test("로그인 화면 아래 처리방침 링크로 로그인 없이 처리방�
   await expect(page).toHaveURL(/\/privacy$/);
   await expect(page.getByRole("heading", { name: "개인정보 처리방침", level: 1 })).toBeVisible();
   await expect(page.getByText("이름과 전화번호는 받지 않아요.")).toBeVisible();
+  // 플레이 심사 전에 채울 값이 다 들어 있다 (빈 값은 '정하는 중'으로 보인다)
+  await expect(page.getByText("정하는 중")).toHaveCount(0);
+  await expect(page.getByText("이선용")).toBeVisible();
+  await expect(page.getByText("010-7189-1444")).toBeVisible();
   await expect(page.locator('link[rel="manifest"]')).toHaveCount(0);
   // 로고는 링크가 아니다 — 고객이 눌러 엔지니어 로그인 화면으로 가지 않게
   await expect(page.locator("header").getByRole("link")).toHaveCount(0);
