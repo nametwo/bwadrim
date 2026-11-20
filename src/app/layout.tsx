@@ -16,7 +16,8 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="ko" className="h-full antialiased">
+    // translate="no": 영어로 맞춘 폰에서 크롬이 '번역할까요?'를 띄우지 않게 (NFR-12)
+    <html lang="ko" translate="no" className="h-full antialiased">
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

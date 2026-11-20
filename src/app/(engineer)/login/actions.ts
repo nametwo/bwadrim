@@ -1,7 +1,7 @@
 "use server";
 
 import { headers } from "next/headers";
-import { redirect } from "next/navigation";
+import { redirect, RedirectType } from "next/navigation";
 import { isAuthRetryableFetchError } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { safeNext } from "@/lib/safe-next";
@@ -37,7 +37,9 @@ export async function login(
     return { error: "이메일이나 비밀번호가 맞지 않아요.", email };
   }
 
-  redirect(safeNext(String(formData.get("next") ?? "")));
+  // 로그인 화면을 기록에서 지운다 — 앱에서 뒤로가기를 눌러 로그인 화면으로 돌아가지 않게 (NFR-12).
+  // 서버 액션의 redirect는 기본이 push라 따로 정한다
+  redirect(safeNext(String(formData.get("next") ?? "")), RedirectType.replace);
 }
 
 // 카카오로 시작하기 (AUTH-10). 처음이면 그대로 가입된다.
@@ -56,8 +58,9 @@ export async function loginWithKakao(formData: FormData) {
     provider: "kakao",
     options: { redirectTo: callback },
   });
-  if (error || !data.url) redirect("/login?error=kakao");
-  redirect(data.url);
+  if (error || !data.url) redirect("/login?error=kakao", RedirectType.replace);
+  // 로그인 화면 자리에 카카오 화면이 들어간다. 돌아와 상담 목록이 뜬 뒤 뒤로가기로 로그인 화면이 나오지 않게 (NFR-12)
+  redirect(data.url, RedirectType.replace);
 }
 
 // 로그아웃 (AUTH-06). 이 기기(브라우저)만 로그아웃한다 — 사무실 PC에서 로그아웃했다고 폰의 홈 화면 앱까지
@@ -65,5 +68,5 @@ export async function loginWithKakao(formData: FormData) {
 export async function logout() {
   const supabase = await createClient();
   await supabase.auth.signOut({ scope: "local" });
-  redirect("/login");
+  redirect("/login", RedirectType.replace);
 }
