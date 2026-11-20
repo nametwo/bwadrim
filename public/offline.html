@@ -1,0 +1,58 @@
+<!doctype html>
+<!--
+  앱(TWA)에서 인터넷이 끊겼을 때 크롬 '오프라인' 화면 대신 보이는 화면 (NFR-12).
+  서비스 워커(/offline-sw.js)가 미리 받아 두었다가, 화면을 여는 요청이 실패하면 이 글을 그 주소에 내준다.
+  리액트·Tailwind 없이 혼자 떠야 해서 색은 src/app/globals.css 토큰 값을 옮겨 적었다(바꾸면 같이 고칠 것):
+  gray-0 #ffffff, text-primary gray-900 #161a20, text-secondary gray-600 #515a68, warning-tint amber-50 #fff5db,
+  text-warning amber-700 #8a5a00, primary brand-600 #2456e6, primary-pressed brand-700 #1a3fb0.
+  모양은 고객 화면 '잠깐 연결이 안 돼요'(ui/notice-screen)와 같다.
+-->
+<html lang="ko" translate="no">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="google" content="notranslate" />
+    <title>봐드림</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #ffffff; overscroll-behavior-y: none; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Malgun Gothic", sans-serif;
+        color: #161a20; display: flex; flex-direction: column; -webkit-user-select: none; user-select: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 0 20px; }
+      .icon { width: 96px; height: 96px; border-radius: 50%; background: #fff5db; color: #8a5a00; display: flex; align-items: center; justify-content: center; margin-bottom: 24px; }
+      h1 { margin: 0 0 8px; font-size: 26px; line-height: 34px; letter-spacing: -0.035em; font-weight: 700; }
+      p { margin: 0; font-size: 17px; line-height: 26px; color: #515a68; }
+      .cta { padding: 16px 20px max(16px, env(safe-area-inset-bottom)); }
+      button {
+        width: 100%; height: 56px; border: 0; border-radius: 16px; background: #2456e6; color: #ffffff;
+        font: inherit; font-size: 17px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px;
+        touch-action: manipulation;
+      }
+      button:active { background: #1a3fb0; }
+      svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+  </head>
+  <body>
+    <main data-testid="offline">
+      <div class="icon" aria-hidden="true">
+        <svg width="40" height="40" viewBox="0 0 24 24"><path d="M2 2L22 22" /><path d="M8.53 16.11C9.55 15.39 10.76 15 12.01 15C13.25 15 14.46 15.39 15.48 16.11M5 12.55C6.1 11.63 7.37 10.94 8.73 10.51M16.72 11.06C17.58 11.45 18.37 11.95 19.08 12.55M1.42 9C2.84 7.75 4.49 6.78 6.28 6.14M10.71 5.05C14.97 4.71 19.2 6.11 22.58 9M12 20H12.01" /></svg>
+      </div>
+      <h1>인터넷이 끊겼어요</h1>
+      <p>와이파이나 데이터가 다시 켜지면<br />이 화면이 저절로 바뀌어요.</p>
+    </main>
+    <div class="cta">
+      <button type="button" onclick="location.reload()">
+        <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 3V8H16" /><path d="M21 8L18.1 5.3C16.8 4.13 15.19 3.37 13.46 3.11C11.73 2.86 9.97 3.12 8.39 3.86C6.81 4.6 5.49 5.79 4.59 7.29C3.7 8.78 3.27 10.51 3.36 12.25" /><path d="M3 21V16H8" /><path d="M3 16L5.9 18.7C7.2 19.87 8.81 20.63 10.54 20.89C12.27 21.14 14.03 20.88 15.61 20.14C17.19 19.4 18.51 18.21 19.41 16.71C20.3 15.22 20.73 13.49 20.64 11.75" /></svg>
+        다시 열기
+      </button>
+    </div>
+    <script>
+      // 인터넷이 돌아오면 원래 열려던 화면(지금 주소)을 다시 연다
+      addEventListener("online", function () { location.reload(); });
+      document.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+    </script>
+  </body>
+</html>

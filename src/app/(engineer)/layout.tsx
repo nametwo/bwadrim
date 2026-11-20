@@ -15,6 +15,11 @@ const PAGE_SETUP = `(function(w){w.addEventListener('beforeinstallprompt',functi
 // 겹친 것 중 맨 위의 불투명한 바탕색을 읽어(반투명한 확인 창 뒤 가림막은 건너뜀) theme-color로 넣는다. 화면이 바뀌면(DOM 변화) 0.15초 안에 다시 읽는다. 캔버스로 색을 #hex로 바꾼다
 const STATUS_BAR_COLOR = `(function(d,w){var m,c,t,last;function pick(){t=0;var els=d.elementsFromPoint(2,1),i,x,p,h;c=c||d.createElement('canvas').getContext('2d',{willReadFrequently:true});for(i=0;i<els.length;i++){x=getComputedStyle(els[i]).backgroundColor;c.clearRect(0,0,1,1);c.fillStyle='#0000';c.fillStyle=x;c.fillRect(0,0,1,1);p=c.getImageData(0,0,1,1).data;if(p[3]===255){h='#'+((1<<24)|(p[0]<<16)|(p[1]<<8)|p[2]).toString(16).slice(1);if(h!==last){last=h;if(!m){m=d.querySelector('meta[name="theme-color"]');if(!m){m=d.createElement('meta');m.name='theme-color';d.head.appendChild(m);}}m.content=h;}return;}}}function soon(){if(!t)t=setTimeout(pick,150);}new MutationObserver(soon).observe(d.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:['class','style','data-state']});w.addEventListener('load',soon);w.addEventListener('resize',soon);soon();})(document,window);`;
 
+// 앱(TWA)에서 인터넷이 끊기면 크롬 '오프라인' 화면 대신 우리 화면(/offline.html)을 띄우는 서비스 워커를 등록한다 (NFR-12).
+// 플레이 앱을 크롬이 띄울 때만: 앱이 처음 연 화면은 referrer가 android-app://com.bwadrim.app이다(홈 화면에 설치한 웹 앱은 standalone).
+// 삼성 인터넷에는 등록하지 않는다(BUG-24: 서비스 워커가 있으면 삼성이 만든 APK를 Play 프로텍트가 막는다). 크롬 브라우저 탭에서는 등록하지 않는다
+const OFFLINE_SETUP = `(function(w,n){var sw=n.serviceWorker;if(!sw||/SamsungBrowser/i.test(n.userAgent))return;if(document.referrer.indexOf('android-app://com.bwadrim.app')!==0&&!w.matchMedia('(display-mode: standalone)').matches)return;var go=function(){sw.register('/offline-sw.js',{scope:'/'}).catch(function(){});};document.readyState==='complete'?go():w.addEventListener('load',go);})(window,navigator);`;
+
 // 웹 앱 설정(manifest)은 브라우저마다 다르게 아래에서 붙인다 — 삼성 인터넷은 앱으로 설치되지 않는 설정 (BUG-24)
 export const metadata: Metadata = {
   appleWebApp: { capable: true, title: "봐드림", statusBarStyle: "default" },
@@ -40,6 +45,7 @@ export default async function EngineerLayout({ children }: LayoutProps<"/">) {
         {manifest}
         <script dangerouslySetInnerHTML={{ __html: PAGE_SETUP }} />
         <script dangerouslySetInnerHTML={{ __html: STATUS_BAR_COLOR }} />
+        <script dangerouslySetInnerHTML={{ __html: OFFLINE_SETUP }} />
         {children}
       </>
     );

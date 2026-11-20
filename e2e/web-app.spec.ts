@@ -235,3 +235,66 @@ test("앱처럼: 위쪽 띠 색(theme-color)이 화면 바탕을 따라간다 ·
     await ctx.close();
   }
 });
+
+// 플레이 앱(TWA)이 처음 연 화면처럼: referrer가 android-app://<패키지>
+const FROM_TWA = () =>
+  Object.defineProperty(Document.prototype, "referrer", { get: () => "android-app://com.bwadrim.app/" });
+const swScripts = (page: import("@playwright/test").Page) =>
+  page.evaluate(async () =>
+    (await navigator.serviceWorker.getRegistrations()).map((r) => (r.active || r.waiting || r.installing)?.scriptURL ?? ""),
+  );
+
+test("앱처럼: 플레이 앱에서 인터넷이 끊기면 크롬 오프라인 화면 대신 우리 화면, 돌아오면 저절로 원래 화면 (NFR-12)", async ({ browser, baseURL }) => {
+  // 크롬 브라우저 탭에서는 등록하지 않는다
+  {
+    const { ctx, page } = await engineerPage(browser, baseURL!, { ...PHONE, userAgent: UA.android });
+    try {
+      await page.goto("/dashboard");
+      await page.waitForLoadState("load");
+      await page.waitForTimeout(500);
+      expect(await swScripts(page)).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }
+  // 삼성 인터넷이 앱을 띄워도 등록하지 않는다 (BUG-24)
+  {
+    const { ctx, page } = await engineerPage(browser, baseURL!, { ...PHONE, userAgent: UA.samsung });
+    try {
+      await page.addInitScript(FROM_TWA);
+      await page.goto("/dashboard");
+      await page.waitForLoadState("load");
+      await page.waitForTimeout(500);
+      expect(await swScripts(page)).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }
+  // 크롬이 띄운 플레이 앱
+  const { ctx, page } = await engineerPage(browser, baseURL!, { ...PHONE, userAgent: UA.android });
+  try {
+    await page.addInitScript(FROM_TWA);
+    await page.goto("/dashboard");
+    await expect.poll(() => swScripts(page), { timeout: 15_000 }).toEqual([expect.stringMatching(/\/offline-sw\.js$/)]);
+    await page.evaluate(() => navigator.serviceWorker.ready);
+
+    await ctx.setOffline(true);
+    await page.goto("/stats");
+    await expect(page.getByTestId("offline")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "인터넷이 끊겼어요" })).toBeVisible();
+    await expect(page).toHaveURL(/\/stats$/);
+
+    // 인터넷이 돌아오면 그 주소를 다시 연다
+    await ctx.setOffline(false);
+    await expect(page.getByText(/최근 30일 · 상담/)).toBeVisible({ timeout: 15_000 });
+
+    // 화면 안 링크를 누른 순간 끊겨 있어도(리액트가 데이터를 못 받으면 주소로 다시 연다) 같은 화면이 뜬다
+    await ctx.setOffline(true);
+    await page.getByRole("link", { name: "상담 목록" }).click();
+    await expect(page.getByTestId("offline")).toBeVisible({ timeout: 15_000 });
+    await ctx.setOffline(false);
+    await expect(page.getByRole("link", { name: "통계" })).toBeVisible({ timeout: 15_000 });
+  } finally {
+    await ctx.close();
+  }
+});
