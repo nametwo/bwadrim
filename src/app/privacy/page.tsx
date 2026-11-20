@@ -115,7 +115,8 @@ export default function PrivacyPage() {
           <div id="delete-account" className="scroll-mt-4">
             <Card title="엔지니어 계정 지우기 (탈퇴)">
               <p>앱이나 웹에서 로그인한 뒤 상담 목록 위쪽 &lsquo;내 계정&rsquo;을 누르고 &lsquo;회원 탈퇴&rsquo;를 누르세요. 확인하면 바로 지워져요.</p>
-              <p>로그인할 수 없으면 {BUSINESS.email}로 가입한 방법(카카오나 이메일)과 함께 메일을 보내 주세요. 본인인지 확인하고 지워 드려요.</p>
+              <p>로그인할 수 없으면 {BUSINESS.email}로 가입한 방법(카카오나 이메일)과 함께 메일을 보내 주세요. 본인인지 확인하고, 메일을 받은 날부터 10일 안에 지운 뒤 답장을 드려요.</p>
+              <p>탈퇴하면 계정, 그 계정의 상담 기록, 받는 분 이름표가 함께 지워지고 되살릴 수 없어요.</p>
             </Card>
           </div>
         </Section>

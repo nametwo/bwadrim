@@ -70,6 +70,7 @@ public/manifest-samsung.webmanifest                 # 삼성 인터넷용 웹 �
 android/                                            # 엔지니어 안드로이드 앱(TWA, OPS-08). twa-manifest.json만 올리고 프로젝트는 Bubblewrap이 만든다. 빌드는 GitHub Actions(.github/workflows/android.yml), 순서는 android/README.md
 supabase/schema.sql
 docs/requirements.md                             # 기능 요구사항 (기준 문서)
+docs/play-store/                                 # 플레이 출시 순서(README)·스토어 글·콘솔 설문 답·스크린샷·그래픽 (OPS-08). 그래픽은 scripts/play-store/make-assets.mjs
 할일.md                                          # 나중에 할 일 메모. 하기로 하면 requirements.md로 옮기고 지운다
 ```
 
