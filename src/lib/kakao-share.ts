@@ -70,9 +70,9 @@ export async function sendKakaoLink(joinUrl: string, args: KakaoShareArgs | null
       title: "[봐드림] 폰 카메라로 비춰 주세요",
       description: "앱은 안 깔아도 돼요",
       // 사진에는 누가 보냈는지('기사님이 보낸 원격 A/S 링크예요')와 누를 버튼('카메라 켜기')이 있다.
-      // 카카오가 사진을 주소로 기억하므로 바꿀 때는 파일 이름을 바꾼다(예전 kakao-share.png는 이미 보낸 카드용으로 둔다).
+      // 카카오가 사진을 주소로 기억하므로 바꿀 때는 파일 이름을 바꾼다(예전 kakao-share.png·v2(카메라 로고)는 이미 보낸 카드용으로 둔다).
       // 주소는 운영 주소(OPS-07)로 — 예전 주소로 연 엔지니어도 같은 사진 주소를 쓰게(카카오 캐시가 하나로)
-      imageUrl: `${SITE_URL ?? window.location.origin}/kakao-share-v2.png`,
+      imageUrl: `${SITE_URL ?? window.location.origin}/kakao-share-v3.png`,
       imageWidth: 800,
       imageHeight: 400,
       link,
