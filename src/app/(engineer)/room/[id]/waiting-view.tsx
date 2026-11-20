@@ -98,7 +98,10 @@ export function WaitingView({
 
   const micNote =
     micOn === null ? null : (
-      <span className={`inline-flex items-center gap-1 text-label-m ${micOn ? "text-text-success" : "text-text-warning"}`}>
+      // 마이크가 잡히면 툭 튀지 않고 서서히 나타난다 (NFR-12)
+      <span
+        className={`motion-decor inline-flex animate-[fade-in_240ms_ease-out] items-center gap-1 text-label-m ${micOn ? "text-text-success" : "text-text-warning"}`}
+      >
         {micOn ? <MicIcon className="size-4" /> : <MicOffIcon className="size-4" />}
         {micOn ? "마이크 켜짐" : "마이크 꺼짐"}
       </span>

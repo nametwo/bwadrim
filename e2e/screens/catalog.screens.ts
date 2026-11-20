@@ -294,6 +294,7 @@ test("대시보드·통계", async ({ browser, baseURL }) => {
         await ep.getByRole("button", { name: /새 A\/S 시작/ }).click();
         await expect(ep.getByRole("button", { name: /만드는 중/ })).toBeAttached();
         await expect(ep.getByTestId("page-skeleton")).toBeVisible();
+        await ep.waitForTimeout(400); // 밀려 들어오는 움직임(260ms)이 끝난 뒤 찍는다
         return [eng(ep)];
       },
     );

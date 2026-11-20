@@ -800,12 +800,13 @@ iOS 정책 때문에, 고객 '카메라 켜고 시작하기'와 엔지니어 '�
   - 화면 끝에서 아래로 당겨 새로고침하거나 튕기지 않는다.
   - 폰 언어가 영어여도 크롬이 '번역할까요?'를 띄우지 않는다.
   - 화면을 넘길 때 앱처럼 밀려 들어온다. 상담 목록에서 상담·통계·내 계정으로 들어가면 오른쪽에서, '상담 목록'·'‹'을 누르거나 통화를 끝내고 돌아오면 왼쪽에서 들어온다. 폰의 뒤로가기, 새로고침, 화면 안 갱신에서는 움직이지 않는다. 폰에서 '애니메이션 삭제'를 켰으면 움직이지 않는다.
+  - 링크 보내기 화면의 '마이크 켜짐'은 툭 튀지 않고 서서히 나타난다.
   - 누르면 서버가 화면을 그릴 때까지 기다리지 않고 바로 화면 뼈대(제목·카드 자리의 회색 막대)가 보인다. 아주 빨리 뜨면 뼈대는 보이지 않는다. '새 A/S 시작'을 누르면 상담이 만들어지는 동안 상담 화면 뼈대가 바로 밀려 들어온다.
   - 로그인·카카오 로그인·로그아웃·회원 탈퇴 뒤에는 그 전 화면을 기록에서 지운다. 상담 목록에서 뒤로가기를 눌러도 로그인 화면이 나오지 않는다.
   - 앱 위·아래 띠(상태 표시줄·내비게이션 바)는 폰이 다크 모드여도 흰색이고, 아래 띠 위에 검은 줄이 없다(화면이 늘 밝으므로, [BUG-10](#bug-10--다크-모드에서-글씨버튼-대비가-낮음-낮음)). 앱을 다시 빌드해야 반영된다.
 - **확인**: 에뮬레이터·폰에서 글자와 상담 카드를 꾹 눌러 본다. 상담 목록 맨 위에서 아래로 당겨 본다. 폰 언어를 영어로 두고 앱을 연다. 상담 목록 → 통계 → '상담 목록', 상담 카드 → '‹'로 오가며 밀려 들어오는지 본다. 상담 목록에서 뒤로가기를 눌러 앱이 닫히는지 본다. 다크 모드 폰에서 위·아래 띠가 흰지, 아래 띠 위에 검은 줄이 없는지 본다. 자동 테스트 `e2e/web-app.spec.ts`('앱처럼' 세 개: 선택·번역·당겨 새로고침 설정, 꾹 누름 메뉴, 넘김 방향). 2026-11-20 에뮬레이터 크롬(133)에서 확인한 것: 꾹 누름 메뉴와 당겨 새로고침이 막힌다(배포된 앱에 스크립트를 넣어 봄), 번역 제안은 구글 메타가 있어야 안 뜬다(시험 페이지로 `translate="no"`·`class="notranslate"`와 비교), 넘김과 뼈대 화면이 보인다(개발 서버). 이 변경을 배포한 앱에서 다시 보는 것은 확인 전.
 - **제약**: 크롬의 '비밀번호 저장' 제안(이메일 로그인 때)은 그대로 둔다. 켤 때 잠깐 보이는 시작 화면(흰 바탕에 큰 아이콘)은 TWA 기본이다. 인터넷이 끊기면 크롬이 앱 아이콘과 '오프라인' 안내를 보여 주고, 다시 이어지면 화면이 저절로 돌아온다. 이 안내를 우리 화면으로 바꾸려면 서비스 워커가 있어야 하는데, 삼성 인터넷 문제([BUG-24](#bug-24--삼성-인터넷에서-앱-설치가-play-프로텍트에-막힘-높음)) 때문에 쓰지 않는다. 카카오 로그인 화면은 우리 주소가 아니라서 앱 안에서도 위에 주소 띠가 보인다. 카메라·마이크 허용 창은 크롬 모양이다. 아래 띠 위 검은 줄은 Bubblewrap이 투명색(`#00000000`)을 불투명 검정으로 바꿔 넣은 것이라, 띠와 같은 흰색으로 적는다. 크롬은 `<html translate="no">`만으로는 번역 제안을 계속 띄워서 `<meta name="google" content="notranslate">`를 같이 둔다. `html`에만 `overscroll-behavior`를 주면 당겨 새로고침을 막지 않아 `body`에도 준다.
-- **관련 코드**: `src/app/globals.css`(`html`·`body`·입력칸, `::view-transition-*`·뼈대 움직임), `src/app/layout.tsx`(번역 메타·꾹 누름 메뉴 막기), `src/components/page-transition.tsx`·`src/app/(engineer)/template.tsx`(화면 넘김), 링크의 `transitionTypes`(상담 목록·통계·내 계정·상담 화면·`call-panel.tsx`), `src/components/page-skeleton.tsx`·각 화면의 `loading.tsx`(뼈대), `src/app/(engineer)/dashboard/new-room-button.tsx`(만드는 동안 뼈대), `src/app/(engineer)/login/actions.ts`·`account/actions.ts`(`RedirectType.replace`), `src/app/privacy/page.tsx`(`select-text`), `android/twa-manifest.json`(`themeColorDark`·`navigationColorDark`·`navigationDividerColor`)
+- **관련 코드**: `src/app/globals.css`(`html`·`body`·입력칸, `::view-transition-*`·뼈대 움직임), `src/app/layout.tsx`(번역 메타·꾹 누름 메뉴 막기), `src/components/page-transition.tsx`·`src/app/(engineer)/template.tsx`(화면 넘김), 링크의 `transitionTypes`(상담 목록·통계·내 계정·상담 화면·`call-panel.tsx`), `src/components/page-skeleton.tsx`·각 화면의 `loading.tsx`(뼈대), `src/app/(engineer)/dashboard/new-room-button.tsx`(만드는 동안 뼈대), `room/[id]/waiting-view.tsx`('마이크 켜짐'), `src/app/(engineer)/login/actions.ts`·`account/actions.ts`(`RedirectType.replace`), `src/app/privacy/page.tsx`(`select-text`), `android/twa-manifest.json`(`themeColorDark`·`navigationColorDark`·`navigationDividerColor`)
 
 ## 8. 운영 설정 (OPS)
 
@@ -1077,7 +1078,7 @@ TURN 발급과 고객 지표 기록은 유효한 링크 토큰만 있으면 몇 
 
 | 날짜 | 내용 |
 |---|---|
-| 2026-11-20 | 앱처럼 더(NFR-12): 에뮬레이터로 찾은 웹 티 고침. 링크 꾹 누름 크롬 메뉴 막기, 당겨 새로고침을 `body`에서도 막기(html만으로는 안 됨), 번역 제안은 구글 메타로 끄기(`translate="no"`만으로는 안 됨), 화면 넘김(들어가면 오른쪽·돌아오면 왼쪽에서), 누르면 바로 뼈대 화면, '새 A/S 시작'은 누르자마자 상담 화면 뼈대, 목록 줄 눌림 색 진하게, 앱 아래 띠 위 검은 줄 없앰(Bubblewrap이 투명색을 검정으로 넣음). 바뀐 요구사항: NFR-12 |
+| 2026-11-20 | 앱처럼 더(NFR-12): 에뮬레이터로 찾은 웹 티 고침. 링크 꾹 누름 크롬 메뉴 막기, 당겨 새로고침을 `body`에서도 막기(html만으로는 안 됨), 번역 제안은 구글 메타로 끄기(`translate="no"`만으로는 안 됨), 화면 넘김(들어가면 오른쪽·돌아오면 왼쪽에서), 누르면 바로 뼈대 화면, '새 A/S 시작'은 누르자마자 상담 화면 뼈대, 목록 줄 눌림 색 진하게, '마이크 켜짐' 서서히, 앱 아래 띠 위 검은 줄 없앰(Bubblewrap이 투명색을 검정으로 넣음). 바뀐 요구사항: NFR-12 |
 | 2026-11-20 | 앱처럼 보이게(NFR-12 추가): 글자 꾹 눌러 선택·검색 없음, 누를 때 번쩍임·두 번 눌러 확대·당겨 새로고침 없음, 번역 제안 없음, 로그인 뒤 뒤로가기로 로그인 화면 안 나옴, 앱 위·아래 띠는 늘 흰색 |
 | 2026-11-20 | 안드로이드 앱이 켜자마자 죽던 문제 고침(OPS-08): `enableSiteSettingsShortcut`을 기본값 true로. 바뀐 요구사항: OPS-08 |
 | 2026-11-06 | 안드로이드 앱 첫 빌드 성공(OPS-08). 앱 연결 파일 `/.well-known/assetlinks.json`에 업로드 키 지문을 넣음(플레이 앱 서명 키는 처음 올린 뒤 더함). 바뀐 요구사항: OPS-08 |
