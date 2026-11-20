@@ -40,7 +40,7 @@ function Card({ title, children }: { title: string; children: ReactNode }) {
 export default function PrivacyPage() {
   const officer = BUSINESS.privacyOfficer;
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-2xl flex-col px-5 pt-[max(12px,env(safe-area-inset-top))] pb-12">
+    <main className="mx-auto flex min-h-dvh w-full max-w-2xl flex-col select-text px-5 pt-[max(12px,env(safe-area-inset-top))] pb-12">
       {/* 로고는 누르는 곳이 아니다 — 사이트 주소(/)는 엔지니어 로그인 화면이라(AUTH-01) 고객 화면에서 온 사장님을 그리로 보내지 않는다.
           돌아갈 곳은 브라우저 뒤로가기(로그인 화면·고객 시작 화면)다 */}
       <header className="flex h-12 items-center">

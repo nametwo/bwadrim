@@ -1,6 +1,6 @@
 "use server";
 
-import { redirect } from "next/navigation";
+import { redirect, RedirectType } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -39,5 +39,5 @@ export async function deleteAccount() {
 
   // 지운 계정의 로그인 쿠키를 비운다. 서버의 세션은 이미 없어서 실패해도 괜찮다
   await supabase.auth.signOut().catch(() => {});
-  redirect("/login?deleted=1");
+  redirect("/login?deleted=1", RedirectType.replace);
 }

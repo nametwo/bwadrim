@@ -139,3 +139,22 @@ test("앱 연결 파일: 로그인 없이 넘김 없이 열리고, 플레이 앱
   expect(app?.relation).toContain("delegate_permission/common.handle_all_urls");
   for (const fp of app!.target.sha256_cert_fingerprints) expect(fp).toMatch(/^([0-9A-F]{2}:){31}[0-9A-F]{2}$/);
 });
+
+test("앱처럼: 글자는 선택되지 않고 입력칸·처리방침은 선택된다 · 번역 제안 없음 (NFR-12)", async ({ page }) => {
+  await page.goto("/login");
+  await expect(page.locator("html")).toHaveAttribute("translate", "no");
+  const style = (sel: string) =>
+    page.locator(sel).first().evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { select: cs.userSelect || cs.webkitUserSelect, touch: cs.touchAction };
+    });
+  expect((await style("body")).select).toBe("none");
+  expect((await style("body")).touch).toBe("manipulation");
+  expect(await page.locator("html").evaluate((el) => getComputedStyle(el).overscrollBehaviorY)).toBe("none");
+
+  await page.getByTestId("email-login-open").click();
+  expect((await style('input[name="email"]')).select).toBe("text");
+
+  await page.goto("/privacy");
+  expect((await style("main")).select).toBe("text");
+});

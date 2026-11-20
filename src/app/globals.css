@@ -184,13 +184,33 @@
   --drop-shadow-signal: 0 2px 6px var(--color-black-50);
 }
 
+/* 앱처럼 (NFR-12): 누를 때 회색 번쩍임 없음, 아래로 당겨 새로고침·끝에서 튕김 없음 */
+html {
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
 body {
+  /* 앱처럼 (NFR-12): 글자를 꾹 눌러도 선택·검색 창이 뜨지 않고, 두 번 톡 눌러 확대되지 않는다.
+     입력칸은 아래에서 다시 켜고, 복사할 글(링크 주소·처리방침)은 select-text·select-all로 켠다 */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
   background: var(--background);
   color: var(--foreground);
   /* 한글이 글자 중간에서 줄바꿈되지 않게 (어절 단위) */
   word-break: keep-all;
   overflow-wrap: anywhere;
   font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Malgun Gothic", sans-serif;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
 }
 
 /* 키보드로 움직일 때만 초점 테두리 (터치에는 안 보임) */
