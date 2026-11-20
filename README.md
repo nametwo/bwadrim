@@ -90,20 +90,30 @@ A/S 대상(단말기, 공유기 뒷면, 보일러 컨트롤러, 두꺼비집)은
 - 확신이 없으면 숨깁니다. 옆 버튼을 가리키는 것이 안 보이는 것보다 훨씬 나쁘기 때문입니다
 - Web Worker에서 돌고, Node 벤치마크(`npm run bench:tracking`)와 같은 코드를 씁니다. 설계는 [src/lib/tracking/README.md](src/lib/tracking/README.md)
 
+### 웹을 감싼 앱이 웹처럼 보이지 않게
+
+기사님용 안드로이드 앱은 Bubblewrap으로 만든 TWA(크롬이 주소창 없이 띄우는 웹)입니다. 웹을 배포하면 앱도 바로 바뀌는 대신, 웹다운 버릇이 그대로 드러납니다. 에뮬레이터에 앱을 깔고 크롬 DevTools(CDP)로 붙어서 하나씩 찾아 고쳤습니다.
+
+- 크롬은 `translate="no"`만으로는 번역 제안을 계속 띄우고, `html`에만 준 `overscroll-behavior`로는 당겨 새로고침을 막지 못하며, 안드로이드에서는 `-webkit-touch-callout`을 무시합니다. 구글 번역 메타, `body`에도 같은 설정, `contextmenu` 막기로 바꿨습니다
+- 상태 표시줄은 화면 맨 위 가장자리의 실제 바탕색을 읽어 `theme-color`로 넣어 화면마다 따라가게 했습니다
+- 화면 넘김은 React `ViewTransition`으로 들어가면 오른쪽, 돌아오면 왼쪽에서 밀려 들어오고, 누르는 즉시 뼈대 화면이 보입니다
+- Bubblewrap은 투명색(`#00000000`)을 불투명 검정으로 넣어 아래 띠 위에 검은 줄을 그리고, 홈 화면 아이콘 둘레에 흰 테를 둡니다. 빌드 단계에서 바로잡습니다
+- 오프라인 화면은 서비스 워커가 필요한데, 삼성 인터넷은 서비스 워커가 있으면 홈 화면 앱을 자체 APK로 만들고 Play 프로텍트가 그것을 막습니다. 그래서 앱이 처음 연 화면의 referrer(`android-app://…`)로 크롬이 띄운 앱일 때만 등록합니다
+
 ### 테스트와 화면 카탈로그
 
-- 단위 테스트 501개(Vitest), e2e 40여 개(Playwright). e2e는 **가짜 카메라 영상 + 가짜 Supabase + 실제 WebRTC 루프백**으로 두 브라우저를 진짜로 연결합니다
+- 단위 테스트 522개(Vitest), e2e 60여 개(Playwright). e2e는 **가짜 카메라 영상 + 가짜 Supabase + 실제 WebRTC 루프백**으로 두 브라우저를 진짜로 연결합니다
 - `npm run screens` 한 번이면 오류·대기·끊김까지 **화면 상태 100여 개**를 폰·PC로 찍어 HTML 한 장에 모읍니다. 위 이미지와 움짤도 이 장치로 만들었습니다(`npm run readme:media`)
 
 ### 요구사항 문서로 소통
 
-기능 요구사항 110여 개를 [docs/requirements.md](docs/requirements.md)에 ID(`CALL-15` 같은)와 상태(✅/🚧), 확인 방법, 관련 코드로 정리합니다. 기능을 바꾸면 같은 커밋에서 문서를 고칩니다. 코드를 보지 않는 사람과도 ID로 이야기할 수 있게 하려는 것입니다. 알려진 문제(BUG-01~33)도 같은 문서에서 원인과 해결을 기록합니다.
+기능 요구사항 90여 개를 [docs/requirements.md](docs/requirements.md)에 ID(`CALL-15` 같은)와 상태(✅/🚧), 확인 방법, 관련 코드로 정리합니다. 기능을 바꾸면 같은 커밋에서 문서를 고칩니다. 코드를 보지 않는 사람과도 ID로 이야기할 수 있게 하려는 것입니다. 알려진 문제(BUG-01~33)도 같은 문서에서 원인과 해결을 기록합니다.
 
 ## 구조
 
 ```mermaid
 flowchart LR
-  E["기사님 브라우저<br/>(폰·PC)"]
+  E["기사님 안드로이드 앱(TWA)·브라우저<br/>(폰·PC)"]
   C["고객 폰 브라우저<br/>(로그인 없음)"]
   subgraph Vercel["Vercel · 서울 리전"]
     N["Next.js 16<br/>서버 액션 · /api/turn · /api/events"]
@@ -131,6 +141,8 @@ src/app/(engineer)/ 로그인, 상담 목록, 통화, 통계 (로그인 필요)
 src/app/join/       고객 진입 (공개, 32자리 링크 토큰)
 src/components/ui/  디자인 시스템 부품 (피그마 컴포넌트와 같은 이름)
 e2e/                Playwright e2e, 화면 카탈로그, README 움짤 녹화
+android/            기사님 안드로이드 앱 설정 (Bubblewrap TWA, GitHub Actions로 빌드)
+docs/play-store/    플레이 출시 순서, 스토어 글, 스크린샷
 ```
 
 ## 지표
