@@ -761,13 +761,18 @@ test("고객 진입", async ({ browser, baseURL }) => {
       await expect(bad.getByText("링크가 만료됐어요")).toBeVisible();
       return [cust(bad)];
     });
-    await shot({ section: "join", ids: ["JOIN-03"], title: "서버 오류 — 잠깐 연결이 안 돼요", note: "가짜 서버가 상담 조회에 실패하게 해서 띄움" }, async () => {
-      await mock("/__faults", { failJoinToken: ROOM.join_token });
-      await open(bad, `/join/${ROOM.join_token}`);
-      await expect(bad.getByText("잠깐 연결이 안 돼요")).toBeVisible();
-      await mock("/__faults", { failJoinToken: null });
-      return [cust(bad)];
-    });
+    // 서버 오류를 남기면 개발 서버의 오류 표시(Next dev overlay)에 같은 문구가 든 코드가 떠서 글자로 찾으면 셋이 걸린다 — 제목으로 찾는다.
+    // 실패해도 다음 장면(같은 상담 링크)이 오류 화면에 갇히지 않게 고장 스위치는 after에서 끈다
+    await shot(
+      { section: "join", ids: ["JOIN-03"], title: "서버 오류 — 잠깐 연결이 안 돼요", note: "가짜 서버가 상담 조회에 실패하게 해서 띄움" },
+      async () => {
+        await mock("/__faults", { failJoinToken: ROOM.join_token });
+        await open(bad, `/join/${ROOM.join_token}`);
+        await expect(bad.getByRole("heading", { name: "잠깐 연결이 안 돼요" })).toBeVisible();
+        return [cust(bad)];
+      },
+      () => mock("/__faults", { failJoinToken: null }),
+    );
 
     const kakao = await rig.customer({ userAgent: UA.kakao });
     const naver = await rig.customer({ userAgent: UA.naver });
